@@ -1640,3 +1640,10 @@ UnsignedInt MiniAudioManager::getNumAvailable3DSamples() const
 	}
 	return (max3D > playing) ? (max3D - playing) : 0;
 }
+
+// GeneralsX @feature Claude 11/10/2026 Factory used by Win32GameEngine on 64-bit Windows,
+// where MilesAudioManager.h is also visible and clashes with MiniAudioManager.h.
+AudioManager *CreateMiniAudioManager()
+{
+	return NEW MiniAudioManager;
+}

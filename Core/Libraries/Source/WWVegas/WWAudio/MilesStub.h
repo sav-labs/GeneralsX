@@ -30,7 +30,7 @@
 
 #pragma once
 
-#if (defined(SAGE_USE_OPENAL) || defined(SAGE_USE_MINIAUDIO)) && !defined(_MILES_STUB_H)
+#if (defined(SAGE_USE_OPENAL) || defined(SAGE_USE_MINIAUDIO)) && !defined(_WIN32) && !defined(_MILES_STUB_H)
 #define _MILES_STUB_H
 
 // VC++ calling convention stubs

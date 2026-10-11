@@ -38,7 +38,9 @@
 #include "GameNetwork/NetworkInterface.h"
 #include "MilesAudioDevice/MilesAudioManager.h"
 #ifdef SAGE_USE_MINIAUDIO
-#include "MiniAudioDevice/MiniAudioManager.h"
+// MiniAudioManager.h and MilesAudioManager.h define the same helper types, so the
+// MiniAudio manager is created through a factory defined in MiniAudioManager.cpp.
+AudioManager *CreateMiniAudioManager();
 #endif
 #include "Win32Device/Common/Win32BIGFileSystem.h"
 #include "Win32Device/Common/Win32LocalFileSystem.h"
@@ -118,7 +120,7 @@ inline AudioManager *Win32GameEngine::createAudioManager(Bool dummy)
 		return NEW MilesAudioManagerDummy;
 #ifdef SAGE_USE_MINIAUDIO
 	// GeneralsX @feature Claude 11/10/2026 Miles is 32-bit only, so 64-bit Windows uses MiniAudio.
-	return NEW MiniAudioManager;
+	return CreateMiniAudioManager();
 #else
 	return NEW MilesAudioManager;
 #endif
