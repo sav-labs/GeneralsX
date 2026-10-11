@@ -58,7 +58,14 @@
 #define HAVE_NGMP_PREFS 1
 #endif
 #if !defined(_MSC_VER) || (_MSC_VER >= 1914)
+// GeneralsX @build Claude 11/10/2026 GameSpy and Windows headers define min/max macros that break libstdc++ <filesystem>.
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
 #include <filesystem>
+#pragma pop_macro("max")
+#pragma pop_macro("min")
 #endif
 
 

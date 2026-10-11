@@ -1,0 +1,115 @@
+name: Build Windows x64 (experimental)
+
+# GeneralsX @build Claude 11/10/2026 Experimental 64-bit Windows build (MSVC + vcpkg x64-windows).
+# Needed for upscalers such as FSR and DLSS, which only ship 64-bit runtimes.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - "claude/**"
+  workflow_dispatch:
+
+concurrency:
+  group: build-windows-x64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-x64:
+    name: Zero Hour x64
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Restore vcpkg binary cache
+        id: vcpkg_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          key: vcpkg-bincache-v1-${{ runner.os }}-x64-msvc-v143-${{ hashFiles('vcpkg.json', 'vcpkg-lock.json', 'cmake/ports/**', 'cmake/triplets/**') }}
+          restore-keys: |
+            vcpkg-bincache-v1-${{ runner.os }}-x64-msvc-v143-
+
+      - name: Configure vcpkg cache directory
+        shell: pwsh
+        run: |
+          $cacheDir = "${{ github.workspace }}/vcpkg-bincache"
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+          "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" >> $env:GITHUB_ENV
+          "VCPKG_BINARY_SOURCES=clear;files,$cacheDir,readwrite" >> $env:GITHUB_ENV
+          "VCPKG_OVERLAY_TRIPLETS=${{ github.workspace }}/cmake/triplets" >> $env:GITHUB_ENV
+          "VCPKG_OVERLAY_PORTS=${{ github.workspace }}/cmake/ports" >> $env:GITHUB_ENV
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset win64-vcpkg `
+            -DVCPKG_OVERLAY_PORTS="${{ github.workspace }}/cmake/ports" `
+            -DVCPKG_OVERLAY_TRIPLETS="${{ github.workspace }}/cmake/triplets" `
+            -DRTS_BUILD_GENERALS=OFF `
+            -DRTS_BUILD_ZEROHOUR=ON `
+            -DRTS_BUILD_CORE_TOOLS=OFF `
+            -DRTS_BUILD_ZEROHOUR_TOOLS=OFF `
+            -DRTS_BUILD_GENERALS_TOOLS=OFF `
+            -DRTS_BUILD_OPTION_SAGE_PATCH=OFF `
+            -DSAGE_USE_DX8=ON `
+            -DSAGE_USE_DETERMINISTIC_MATH=ON
+
+      - name: Save vcpkg binary cache
+        if: ${{ always() && steps.vcpkg_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          key: ${{ steps.vcpkg_cache.outputs.cache-primary-key }}
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset win64-vcpkg --target z_generals -- -k 0
+
+      - name: Collect runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.exe artifacts/
+          Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.pdb artifacts/ -ErrorAction SilentlyContinue
+          Get-ChildItem -Path @("vcpkg_installed/x64-windows/bin/*.dll", "build/win64-vcpkg/vcpkg_installed/x64-windows/bin/*.dll") -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName artifacts/
+          }
+          if (Test-Path "assets/fonts") {
+            New-Item -ItemType Directory -Force artifacts/fonts | Out-Null
+            Copy-Item assets/fonts/* artifacts/fonts/
+          }
+          $vcReleaseDir = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -Directory -Recurse |
+            Where-Object { $_.FullName -match "\\x64\\" -and $_.FullName -match "Microsoft\.VC143\.CRT$" -and $_.FullName -notmatch "onecore" } |
+            Select-Object -First 1
+          if ($vcReleaseDir) {
+            Get-ChildItem -Path (Join-Path $vcReleaseDir.FullName "*.dll") | ForEach-Object { Copy-Item $_.FullName artifacts/ }
+          }
+          @"
+          Experimental 64-bit build. Copy these files into a separate copy of a licensed
+          Zero Hour installation. Original 32-bit mss32.dll and binkw32.dll cannot be used
+          by a 64-bit game, so audio and videos may be missing in this build.
+          "@ | Set-Content artifacts/INSTALL.txt
+          Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64-GeneralsXZH.zip
+          path: windows-x64-GeneralsXZH.zip
+          archive: false
+          retention-days: 7

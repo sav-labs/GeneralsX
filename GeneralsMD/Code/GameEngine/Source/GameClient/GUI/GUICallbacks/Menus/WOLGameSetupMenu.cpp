@@ -65,9 +65,7 @@
 #include "GameNetwork/NAT.h"
 #include "GameNetwork/GUIUtil.h"
 #include "GameNetwork/GameSpy/GSConfig.h"
-#if defined(SAGE_USE_NGMP) // GeneralsX @build Claude 11/10/2026 NGMP headers pull in curl
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
-#endif
 
 void WOLDisplaySlotList();
 

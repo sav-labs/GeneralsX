@@ -40,12 +40,10 @@
 #include "GameClient/AnimateWindowManager.h"
 #include "GameClient/WindowLayout.h"
 #include "GameClient/LanguageFilter.h"
-#if defined(SAGE_USE_NGMP) // GeneralsX @build Claude 11/10/2026 NGMP headers pull in curl
 #include "GameNetwork/GeneralsOnline/OnlineServices_Manager.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_LobbyInterface.h"
 #include "GameNetwork/GeneralsOnline/NGMP_Helpers.h"
 #include "GameNetwork/GeneralsOnline/NGMPGame.h"
-#endif
 #include "Common/GlobalData.h"
 #include "GameClient/Gadget.h"
 #include "GameClient/GameText.h"

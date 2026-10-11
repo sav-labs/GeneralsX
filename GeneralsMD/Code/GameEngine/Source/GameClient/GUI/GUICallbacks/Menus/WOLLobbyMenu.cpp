@@ -69,9 +69,7 @@
 #include "GameNetwork/GameSpy/PersistentStorageThread.h"
 #include "GameNetwork/GameSpy/LobbyUtils.h"
 #include "GameNetwork/RankPointValue.h"
-#if defined(SAGE_USE_NGMP) // GeneralsX @build Claude 11/10/2026 NGMP headers pull in curl
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
-#endif
 
 void refreshGameList( Bool forceRefresh = FALSE );
 void refreshPlayerList( Bool forceRefresh = FALSE );

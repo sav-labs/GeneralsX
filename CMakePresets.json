@@ -142,6 +142,22 @@
             }
         },
         {
+            "name": "win64-vcpkg",
+            "inherits": "default-vcpkg",
+            "hidden": false,
+            "displayName": "Windows 64bit VCPKG Release (experimental)",
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "cacheVariables": {
+                "RTS_FLAGS": "/W3",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "SAGE_USE_GLM": "ON",
+                "SAGE_USE_MINIAUDIO": "ON"
+            }
+        },
+        {
             "name": "win32-vcpkg-profile",
             "inherits": "win32-vcpkg",
             "displayName": "Windows 32bit VCPKG Profile",
@@ -361,6 +377,13 @@
         {
             "name": "win32-vcpkg",
             "configurePreset": "win32-vcpkg",
+            "displayName": "Build Windows 32bit VCPKG Release",
+            "description": "Build Windows 32bit VCPKG Release",
+            "configuration": "Release"
+        },
+        {
+            "name": "win64-vcpkg",
+            "configurePreset": "win64-vcpkg",
             "displayName": "Build Windows 32bit VCPKG Release",
             "description": "Build Windows 32bit VCPKG Release",
             "configuration": "Release"
