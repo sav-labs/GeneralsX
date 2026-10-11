@@ -119,8 +119,8 @@ jobs:
           }
           @"
           Experimental 64-bit build. Copy these files into a separate copy of a licensed
-          Zero Hour installation. Original 32-bit mss32.dll and binkw32.dll cannot be used
-          by a 64-bit game, so audio and videos may be missing in this build.
+          Zero Hour installation. Audio uses MiniAudio and videos use FFmpeg, because the
+          original 32-bit mss32.dll and binkw32.dll cannot be loaded by a 64-bit game.
           "@ | Set-Content artifacts/INSTALL.txt
           Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip
 
