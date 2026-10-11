@@ -79,7 +79,24 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: cmake --build --preset win64-vcpkg --target z_generals -- -k 0
+        run: |
+          cmake --build --preset win64-vcpkg --target z_generals -- -k 0 *>&1 | Tee-Object -FilePath build.log | Out-Null
+          exit $LASTEXITCODE
+
+      - name: Show build errors
+        if: ${{ failure() }}
+        shell: pwsh
+        run: |
+          Select-String -Path build.log -Pattern 'error C|error LNK|fatal error|FAILED:' |
+            ForEach-Object { $_.Line } | Select-Object -First 400
+
+      - name: Upload build log
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 3
 
       - name: Collect runtime
         shell: pwsh
