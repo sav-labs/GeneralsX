@@ -39,8 +39,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          key: vcpkg-bincache-v1-${{ runner.os }}-x64-msvc-v143-${{ hashFiles('vcpkg.json', 'vcpkg-lock.json', 'cmake/ports/**', 'cmake/triplets/**') }}
+          key: vcpkg-bincache-v1-${{ runner.os }}-x64-msvc-v143-${{ hashFiles('vcpkg.json', 'vcpkg-lock.json', 'cmake/ports/**', 'cmake/triplets/**') }}-${{ github.run_id }}
           restore-keys: |
+            vcpkg-bincache-v1-${{ runner.os }}-x64-msvc-v143-${{ hashFiles('vcpkg.json', 'vcpkg-lock.json', 'cmake/ports/**', 'cmake/triplets/**') }}-
             vcpkg-bincache-v1-${{ runner.os }}-x64-msvc-v143-
 
       - name: Configure vcpkg cache directory
@@ -70,7 +71,7 @@ jobs:
             -DSAGE_USE_DETERMINISTIC_MATH=ON
 
       - name: Save vcpkg binary cache
-        if: ${{ always() && steps.vcpkg_cache.outputs.cache-hit != 'true' }}
+        if: ${{ always() }}
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache

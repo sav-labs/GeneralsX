@@ -34,8 +34,24 @@ endif()
 
 # d3dx8 needs bittype.h from WWLib for Win32 types (DWORD, BYTE, UINT, etc.)
 # Add only WWLib directory (not full core_wwcommon to avoid d3d8.h conflicts from WWAudio)
+if(WIN32)
+    # GeneralsX @build Claude 11/10/2026 On Windows the windows.h and dinput.h shims would shadow the
+    # real SDK headers (the shim's own #include <windows.h> resolves to itself), so expose a copy of
+    # the compat headers without them.
+    set(D3DX8_COMPAT_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/d3dx8_compat_include)
+    file(GLOB D3DX8_COMPAT_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/Include/*.h)
+    foreach(header ${D3DX8_COMPAT_HEADERS})
+        get_filename_component(header_name ${header} NAME)
+        if(NOT header_name STREQUAL "windows.h" AND NOT header_name STREQUAL "dinput.h")
+            configure_file(${header} ${D3DX8_COMPAT_INCLUDE_DIR}/${header_name} COPYONLY)
+        endif()
+    endforeach()
+else()
+    set(D3DX8_COMPAT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Include)
+endif()
+
 target_include_directories(d3dx8 PUBLIC 
-    ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    ${D3DX8_COMPAT_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/Core/Libraries/Source/WWVegas/WWLib
 )
 

@@ -153,8 +153,7 @@
             "cacheVariables": {
                 "RTS_FLAGS": "/W3",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "SAGE_USE_GLM": "ON",
-                "SAGE_USE_MINIAUDIO": "ON"
+                "SAGE_USE_GLM": "ON"
             }
         },
         {
@@ -384,8 +383,8 @@
         {
             "name": "win64-vcpkg",
             "configurePreset": "win64-vcpkg",
-            "displayName": "Build Windows 32bit VCPKG Release",
-            "description": "Build Windows 32bit VCPKG Release",
+            "displayName": "Build Windows 64bit VCPKG Release",
+            "description": "Build Windows 64bit VCPKG Release",
             "configuration": "Release"
         },
         {
