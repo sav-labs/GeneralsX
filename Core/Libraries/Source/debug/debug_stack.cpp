@@ -32,6 +32,10 @@
 #include <windows.h>
 #include "Utility/stringex.h"
 #include <imagehlp.h>
+#if defined(_WIN64)
+// GeneralsX @build Claude 11/10/2026 dbghelp maps StackWalk to StackWalk64 on x64, which clashes with our member name.
+#undef StackWalk
+#endif
 
 // Definitions to allow run-time linking to the dbghelp.dll functions.
 
@@ -46,7 +50,7 @@ static union
   {
 #include "debug_stack.inl"
   };
-  unsigned funcPtr[1];
+  uintptr_t funcPtr[1];
 } gDbg;
 #undef DBGHELP
 
@@ -89,11 +93,11 @@ static void InitDbghelp()
     return;
 
   // Get function addresses
-  unsigned *funcptr=gDbg.funcPtr;
+  uintptr_t *funcptr=gDbg.funcPtr;
   unsigned k=0;
   for (;DebughelpFunctionNames[k];++k,++funcptr)
   {
-    *funcptr=(unsigned)GetProcAddress(g_dbghelp,DebughelpFunctionNames[k]);
+    *funcptr=(uintptr_t)GetProcAddress(g_dbghelp,DebughelpFunctionNames[k]);
     if (!*funcptr)
       break;
   }
@@ -345,6 +349,12 @@ int DebugStackwalk::StackWalk(Signature &sig, struct _CONTEXT *ctx)
   if (!gDbg._StackWalk)
     return 0;
 
+#if defined(_WIN64)
+  // GeneralsX @build Claude 11/10/2026 The walk below is x86-only; no stack signature on x64 yet.
+  (void)ctx;
+  return 0;
+#else
+
 	// Set up the stack frame structure for the start point of the stack walk (i.e. here).
 	STACKFRAME stackFrame;
 	memset(&stackFrame,0,sizeof(stackFrame));
@@ -402,4 +412,5 @@ int DebugStackwalk::StackWalk(Signature &sig, struct _CONTEXT *ctx)
   }
 
 	return sig.m_numAddr;
+#endif
 }
