@@ -30,6 +30,7 @@
 // Platform headers with socket_compat.h providing Winsock → POSIX mapping
 #include <stdio.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/timeb.h>
 #include <stdlib.h>
 #ifdef _WIN32

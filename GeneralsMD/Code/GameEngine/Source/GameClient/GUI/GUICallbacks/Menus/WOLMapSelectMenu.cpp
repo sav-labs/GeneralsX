@@ -67,7 +67,9 @@ static NameKeyType buttonMapStartPositionID[MAX_SLOTS] = { NAMEKEY_INVALID,NAMEK
 
 static GameWindow *winMapWindow = nullptr;
 
+#if defined(SAGE_USE_NGMP) // GeneralsX @build Claude 11/10/2026 NGMP headers pull in curl
 #include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
+#endif
 
 static void NullifyControls(void)
 {

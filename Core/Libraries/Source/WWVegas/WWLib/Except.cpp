@@ -47,7 +47,8 @@
  * Exception_Handler -- Exception handler filter function                                      *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
- #if defined(_WIN32)
+ // GeneralsX @build Claude 11/10/2026 The x86 register dump below does not apply to Win64; see the stubs at the end.
+ #if defined(_WIN32) && !defined(_WIN64)
 
 #include	"always.h"
 #include <windows.h>
@@ -1320,6 +1321,33 @@ bool Is_Trying_To_Exit()
 
 #endif	//_WIN32
 
+#if defined(_WIN64)
+// GeneralsX @build Claude 11/10/2026 Minimal Win64 implementation: no x86 register or stack dump yet.
+#include "always.h"
+#include <windows.h>
+#include "Except.h"
 
+static unsigned long MainThreadID = 0;
+static bool ExitOnException = false;
+static bool TryingToExit = false;
 
+int Exception_Handler(int, EXCEPTION_POINTERS *)
+{
+	if (ExitOnException) {
+		TryingToExit = true;
+		ExitProcess(EXIT_FAILURE);
+	}
+	return EXCEPTION_CONTINUE_SEARCH;
+}
 
+int Stack_Walk(unsigned long *, int, CONTEXT *) { return 0; }
+bool Lookup_Symbol(void *, char *symbol, int &displacement) { if (symbol) symbol[0] = 0; displacement = 0; return false; }
+void Load_Image_Helper() {}
+void Register_Thread_ID(unsigned long thread_id, char *, bool main) { if (main) MainThreadID = thread_id; }
+void Unregister_Thread_ID(unsigned long, char *) {}
+void Register_Application_Exception_Callback(void (*)()) {}
+void Register_Application_Version_Callback(char *(*)()) {}
+void Set_Exit_On_Exception(bool set) { ExitOnException = set; }
+bool Is_Trying_To_Exit() { return TryingToExit; }
+unsigned long Get_Main_Thread_ID() { return MainThreadID; }
+#endif	//_WIN64
