@@ -34,6 +34,9 @@
 #include "Common/GameEngine.h"
 //#include "GameNetwork/NetworkInterface.h"
 #include "GameNetwork/udp.h"
+#if defined(_WIN32)
+#include <ws2tcpip.h> // socklen_t
+#endif
 
 #if defined(_WIN32) && defined(_MSC_VER)
 typedef int socklen_t;

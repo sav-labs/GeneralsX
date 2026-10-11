@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #if !defined _MSC_VER
 #if !defined(__stdcall)
 #if defined __has_attribute && __has_attribute(stdcall)
@@ -53,7 +55,7 @@ typedef unsigned int u32;
 
 HBINK __stdcall BinkOpen(const char *name, unsigned int flags);
 void __stdcall BinkSetSoundTrack(unsigned int total_tracks, unsigned int *tracks);
-int __stdcall BinkSetSoundSystem(SndOpenCallback open, unsigned long param);
+int __stdcall BinkSetSoundSystem(SndOpenCallback open, uintptr_t param);
 void *__stdcall BinkOpenDirectSound(unsigned long param);
 void __stdcall BinkClose(HBINK handle);
 int __stdcall BinkWait(HBINK handle);
@@ -64,7 +66,7 @@ void __stdcall BinkSetVolume(HBINK handle, unsigned int trackid, int volume);
 void __stdcall BinkNextFrame(HBINK handle);
 void __stdcall BinkGoto(HBINK handle, unsigned int frame, int flags);
 
-#define BinkSoundUseDirectSound(x) BinkSetSoundSystem(BinkOpenDirectSound, (unsigned long)x)
+#define BinkSoundUseDirectSound(x) BinkSetSoundSystem(BinkOpenDirectSound, (uintptr_t)x)
 
 #ifdef __cplusplus
 } // extern "C"

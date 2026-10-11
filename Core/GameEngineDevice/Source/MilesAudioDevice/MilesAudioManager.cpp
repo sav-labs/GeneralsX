@@ -3028,19 +3028,19 @@ void MilesAudioManager::friend_forcePlayAudioEventRTS(const AudioEventRTS* event
 //-------------------------------------------------------------------------------------------------
 void AILCALLBACK setSampleCompleted( HSAMPLE sampleCompleted )
 {
-	TheAudio->notifyOfAudioCompletion((UnsignedInt) sampleCompleted, PAT_Sample);
+	TheAudio->notifyOfAudioCompletion((UnsignedInt)(uintptr_t) sampleCompleted, PAT_Sample);
 }
 
 //-------------------------------------------------------------------------------------------------
 void AILCALLBACK set3DSampleCompleted( H3DSAMPLE sample3DCompleted )
 {
-	TheAudio->notifyOfAudioCompletion((UnsignedInt) sample3DCompleted, PAT_3DSample);
+	TheAudio->notifyOfAudioCompletion((UnsignedInt)(uintptr_t) sample3DCompleted, PAT_3DSample);
 }
 
 //-------------------------------------------------------------------------------------------------
 void AILCALLBACK setStreamCompleted( HSTREAM streamCompleted )
 {
-	TheAudio->notifyOfAudioCompletion((UnsignedInt) streamCompleted, PAT_Stream);
+	TheAudio->notifyOfAudioCompletion((UnsignedInt)(uintptr_t) streamCompleted, PAT_Stream);
 }
 
 //-------------------------------------------------------------------------------------------------
