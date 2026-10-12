@@ -17,8 +17,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # GeneralsX @build Claude 12/10/2026 DXVK 2.6 for Windows with FSR 1.0 (EASU) in the swap chain blitter.
+  # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
+  dxvk-fsr:
+    name: DXVK with FSR (Win64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: cmake/dxvk-patches
+
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 glslang-tools ninja-build python3-pip
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          pip3 install --user --break-system-packages meson
+
+      - name: Build DXVK
+        run: |
+          git clone --depth 1 --branch v2.6 --recurse-submodules --shallow-submodules https://github.com/doitsujin/dxvk.git dxvk
+          cd dxvk
+          for patch in ../cmake/dxvk-patches/*.patch; do git apply "$patch"; done
+          ~/.local/bin/meson setup --cross-file build-win64.txt --buildtype release \
+            -Denable_d3d10=false -Denable_d3d11=false -Denable_dxgi=false build
+          ninja -C build src/d3d8/d3d8.dll src/d3d9/d3d9.dll
+          mkdir -p ../dxvk-out
+          cp build/src/d3d8/d3d8.dll build/src/d3d9/d3d9.dll ../dxvk-out/
+
+      - name: Upload DXVK
+        uses: actions/upload-artifact@v7
+        with:
+          name: dxvk-fsr-win64
+          path: dxvk-out
+          retention-days: 7
+
   build-windows-x64:
     name: Zero Hour x64
+    needs: dxvk-fsr
     runs-on: windows-2022
     timeout-minutes: 90
 
@@ -98,6 +138,12 @@ jobs:
           path: build.log
           retention-days: 3
 
+      - name: Download DXVK with FSR
+        uses: actions/download-artifact@v8
+        with:
+          name: dxvk-fsr-win64
+          path: dxvk-fsr
+
       - name: Collect runtime
         shell: pwsh
         run: |
@@ -118,19 +164,20 @@ jobs:
             Get-ChildItem -Path (Join-Path $vcReleaseDir.FullName "*.dll") | ForEach-Object { Copy-Item $_.FullName artifacts/ }
           }
           # GeneralsX @build Claude 12/10/2026 Ship DXVK so the x64 build renders through Vulkan like Linux/macOS.
-          # This is the base for the FSR/DLSS upscaling work; deleting d3d8.dll and d3d9.dll falls back to native DX8.
-          $dxvkVersion = "2.6"
-          $dxvkArchive = Join-Path $env:RUNNER_TEMP "dxvk-$dxvkVersion.tar.gz"
-          Invoke-WebRequest -Uri "https://github.com/doitsujin/dxvk/releases/download/v$dxvkVersion/dxvk-$dxvkVersion.tar.gz" -OutFile $dxvkArchive
-          tar -xzf $dxvkArchive -C $env:RUNNER_TEMP
-          foreach ($dll in @("d3d8.dll", "d3d9.dll")) {
-            Copy-Item (Join-Path $env:RUNNER_TEMP "dxvk-$dxvkVersion/x64/$dll") artifacts/
-          }
+          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll artifacts/
+          @"
+          @echo off
+          rem Borderless window at display size; the game renders at its own resolution and FSR 1.0 upscales it.
+          set DXVK_FSR=1
+          start "" "%~dp0GeneralsXZH.exe" -upscale %*
+          "@ | Set-Content artifacts/Play-FSR.cmd -Encoding ascii
           @"
           Experimental 64-bit build. Copy these files into a separate copy of a licensed
           Zero Hour installation. Audio uses MiniAudio and videos use FFmpeg, because the
           original 32-bit mss32.dll and binkw32.dll cannot be loaded by a 64-bit game.
           Rendering goes through DXVK (Vulkan); delete d3d8.dll and d3d9.dll to use native DirectX 8.
+          Play-FSR.cmd runs borderless at display size and upscales the game resolution with FSR 1.0.
+          Pick the game resolution in Options; use the same aspect ratio as the display.
           "@ | Set-Content artifacts/INSTALL.txt
           Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip
 

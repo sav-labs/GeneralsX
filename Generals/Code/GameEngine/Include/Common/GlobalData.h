@@ -129,6 +129,8 @@ public:
 	Bool m_checkForUpdates;
 
 	Bool m_windowed;
+	// GeneralsX @feature Claude 12/10/2026 Borderless window at display size; the game renders at its own resolution and the swap chain upscales it.
+	Bool m_upscaleToDisplay;
 	Int m_xResolution;
 	Int m_yResolution;
 	Int m_maxShellScreens;  ///< this many shells layouts can be loaded at once

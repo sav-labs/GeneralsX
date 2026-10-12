@@ -652,6 +652,7 @@ GlobalData::GlobalData()
 	// GeneralsX @feature BenderAI 21/04/2026 Default to TRUE; user can override via Options.ini
 	m_checkForUpdates = TRUE;
 	m_windowed = 0;
+	m_upscaleToDisplay = FALSE;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;
 	m_maxShellScreens = 0;

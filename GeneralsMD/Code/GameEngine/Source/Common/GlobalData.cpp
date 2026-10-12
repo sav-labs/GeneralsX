@@ -663,6 +663,7 @@ GlobalData::GlobalData()
 	m_headless = FALSE;
 	m_checkForUpdates = TRUE;
 	m_windowed = 0;
+	m_upscaleToDisplay = FALSE;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;
 	m_maxShellScreens = 0;

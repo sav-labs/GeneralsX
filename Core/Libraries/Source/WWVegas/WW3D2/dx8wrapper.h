@@ -517,6 +517,9 @@ public:
 	static bool					GetNativeDisplaySize(int& outW, int& outH, float& outDensity);
 	static bool					GetWindowSize(int& outW, int& outH, float& outDensity);
 
+	// GeneralsX @feature Claude 12/10/2026 Keep a display-sized window while the back buffer stays at game resolution.
+	static void					Set_Upscale_To_Display(bool enable) { s_upscaleToDisplay = enable; }
+
 	// Pillarbox: render game at chosen resolution, blit centered onto backbuffer
 	static bool					Pillarbox_Get_Rect(int& x, int& y, int& w, int& h);
 	static void					Pillarbox_Begin();
@@ -740,6 +743,7 @@ protected:
 
 	// Pillarbox state
 	static bool								s_pillarboxEnabled;
+	static bool								s_upscaleToDisplay;
 	static bool								s_pillarboxActive;
 	static int								s_bbW, s_bbH;
 	static int								s_dstX, s_dstY, s_dstW, s_dstH;
