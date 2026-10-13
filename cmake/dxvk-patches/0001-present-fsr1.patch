@@ -1,161 +1,449 @@
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
-index 044c3ea..3128f7a 100644
+index 044c3ea..d82f0ed 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -4,6 +4,7 @@
+@@ -4,6 +4,8 @@
  #include <dxvk_cursor_vert.h>
  #include <dxvk_present_frag.h>
  #include <dxvk_present_frag_blit.h>
 +#include <dxvk_present_frag_fsr.h>
++#include <dxvk_present_frag_fsr_easu.h>
  #include <dxvk_present_frag_ms.h>
  #include <dxvk_present_frag_ms_amd.h>
  #include <dxvk_present_frag_ms_blit.h>
-@@ -19,6 +20,12 @@ namespace dxvk {
+@@ -19,6 +21,19 @@ namespace dxvk {
      m_pipelineLayout(createPipelineLayout()),
      m_cursorSetLayout(createCursorSetLayout()),
      m_cursorPipelineLayout(createCursorPipelineLayout()) {
-+    // DXVK_FSR=1 upscales smaller back buffers to the window with FSR 1.0 EASU
++    // DXVK_FSR=1 upscales smaller back buffers to the window with FSR 1.0
++    // EASU, then sharpens with RCAS. DXVK_FSR_SHARPNESS is in stops, where
++    // 0 is the sharpest and every stop halves the sharpening.
 +    m_fsrEnabled = env::getEnvVar("DXVK_FSR") == "1";
 +
++    std::string sharpness = env::getEnvVar("DXVK_FSR_SHARPNESS");
++
++    if (!sharpness.empty())
++      m_fsrSharpness = std::clamp(std::strtof(sharpness.c_str(), nullptr), 0.0f, 2.0f);
++
 +    if (m_fsrEnabled)
-+      Logger::info("Swap chain: FSR 1.0 upscaling enabled");
++      Logger::info(str::format("Swap chain: FSR 1.0 upscaling enabled, sharpness ", m_fsrSharpness));
 +
      this->createSampler();
      this->createShaders();
    }
-@@ -38,6 +45,7 @@ namespace dxvk {
+@@ -38,6 +53,8 @@ namespace dxvk {
      vk->vkDestroyShaderModule(vk->device(), m_shaderFsCopy.stageInfo.module, nullptr);
      vk->vkDestroyShaderModule(vk->device(), m_shaderFsMsBlit.stageInfo.module, nullptr);
      vk->vkDestroyShaderModule(vk->device(), m_shaderFsMsResolve.stageInfo.module, nullptr);
 +    vk->vkDestroyShaderModule(vk->device(), m_shaderFsFsr.stageInfo.module, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_shaderFsFsrEasu.stageInfo.module, nullptr);
  
      vk->vkDestroyShaderModule(vk->device(), m_shaderVsCursor.stageInfo.module, nullptr);
      vk->vkDestroyShaderModule(vk->device(), m_shaderFsCursor.stageInfo.module, nullptr);
-@@ -315,6 +323,10 @@ namespace dxvk {
+@@ -91,6 +108,27 @@ namespace dxvk {
+     else
+       destroyHudImage();
+ 
++    // With FSR, EASU upscales into an intermediate image first, and the
++    // final blit sharpens that image with RCAS at a 1:1 scale.
++    bool useFsr = m_fsrEnabled
++      && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
++      && dstRect.extent != srcRect.extent
++      && dstRect.extent.width >= srcRect.extent.width
++      && dstRect.extent.height >= srcRect.extent.height;
++
++    Rc<DxvkImageView> blitView = srcView;
++    VkRect2D blitRect = srcRect;
++
++    if (useFsr) {
++      renderFsrEasu(ctx, srcView, srcRect, dstRect.extent);
++
++      blitView = m_fsrView;
++      blitRect = { { 0, 0 }, dstRect.extent };
++    } else {
++      m_fsrImage = nullptr;
++      m_fsrView = nullptr;
++    }
++
+     VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+     barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+     barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+@@ -127,8 +165,8 @@ namespace dxvk {
+ 
+     ctx.cmd->cmdBeginRendering(&renderInfo);
+ 
+-    performDraw(ctx, dstView, dstRect,
+-      srcView, srcRect, composite);
++    performDraw(ctx, dstView, dstRect, blitView, blitRect, composite,
++      useFsr ? DxvkFsrPass::Rcas : DxvkFsrPass::None);
+ 
+     if (!composite) {
+       if (m_hud)
+@@ -263,7 +301,8 @@ namespace dxvk {
+           VkRect2D            dstRect,
+     const Rc<DxvkImageView>&  srcView,
+           VkRect2D            srcRect,
+-          VkBool32            composite) {
++          VkBool32            composite,
++          DxvkFsrPass         fsrPass) {
+     VkColorSpaceKHR dstColorSpace = dstView->image()->info().colorSpace;
+     VkColorSpaceKHR srcColorSpace = srcView->image()->info().colorSpace;
+ 
+@@ -315,6 +354,7 @@ namespace dxvk {
      key.needsBlit = dstRect.extent != srcRect.extent;
      key.compositeHud = composite && m_hudView;
      key.compositeCursor = composite && m_cursorView;
-+    key.useFsr = m_fsrEnabled && key.needsBlit
-+      && key.srcSamples == VK_SAMPLE_COUNT_1_BIT
-+      && dstRect.extent.width >= srcRect.extent.width
-+      && dstRect.extent.height >= srcRect.extent.height;
++    key.fsrPass = fsrPass;
  
      VkPipeline pipeline = getPipeline(key);
  
-@@ -381,6 +393,7 @@ namespace dxvk {
+@@ -381,6 +421,8 @@ namespace dxvk {
      args.dstOffset = dstRect.offset;
      args.cursorOffset = m_cursorRect.offset;
      args.cursorExtent = m_cursorRect.extent;
 +    args.dstExtent = dstRect.extent;
++    args.fsrSharpness = m_fsrSharpness;
  
      ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer,
        m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-@@ -747,6 +760,8 @@ namespace dxvk {
+@@ -526,6 +568,119 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkSwapchainBlitter::renderFsrEasu(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect,
++          VkExtent2D                  extent) {
++    VkColorSpaceKHR colorSpace = srcView->image()->info().colorSpace;
++
++    if (!m_fsrImage || m_fsrImage->info().colorSpace != colorSpace
++     || m_fsrImage->info().extent != VkExtent3D { extent.width, extent.height, 1u })
++      createFsrImage(extent, colorSpace);
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture))) {
++      ctx.cmd->cmdBeginDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer,
++        vk::makeLabel(0xdcc0f0, "FSR EASU"));
++    }
++
++    // The previous frame's RCAS pass may still read the image
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
++                         | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = m_fsrImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_fsrImage->handle();
++    barrier.subresourceRange = m_fsrView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++    m_fsrImage->trackInitialization(barrier.subresourceRange);
++
++    VkRenderingAttachmentInfo attachmentInfo = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
++    attachmentInfo.imageView = m_fsrView->handle();
++    attachmentInfo.imageLayout = m_fsrImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    attachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
++    attachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
++
++    VkRenderingInfo renderInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
++    renderInfo.renderArea.offset = { 0, 0 };
++    renderInfo.renderArea.extent = extent;
++    renderInfo.layerCount = 1u;
++    renderInfo.colorAttachmentCount = 1;
++    renderInfo.pColorAttachments = &attachmentInfo;
++
++    ctx.cmd->cmdBeginRendering(&renderInfo);
++
++    performDraw(ctx, m_fsrView, { { 0, 0 }, extent },
++      srcView, srcRect, VK_FALSE, DxvkFsrPass::Easu);
++
++    ctx.cmd->cmdEndRendering();
++
++    // Make image shader-readable for the RCAS pass
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barrier.oldLayout = m_fsrImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.newLayout = m_fsrImage->info().layout;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
++      ctx.cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
++
++    ctx.cmd->track(m_fsrImage, DxvkAccess::Write);
++  }
++
++
++  void DxvkSwapchainBlitter::createFsrImage(
++          VkExtent2D                  extent,
++          VkColorSpaceKHR             colorSpace) {
++    DxvkImageCreateInfo imageInfo = { };
++    imageInfo.type          = VK_IMAGE_TYPE_2D;
++    imageInfo.format        = VK_FORMAT_R16G16B16A16_SFLOAT;
++    imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++    imageInfo.extent        = { extent.width, extent.height, 1u };
++    imageInfo.mipLevels     = 1;
++    imageInfo.numLayers     = 1;
++    imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    imageInfo.stages        = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
++                            | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++    imageInfo.access        = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
++                            | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
++                            | VK_ACCESS_SHADER_READ_BIT;
++    imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++    imageInfo.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    imageInfo.colorSpace    = colorSpace;
++    imageInfo.debugName     = "FSR EASU output";
++
++    m_fsrImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++    DxvkImageViewKey viewInfo = { };
++    viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++    viewInfo.usage          = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    viewInfo.format         = imageInfo.format;
++    viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++    viewInfo.mipIndex       = 0u;
++    viewInfo.mipCount       = 1u;
++    viewInfo.layerIndex     = 0u;
++    viewInfo.layerCount     = 1u;
++
++    m_fsrView = m_fsrImage->createView(viewInfo);
++  }
++
++
+   void DxvkSwapchainBlitter::renderCursor(
+     const DxvkContextObjects&         ctx,
+     const Rc<DxvkImageView>&          dstView) {
+@@ -747,6 +902,10 @@ namespace dxvk {
        sizeof(dxvk_present_vert), dxvk_present_vert);
      createShaderModule(m_shaderFsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
        sizeof(dxvk_present_frag_blit), dxvk_present_frag_blit);
 +    createShaderModule(m_shaderFsFsr, VK_SHADER_STAGE_FRAGMENT_BIT,
 +      sizeof(dxvk_present_frag_fsr), dxvk_present_frag_fsr);
++    createShaderModule(m_shaderFsFsrEasu, VK_SHADER_STAGE_FRAGMENT_BIT,
++      sizeof(dxvk_present_frag_fsr_easu), dxvk_present_frag_fsr_easu);
      createShaderModule(m_shaderFsCopy, VK_SHADER_STAGE_FRAGMENT_BIT,
        sizeof(dxvk_present_frag), dxvk_present_frag);
      createShaderModule(m_shaderFsMsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
-@@ -928,7 +943,8 @@ namespace dxvk {
+@@ -927,7 +1086,11 @@ namespace dxvk {
+     std::array<VkPipelineShaderStageCreateInfo, 2> blitStages = { };
      blitStages[0] = m_shaderVsBlit.stageInfo;
  
-     if (key.srcSamples == VK_SAMPLE_COUNT_1_BIT)
--      blitStages[1] = key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo;
-+      blitStages[1] = key.useFsr ? m_shaderFsFsr.stageInfo
-+        : (key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo);
+-    if (key.srcSamples == VK_SAMPLE_COUNT_1_BIT)
++    if (key.fsrPass == DxvkFsrPass::Easu)
++      blitStages[1] = m_shaderFsFsrEasu.stageInfo;
++    else if (key.fsrPass == DxvkFsrPass::Rcas)
++      blitStages[1] = m_shaderFsFsr.stageInfo;
++    else if (key.srcSamples == VK_SAMPLE_COUNT_1_BIT)
+       blitStages[1] = key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo;
      else
        blitStages[1] = key.needsBlit ? m_shaderFsMsBlit.stageInfo : m_shaderFsMsResolve.stageInfo;
- 
 diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
-index 2635049..218b20b 100644
+index 2635049..19b64b0 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.h
 +++ b/src/dxvk/dxvk_swapchain_blitter.h
-@@ -49,6 +49,8 @@ namespace dxvk {
+@@ -21,6 +21,19 @@ namespace dxvk {
+   };
+ 
+ 
++  /**
++   * \brief FSR 1.0 pass of a swap chain blit
++   */
++  enum class DxvkFsrPass : uint32_t {
++    /// Regular blit without FSR
++    None = 0,
++    /// EASU upscale into the intermediate image
++    Easu = 1,
++    /// RCAS sharpening of the intermediate image onto the swap chain
++    Rcas = 2,
++  };
++
++
+   /**
+    * \brief Swap chain blitter pipeline key
+    *
+@@ -49,6 +62,8 @@ namespace dxvk {
      VkBool32 compositeHud = VK_FALSE;
      /// Bit indicating whether the software cursor needs to be composited
      VkBool32 compositeCursor = VK_FALSE;
-+    /// Bit indicating whether FSR 1.0 is used to upscale the image
-+    VkBool32 useFsr = VK_FALSE;
++    /// FSR 1.0 pass this pipeline renders
++    DxvkFsrPass fsrPass = DxvkFsrPass::None;
  
      size_t hash() const {
        DxvkHashState hash;
-@@ -61,6 +63,7 @@ namespace dxvk {
+@@ -61,6 +76,7 @@ namespace dxvk {
        hash.add(uint32_t(needsGamma));
        hash.add(uint32_t(compositeHud));
        hash.add(uint32_t(compositeCursor));
-+      hash.add(uint32_t(useFsr));
++      hash.add(uint32_t(fsrPass));
        return hash;
      }
  
-@@ -73,7 +76,8 @@ namespace dxvk {
+@@ -73,7 +89,8 @@ namespace dxvk {
            && needsBlit == other.needsBlit
            && needsGamma == other.needsGamma
            && compositeHud == other.compositeHud
 -          && compositeCursor == other.compositeCursor;
 +          && compositeCursor == other.compositeCursor
-+          && useFsr == other.useFsr;
++          && fsrPass == other.fsrPass;
      }
    };
  
-@@ -193,6 +197,7 @@ namespace dxvk {
+@@ -193,6 +210,8 @@ namespace dxvk {
        VkOffset2D dstOffset;
        VkOffset2D cursorOffset;
        VkExtent2D cursorExtent;
 +      VkExtent2D dstExtent;
++      float fsrSharpness;
      };
  
      struct CursorSpecConstants {
-@@ -219,6 +224,9 @@ namespace dxvk {
+@@ -219,6 +238,11 @@ namespace dxvk {
      ShaderModule        m_shaderFsBlit;
      ShaderModule        m_shaderFsMsResolve;
      ShaderModule        m_shaderFsMsBlit;
 +    ShaderModule        m_shaderFsFsr;
++    ShaderModule        m_shaderFsFsrEasu;
 +
 +    bool                m_fsrEnabled = false;
++    float               m_fsrSharpness = 0.2f;
  
      ShaderModule        m_shaderVsCursor;
      ShaderModule        m_shaderFsCursor;
+@@ -242,6 +266,9 @@ namespace dxvk {
+     Rc<DxvkImage>       m_hudImage;
+     Rc<DxvkImageView>   m_hudView;
+ 
++    Rc<DxvkImage>       m_fsrImage;
++    Rc<DxvkImageView>   m_fsrView;
++
+     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+     VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
+ 
+@@ -260,7 +287,8 @@ namespace dxvk {
+             VkRect2D                    dstRect,
+       const Rc<DxvkImageView>&          srcView,
+             VkRect2D                    srcRect,
+-            VkBool32                    composite);
++            VkBool32                    composite,
++            DxvkFsrPass                 fsrPass);
+ 
+     void renderHudImage(
+       const DxvkContextObjects&         ctx,
+@@ -271,6 +299,16 @@ namespace dxvk {
+ 
+     void destroyHudImage();
+ 
++    void renderFsrEasu(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect,
++            VkExtent2D                  extent);
++
++    void createFsrImage(
++            VkExtent2D                  extent,
++            VkColorSpaceKHR             colorSpace);
++
+     void renderCursor(
+       const DxvkContextObjects&         ctx,
+       const Rc<DxvkImageView>&          dstView);
 diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
-index b6222dd..fc41678 100644
+index b6222dd..45e5e3a 100644
 --- a/src/dxvk/meson.build
 +++ b/src/dxvk/meson.build
-@@ -42,6 +42,7 @@ dxvk_shaders = files([
+@@ -42,6 +42,8 @@ dxvk_shaders = files([
  
    'shaders/dxvk_present_frag.frag',
    'shaders/dxvk_present_frag_blit.frag',
 +  'shaders/dxvk_present_frag_fsr.frag',
++  'shaders/dxvk_present_frag_fsr_easu.frag',
    'shaders/dxvk_present_frag_ms.frag',
    'shaders/dxvk_present_frag_ms_amd.frag',
    'shaders/dxvk_present_frag_ms_blit.frag',
 diff --git a/src/dxvk/shaders/dxvk_present_common.glsl b/src/dxvk/shaders/dxvk_present_common.glsl
-index 3eb81a4..8dfd521 100644
+index 3eb81a4..bf5246a 100644
 --- a/src/dxvk/shaders/dxvk_present_common.glsl
 +++ b/src/dxvk/shaders/dxvk_present_common.glsl
-@@ -25,6 +25,7 @@ uniform present_info_t {
+@@ -25,6 +25,8 @@ uniform present_info_t {
    ivec2 dst_offset;
    ivec2 cursor_offset;
    ivec2 cursor_extent;
 +  ivec2 dst_extent;
++  float fsr_sharpness;
  };
  
  
 diff --git a/src/dxvk/shaders/dxvk_present_frag_fsr.frag b/src/dxvk/shaders/dxvk_present_frag_fsr.frag
 new file mode 100644
-index 0000000..62ee69a
+index 0000000..dd745cb
 --- /dev/null
 +++ b/src/dxvk/shaders/dxvk_present_frag_fsr.frag
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,38 @@
 +#version 450
 +
 +#extension GL_GOOGLE_include_directive : enable
 +
 +#include "dxvk_present_common.glsl"
 +
-+// AMD FidelityFX Super Resolution 1.0 (EASU) used as the swap chain
-+// upscaler when the back buffer is smaller than the presented window.
++// Second FSR 1.0 pass: AMD FidelityFX RCAS sharpens the EASU output
++// and presents it with the usual color space conversion.
++#define A_GPU 1
++#define A_GLSL 1
++#include "ffx_a.h"
++
++#define FSR_RCAS_F 1
++AF4 FsrRcasLoadF(ASU2 p) {
++  ivec2 hi = textureSize(s_image, 0) - 1;
++  return texelFetch(s_image, clamp(ivec2(p), ivec2(0), hi), 0);
++}
++
++void FsrRcasInputF(inout AF1 r, inout AF1 g, inout AF1 b) { }
++
++#include "ffx_fsr1.h"
++
++layout(location = 0) in  vec2 i_coord;
++layout(location = 0) out vec4 o_color;
++
++void main() {
++  AU4 con;
++  FsrRcasCon(con, AF1(fsr_sharpness));
++
++  AU2 pos = AU2(ivec2(gl_FragCoord.xy) - dst_offset);
++
++  AF3 color;
++  FsrRcasF(color.r, color.g, color.b, pos, con);
++
++  o_color = input_to_sc_rgb(vec4(color, 1.0f));
++  o_color = composite_image(o_color);
++  o_color = sc_rgb_to_output(o_color);
++}
+diff --git a/src/dxvk/shaders/dxvk_present_frag_fsr_easu.frag b/src/dxvk/shaders/dxvk_present_frag_fsr_easu.frag
+new file mode 100644
+index 0000000..39e4c1e
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_present_frag_fsr_easu.frag
+@@ -0,0 +1,62 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "dxvk_present_common.glsl"
++
++// First FSR 1.0 pass: AMD FidelityFX EASU upscales the back buffer into an
++// intermediate image at output resolution. RCAS then sharpens that image
++// while presenting it, see dxvk_present_frag_fsr.frag.
 +#define A_GPU 1
 +#define A_GLSL 1
 +#include "ffx_a.h"
@@ -202,9 +490,12 @@ index 0000000..62ee69a
 +  AF3 color;
 +  FsrEasuF(color, pos, con0, con1, con2, con3);
 +
-+  o_color = input_to_sc_rgb(vec4(color, 1.0f));
-+  o_color = composite_image(o_color);
-+  o_color = sc_rgb_to_output(o_color);
++  // The intermediate image is not an sRGB format, so keep it in the
++  // same encoding as a non-sRGB view of the back buffer would return.
++  if (c_src_is_srgb)
++    color = linear_to_srgb(color);
++
++  o_color = vec4(color, 1.0f);
 +}
 diff --git a/src/dxvk/shaders/ffx_a.h b/src/dxvk/shaders/ffx_a.h
 new file mode 100644
