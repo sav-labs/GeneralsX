@@ -91,6 +91,9 @@ protected:
 	/// translate a win32 mouse event to our own info
 	void translateEvent( UnsignedInt eventIndex, MouseIO *result );
 
+	/// with -upscale, the client rectangle that shows the game image
+	static Bool getUpscaledImageRect( RECT &image );
+
 	struct Win32MouseEvent
 	{
 		UINT msg;				///< WM_* message
