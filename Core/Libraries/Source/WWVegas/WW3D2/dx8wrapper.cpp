@@ -163,6 +163,7 @@ static bool Is_MSAA_Mode_Supported(
 DX8Wrapper::DisplaySizeFunc DX8Wrapper::s_getNativeDisplaySize = nullptr;
 DX8Wrapper::DisplaySizeFunc DX8Wrapper::s_getWindowSize = nullptr;
 bool DX8Wrapper::s_pillarboxEnabled = false;
+bool DX8Wrapper::s_upscaleToDisplay = false;
 bool DX8Wrapper::s_pillarboxActive = false;
 int DX8Wrapper::s_bbW = 0;
 int DX8Wrapper::s_bbH = 0;
@@ -1252,6 +1253,10 @@ void DX8Wrapper::Get_Format_Name(unsigned int format, StringClass *tex_format)
 
 void DX8Wrapper::Resize_And_Position_Window()
 {
+	// The -upscale window already covers the display; the swap chain scales the back buffer to it.
+	if (IsWindowed && s_upscaleToDisplay)
+		return;
+
 	// Get the current dimensions of the 'render area' of the window
 	RECT rect = { 0 };
 	::GetClientRect (_Hwnd, &rect);

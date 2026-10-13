@@ -28,6 +28,9 @@
 //////////////////////////////////////////////////////////////////////////////
 
 #include "debug.h"
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #include "internal.h"
 #include "internal_except.h"
 #include "internal_io.h"
@@ -306,7 +309,10 @@ bool Debug::SkipNext()
   // do not implement this function inline, we do need
   // a valid frame pointer here!
   unsigned help;
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && defined(_WIN64)
+  // GeneralsX @build Claude 11/10/2026 No inline asm on x64 MSVC
+  help=(unsigned)(uintptr_t)_ReturnAddress();
+#elif defined(_MSC_VER)
   _asm
   {
     mov eax,[ebp+4]   // return address
@@ -320,6 +326,8 @@ bool Debug::SkipNext()
     :
     : "memory"
   );
+#elif defined(__GNUC__) || defined(__clang__)
+  help=(unsigned)(uintptr_t)__builtin_return_address(0);
 #else
   #error "Unsupported compiler or architecture for inline assembly"
 #endif
@@ -435,7 +443,7 @@ bool Debug::AssertDone()
           break;
         case IDRETRY:
 #if defined(_MSC_VER)
-          _asm int 0x03
+          __debugbreak();
 #elif defined(__GNUC__)
           __builtin_trap();
 #else
@@ -901,8 +909,8 @@ Debug& Debug::operator<<(const void *ptr)
   (*this) << "ptr:";
   if (ptr)
   {
-    char help[9];
-    (*this) << "0x" << _ultoa((unsigned long)ptr,help,16);
+    char help[17];
+    (*this) << "0x" << _ui64toa((unsigned long long)(uintptr_t)ptr,help,16);
   }
   else
     (*this) << "null";
@@ -934,7 +942,7 @@ Debug& Debug::operator<<(const MemDump &dump)
   {
     // address
     char buf[9];
-    sprintf(buf,"%08x",dump.m_absAddr?unsigned(cur):cur-dump.m_startPtr);
+    sprintf(buf,"%08x",dump.m_absAddr?(unsigned)(uintptr_t)cur:(unsigned)(cur-dump.m_startPtr));
     operator<<(buf);
 
     // items
@@ -1012,9 +1020,9 @@ bool Debug::IsLogEnabled(const char *fileOrGroup)
   // to be used from the D_ISLOG macros only and those guarantee
   // that we are having real static strings let's use
   // that strings address as frame address...
-  FrameHashEntry *e=Instance.LookupFrame((unsigned)fileOrGroup);
+  FrameHashEntry *e=Instance.LookupFrame((unsigned)(uintptr_t)fileOrGroup);
   if (!e)
-    e=Instance.AddFrameEntry((unsigned)fileOrGroup,FrameTypeLog,fileOrGroup,0);
+    e=Instance.AddFrameEntry((unsigned)(uintptr_t)fileOrGroup,FrameTypeLog,fileOrGroup,0);
   if (e->status==Unknown)
     Instance.UpdateFrameStatus(*e);
   return e->status==NoSkip;

@@ -723,6 +723,18 @@ static Bool initializeAppWindows( HINSTANCE hInstance, Int nCmdShow, Bool runWin
 		startHeight= DEFAULT_DISPLAY_HEIGHT;
 	}
 
+	// GeneralsX @feature Claude 12/10/2026 -upscale: borderless window covering the primary display.
+	// The game keeps rendering at its own resolution and the swap chain scales it to this window.
+	if (TheGlobalData->m_upscaleToDisplay) {
+		windowStyle = WS_POPUP|WS_VISIBLE;
+		startWidth = GetSystemMetrics( SM_CXSCREEN );
+		startHeight = GetSystemMetrics( SM_CYSCREEN );
+		rect.left = 0;
+		rect.top = 0;
+		rect.right = startWidth;
+		rect.bottom = startHeight;
+	}
+
 	gInitializing = true;
 
   HWND hWnd = CreateWindow( TEXT("Game Window"),

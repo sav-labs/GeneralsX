@@ -1027,6 +1027,7 @@ void W3DDisplay::init()
 
 		fprintf(stderr, "[DEBUG-WIN] W3DDisplay::init() - TheGlobalData->m_windowed=%d\n", (int)TheGlobalData->m_windowed);
 		setWindowed( TheGlobalData->m_windowed );
+		DX8Wrapper::Set_Upscale_To_Display( TheGlobalData->m_upscaleToDisplay );
 
 		// create a 2D renderer helper
 		m_2DRender = NEW Render2DClass;

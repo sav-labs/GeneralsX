@@ -313,8 +313,21 @@ if(SAGE_USE_MINIAUDIO)
 endif()
 
 if(RTS_BUILD_OPTION_FFMPEG)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswscale)
+    # GeneralsX @build Claude 11/10/2026 MSVC has no pkg-config; find vcpkg's FFmpeg import libraries directly.
+    if(MSVC)
+        find_path(FFMPEG_INCLUDE_DIRS libavcodec/avcodec.h REQUIRED)
+        add_library(ffmpeg_msvc INTERFACE)
+        target_include_directories(ffmpeg_msvc INTERFACE ${FFMPEG_INCLUDE_DIRS})
+        foreach(_ffmpeg_lib avcodec avformat avutil swscale)
+            find_library(FFMPEG_${_ffmpeg_lib}_LIBRARY ${_ffmpeg_lib} REQUIRED)
+            target_link_libraries(ffmpeg_msvc INTERFACE ${FFMPEG_${_ffmpeg_lib}_LIBRARY})
+        endforeach()
+        add_library(PkgConfig::FFMPEG ALIAS ffmpeg_msvc)
+        set(FFMPEG_FOUND TRUE)
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswscale)
+    endif()
 
     if(FFMPEG_FOUND)
         target_sources(corei_gameenginedevice_private INTERFACE

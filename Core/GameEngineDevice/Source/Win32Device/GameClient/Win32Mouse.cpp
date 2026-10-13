@@ -32,6 +32,7 @@
 #include "Common/Debug.h"
 #include "Common/GlobalData.h"
 #include "Common/LocalFileSystem.h"
+#include "GameClient/Display.h"
 #include "GameClient/GameClient.h"
 #include "Win32Device/GameClient/Win32Mouse.h"
 #include "WinMain.h"
@@ -232,6 +233,18 @@ void Win32Mouse::translateEvent( UnsignedInt eventIndex, MouseIO *result )
 
 		}
 
+	}
+
+	// GeneralsX @feature Claude 12/10/2026 With -upscale the window covers the display while the game
+	// renders at its own resolution, so map window client coordinates to game coordinates.
+	if (TheGlobalData->m_upscaleToDisplay && TheDisplay)
+	{
+		RECT client;
+		if (::GetClientRect(ApplicationHWnd, &client) && client.right > 0 && client.bottom > 0)
+		{
+			result->pos.x = result->pos.x * (Int)TheDisplay->getWidth() / client.right;
+			result->pos.y = result->pos.y * (Int)TheDisplay->getHeight() / client.bottom;
+		}
 	}
 
 }

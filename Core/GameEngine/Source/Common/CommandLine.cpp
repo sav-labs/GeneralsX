@@ -127,6 +127,16 @@ Int parseWin(char *args[], int)
 	return 1;
 }
 
+// GeneralsX @feature Claude 12/10/2026 -upscale runs in a borderless window that covers the display while
+// the game renders at its configured resolution. The swap chain scales the image up (FSR 1.0 with DXVK_FSR=1).
+Int parseUpscale(char *args[], int)
+{
+	TheWritableGlobalData->m_windowed = true;
+	TheWritableGlobalData->m_upscaleToDisplay = true;
+
+	return 1;
+}
+
 //=============================================================================
 //=============================================================================
 Int parseNoMusic(char *args[], int)
@@ -1180,6 +1190,7 @@ Int parseClearDebugLevel(char *args[], int num)
 static CommandLineParam paramsForStartup[] =
 {
 	{ "-win", parseWin },
+	{ "-upscale", parseUpscale },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025

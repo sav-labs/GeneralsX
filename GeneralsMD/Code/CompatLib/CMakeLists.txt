@@ -3,7 +3,7 @@
 # GeneralsX @build felipebraz 20/06/2025 - Also build d3dx8 STATIC on macOS (D3DX math/texture stubs required for link)
 # GeneralsX @bugfix felipebraz 02/03/2026 - Build real d3dx8 STATIC on Linux too (D3DXGetFVFVertexSize / D3DXLoadSurfaceFromSurface required for link)
 # d3dx8 is a math/texture helper stub; core game code doesn't require it
-if((WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8) OR APPLE OR (UNIX AND NOT APPLE))
+if((WIN32 AND NOT MINGW AND CMAKE_SIZEOF_VOID_P EQUAL 8) OR APPLE OR (UNIX AND NOT APPLE))
 list(APPEND SOURCE_D3DX_COMPAT
     d3dx8_compat.cpp
     d3dx8math.cpp
@@ -34,8 +34,24 @@ endif()
 
 # d3dx8 needs bittype.h from WWLib for Win32 types (DWORD, BYTE, UINT, etc.)
 # Add only WWLib directory (not full core_wwcommon to avoid d3d8.h conflicts from WWAudio)
+if(WIN32)
+    # GeneralsX @build Claude 11/10/2026 On Windows the windows.h and dinput.h shims would shadow the
+    # real SDK headers (the shim's own #include <windows.h> resolves to itself), so expose a copy of
+    # the compat headers without them.
+    set(D3DX8_COMPAT_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/d3dx8_compat_include)
+    file(GLOB D3DX8_COMPAT_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/Include/*.h)
+    foreach(header ${D3DX8_COMPAT_HEADERS})
+        get_filename_component(header_name ${header} NAME)
+        if(NOT header_name STREQUAL "windows.h" AND NOT header_name STREQUAL "dinput.h")
+            configure_file(${header} ${D3DX8_COMPAT_INCLUDE_DIR}/${header_name} COPYONLY)
+        endif()
+    endforeach()
+else()
+    set(D3DX8_COMPAT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Include)
+endif()
+
 target_include_directories(d3dx8 PUBLIC 
-    ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    ${D3DX8_COMPAT_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/Core/Libraries/Source/WWVegas/WWLib
 )
 

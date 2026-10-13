@@ -11,7 +11,8 @@ if(WIN32)
         deps_bink
         comctl32
         core_debug
-        d3d8
+        # GeneralsX @build Claude 11/10/2026 No x64 d3d8.lib exists; DX8Wrapper loads d3d8.dll at run time.
+        $<$<EQUAL:${CMAKE_SIZEOF_VOID_P},4>:d3d8>
         dinput8
         dxguid
         imm32

@@ -28,6 +28,18 @@ if(SAGE_USE_DX8)
   FetchContent_MakeAvailable(dx8)
   message(STATUS "Using DirectX 8 SDK (Windows native)")
 
+  # GeneralsX @build Claude 11/10/2026 min-dx8-sdk only ships x86 import libraries. On x64 MSVC, link
+  # dinput8/dxguid from the Windows SDK instead and rely on the run-time d3d8.dll load in DX8Wrapper.
+  # d3dx8 resolves to the CompatLib implementation target.
+  if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set_target_properties(d3d8lib PROPERTIES
+      INTERFACE_LINK_DIRECTORIES ""
+      INTERFACE_LINK_LIBRARIES "dinput8;dxguid;d3dx8;legacy_stdio_definitions"
+      INTERFACE_LINK_OPTIONS ""
+    )
+    message(STATUS "DirectX 8: x64 MSVC, using Windows SDK dinput8/dxguid")
+  endif()
+
 elseif(APPLE AND SAGE_USE_MOLTENVK)
   # macOS: Build DXVK 2.6 from source using Meson + MoltenVK
   # GeneralsX @build BenderAI 24/02/2026 - Phase 5 macOS port (Session 61)

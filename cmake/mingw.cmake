@@ -8,7 +8,8 @@ if(MINGW)
         set(IS_MINGW32 TRUE)
         message(STATUS "MinGW-w64 32-bit (i686) detected")
     else()
-        message(FATAL_ERROR "MinGW-w64 64-bit (x86_64) detected, but this project only supports 32-bit builds. Use the i686-w64-mingw32 toolchain.")
+        message(STATUS "MinGW-w64 64-bit (x86_64) detected")
+        set(IS_MINGW64 TRUE)
     endif()
 
     # Windows subsystem

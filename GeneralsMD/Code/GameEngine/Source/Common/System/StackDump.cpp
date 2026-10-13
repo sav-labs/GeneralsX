@@ -24,7 +24,8 @@
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
-#if (defined(RTS_DEBUG) || defined(IG_DEBUG_STACKTRACE)) && defined(_WIN32)
+// GeneralsX @build Claude 11/10/2026 x86-only stack walking; Win64 uses the stubs below.
+#if (defined(RTS_DEBUG) || defined(IG_DEBUG_STACKTRACE)) && defined(_WIN32) && !defined(_WIN64)
 
 #pragma pack(push, 8)
 
