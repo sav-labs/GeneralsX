@@ -13,6 +13,8 @@ Excluded on purpose:
 - everything outside Art/Textures/ (terrain tiles, maps, INI, audio).
 
 Upscalers:
+- `onnx`: Real-ESRGAN x4plus through ONNX Runtime, DirectML on any DirectX 12 GPU
+  (onnxruntime-directml) or the CPU; the Windows package uses this by default;
 - `esrgan`: runs realesrgan-ncnn-vulkan (Vulkan, works on AMD/NVIDIA/Apple)
   on the colour channels; alpha is resized with Lanczos to keep cut-outs clean;
 - `lanczos`: plain resize, for pipeline checks without a GPU.
@@ -139,6 +141,49 @@ def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
         return out
 
 
+TILE_PAD = 10
+
+
+def onnx_session(model):
+    """DirectML on any DirectX 12 GPU when onnxruntime-directml is installed, CPU otherwise."""
+    import onnxruntime as ort
+    options = ort.SessionOptions()
+    providers = ["CPUExecutionProvider"]
+    if "DmlExecutionProvider" in ort.get_available_providers():
+        # DirectML needs these off; see the onnxruntime DirectML execution provider docs.
+        options.enable_mem_pattern = False
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        providers.insert(0, "DmlExecutionProvider")
+    session = ort.InferenceSession(str(model), options, providers=providers)
+    print(f"ONNX upscaler on {session.get_providers()[0]}")
+    return session
+
+
+def upscale_rgb_onnx(images, session, tile):
+    """4x upscale with the Real-ESRGAN ONNX model, tile by tile to bound GPU memory.
+
+    Each tile is read with TILE_PAD px of context on every side (edge-replicated at
+    the image border) and only its centre is kept, so tile seams do not show.
+    """
+    import numpy as np
+    out = {}
+    for key, img in images.items():
+        src = np.asarray(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
+        _, h, w = src.shape
+        padded = np.pad(src, ((0, 0), (TILE_PAD, TILE_PAD), (TILE_PAD, TILE_PAD)), mode="edge")
+        result = np.zeros((3, h * 4, w * 4), dtype=np.float32)
+        for y in range(0, h, tile):
+            for x in range(0, w, tile):
+                th, tw = min(tile, h - y), min(tile, w - x)
+                patch = padded[:, y:y + th + 2 * TILE_PAD, x:x + tw + 2 * TILE_PAD][None]
+                up = session.run(None, {"input": np.ascontiguousarray(patch)})[0][0]
+                p = TILE_PAD * 4
+                result[:, y * 4:(y + th) * 4, x * 4:(x + tw) * 4] = up[:, p:p + th * 4, p:p + tw * 4]
+        pixels = (np.clip(result, 0.0, 1.0) * 255.0).round().astype(np.uint8).transpose(1, 2, 0)
+        out[key] = Image.fromarray(pixels, "RGB")
+    return out
+
+
 def target_size(w, h, scale):
     factor = scale
     while factor > 1 and max(w, h) * factor > MAX_OUTPUT_SIZE:
@@ -211,11 +256,16 @@ def decode(data):
     return img.convert("RGBA")
 
 
+def default_onnx():
+    """realesrgan_x4plus.onnx next to hdpack.exe or hdpack.py (built by export_onnx.py)."""
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    return base / "realesrgan_x4plus.onnx"
+
+
 def default_esrgan():
     """The packaged hdpack.exe ships realesrgan-ncnn-vulkan.exe next to itself."""
     if getattr(sys, "frozen", False):
-        # upscayl-bin is the same CLI on a newer ncnn; the 2022 realesrgan-ncnn-vulkan
-        # build fails vkAllocateMemory on the Radeon 780M before the first tile.
+        # upscayl-bin is the same CLI on a newer ncnn.
         for exe in ("upscayl-bin.exe", "realesrgan-ncnn-vulkan.exe"):
             bundled = Path(sys.executable).parent / exe
             if bundled.is_file():
@@ -228,12 +278,15 @@ def main():
     ap.add_argument("--game-dir", action="append", required=True,
                     help="Folder with the retail .big files (repeat for Generals + Zero Hour; later wins)")
     ap.add_argument("--out", required=True, help="Output archive, e.g. <game>/!HDTextures.big")
-    ap.add_argument("--upscaler", choices=("esrgan", "lanczos"), default="esrgan")
+    ap.add_argument("--upscaler", choices=("onnx", "esrgan", "lanczos"),
+                    default="onnx" if default_onnx().is_file() else "esrgan",
+                    help="onnx: Real-ESRGAN via ONNX Runtime (DirectML/CPU); esrgan: ncnn Vulkan binary; lanczos: plain resize")
+    ap.add_argument("--onnx", default=str(default_onnx()), help="Real-ESRGAN x4plus ONNX model")
     ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan or upscayl-bin")
     ap.add_argument("--model", default="realesrgan-x4plus", help="Real-ESRGAN model name")
     ap.add_argument("--scale", type=int, choices=(2, 4), default=4)
     ap.add_argument("--esrgan-args", default="", help='Extra upscaler arguments, e.g. "-g 0 -j 1:1:1"')
-    ap.add_argument("--tile", type=int, default=128, help="Real-ESRGAN tile size in px (lower uses less VRAM, min 32)")
+    ap.add_argument("--tile", type=int, default=128, help="Upscaler tile size in source px (lower uses less VRAM, min 32)")
     ap.add_argument("--include", action="append", help="Only texture names matching this glob (e.g. AV*)")
     ap.add_argument("--exclude-list", help="Text file with texture names (no extension) to keep original")
     ap.add_argument("--limit", type=int, default=0, help="Process at most N textures (prototype runs)")
@@ -269,6 +322,7 @@ def main():
 
     output = []
     pairs = []
+    session = None
     for start in range(0, len(keys), args.batch):
         batch = {}
         for stem in keys[start:start + args.batch]:
@@ -284,7 +338,11 @@ def main():
             continue
 
         rgb = {k: v.convert("RGB") for k, v in batch.items()}
-        if args.upscaler == "esrgan":
+        if args.upscaler == "onnx":
+            if session is None:
+                session = onnx_session(args.onnx)
+            up_rgb = upscale_rgb_onnx(rgb, session, args.tile)
+        elif args.upscaler == "esrgan":
             up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
         else:
             up_rgb = {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
