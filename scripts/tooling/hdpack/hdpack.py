@@ -115,7 +115,7 @@ def mapped_image_textures(archives, game_dirs):
 
 # ---------------------------------------------------------------- upscaling
 
-def upscale_rgb_esrgan(images, esrgan, model, scale):
+def upscale_rgb_esrgan(images, esrgan, model, scale, tile):
     """Upscale a dict of {key: RGB image} with realesrgan-ncnn-vulkan in one run."""
     with tempfile.TemporaryDirectory() as tmp:
         src, dst = Path(tmp, "in"), Path(tmp, "out")
@@ -125,7 +125,8 @@ def upscale_rgb_esrgan(images, esrgan, model, scale):
             img.save(src / f"{i:05d}.png")
         # The x4 models only run at 4x; target_size() brings the result down to the requested scale.
         model_scale = 4 if "x4" in model else scale
-        cmd = [esrgan, "-i", str(src), "-o", str(dst), "-n", model, "-s", str(model_scale), "-f", "png"]
+        # A fixed tile size keeps VRAM use bounded; auto tiling overflows the 2 GB UMA heap of iGPUs like the Radeon 780M.
+        cmd = [esrgan, "-i", str(src), "-o", str(dst), "-n", model, "-s", str(model_scale), "-f", "png", "-t", str(tile)]
         models = Path(esrgan).resolve().parent / "models"
         if models.is_dir():
             cmd += ["-m", str(models)]
@@ -227,6 +228,7 @@ def main():
     ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan")
     ap.add_argument("--model", default="realesrgan-x4plus", help="Real-ESRGAN model name")
     ap.add_argument("--scale", type=int, choices=(2, 4), default=4)
+    ap.add_argument("--tile", type=int, default=128, help="Real-ESRGAN tile size in px (lower uses less VRAM, min 32)")
     ap.add_argument("--include", action="append", help="Only texture names matching this glob (e.g. AV*)")
     ap.add_argument("--exclude-list", help="Text file with texture names (no extension) to keep original")
     ap.add_argument("--limit", type=int, default=0, help="Process at most N textures (prototype runs)")
@@ -278,7 +280,7 @@ def main():
 
         rgb = {k: v.convert("RGB") for k, v in batch.items()}
         if args.upscaler == "esrgan":
-            up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale)
+            up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile)
         else:
             up_rgb = {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
 
