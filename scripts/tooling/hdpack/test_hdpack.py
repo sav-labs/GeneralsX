@@ -82,7 +82,7 @@ def main():
         assert sorted(entries) == ["art/textures/avhouse.dds", "art/textures/avtank.dds"], sorted(entries)
         assert check_dds(hdpack.read_entry(entries["art/textures/avtank.dds"]), 512, 256) == b"DXT1"
         assert check_dds(hdpack.read_entry(entries["art/textures/avhouse.dds"]), 256, 256) == b"DXT5"
-        assert (previews / "compare.jpg").is_file()
+        assert (previews / "compare_001.jpg").is_file()
 
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
