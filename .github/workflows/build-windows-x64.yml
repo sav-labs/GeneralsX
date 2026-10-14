@@ -20,6 +20,8 @@ jobs:
   # GeneralsX @build Claude 12/10/2026 DXVK 2.6 for Windows with FSR 1.0 (EASU upscale + RCAS sharpening) in the swap chain blitter.
   # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
   # DXVK_FSR_SHARPNESS sets RCAS sharpening in stops (0 = sharpest, default 0.2).
+  # DXVK_POST=1 adds bloom and a light colour grade (0002-present-post.patch); DXVK_BLOOM,
+  # DXVK_BLOOM_THRESHOLD, DXVK_SATURATION and DXVK_CONTRAST tune it.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -170,6 +172,7 @@ jobs:
           @echo off
           rem Borderless window at display size; the game renders at its own resolution and FSR 1.0 upscales it.
           set DXVK_FSR=1
+          set DXVK_POST=1
           start "" "%~dp0GeneralsXZH.exe" -upscale %*
           "@ | Set-Content artifacts/Play-FSR.cmd -Encoding ascii
           @"
@@ -179,6 +182,8 @@ jobs:
           Rendering goes through DXVK (Vulkan); delete d3d8.dll and d3d9.dll to use native DirectX 8.
           Play-FSR.cmd runs borderless at display size and upscales the game resolution with FSR 1.0.
           To soften the FSR sharpening, edit Play-FSR.cmd and add: set DXVK_FSR_SHARPNESS=1 (0 is sharpest, default 0.2).
+          Play-FSR.cmd also adds bloom and a light colour grade (DXVK_POST=1). Tune it in Play-FSR.cmd with
+          set DXVK_BLOOM=0.25, set DXVK_SATURATION=1.1, set DXVK_CONTRAST=1.05 (1 = unchanged), or set DXVK_POST=0 to turn it off.
           Pick the game resolution in Options; use the same aspect ratio as the display.
           "@ | Set-Content artifacts/INSTALL.txt
           Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip

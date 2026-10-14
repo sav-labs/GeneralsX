@@ -1,0 +1,592 @@
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+index d82f0ed..1df2089 100644
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -4,6 +4,9 @@
+ #include <dxvk_cursor_vert.h>
+ #include <dxvk_present_frag.h>
+ #include <dxvk_present_frag_blit.h>
++#include <dxvk_present_frag_bloom_blur_h.h>
++#include <dxvk_present_frag_bloom_blur_v.h>
++#include <dxvk_present_frag_bloom_down.h>
+ #include <dxvk_present_frag_fsr.h>
+ #include <dxvk_present_frag_fsr_easu.h>
+ #include <dxvk_present_frag_ms.h>
+@@ -34,6 +37,29 @@ namespace dxvk {
+     if (m_fsrEnabled)
+       Logger::info(str::format("Swap chain: FSR 1.0 upscaling enabled, sharpness ", m_fsrSharpness));
+ 
++    // DXVK_POST=1 adds bloom and a light colour grade to the final pass.
++    // DXVK_BLOOM is the bloom strength (0 disables it), DXVK_BLOOM_THRESHOLD
++    // the brightness where bloom starts, DXVK_SATURATION and DXVK_CONTRAST
++    // scale around neutral (1 keeps the image unchanged).
++    m_postEnabled = env::getEnvVar("DXVK_POST") == "1";
++
++    auto readFloat = [] (const char* name, float& value, float lo, float hi) {
++      std::string str = env::getEnvVar(name);
++
++      if (!str.empty())
++        value = std::clamp(std::strtof(str.c_str(), nullptr), lo, hi);
++    };
++
++    readFloat("DXVK_BLOOM", m_bloomStrength, 0.0f, 2.0f);
++    readFloat("DXVK_BLOOM_THRESHOLD", m_bloomThreshold, 0.0f, 0.99f);
++    readFloat("DXVK_SATURATION", m_saturation, 0.0f, 2.0f);
++    readFloat("DXVK_CONTRAST", m_contrast, 0.5f, 2.0f);
++
++    if (m_postEnabled) {
++      Logger::info(str::format("Swap chain: post-processing enabled, bloom ", m_bloomStrength,
++        ", threshold ", m_bloomThreshold, ", saturation ", m_saturation, ", contrast ", m_contrast));
++    }
++
+     this->createSampler();
+     this->createShaders();
+   }
+@@ -55,6 +81,9 @@ namespace dxvk {
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsMsResolve.stageInfo.module, nullptr);
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsFsr.stageInfo.module, nullptr);
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsFsrEasu.stageInfo.module, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_shaderFsBloomDown.stageInfo.module, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_shaderFsBloomBlurH.stageInfo.module, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_shaderFsBloomBlurV.stageInfo.module, nullptr);
+ 
+     vk->vkDestroyShaderModule(vk->device(), m_shaderVsCursor.stageInfo.module, nullptr);
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsCursor.stageInfo.module, nullptr);
+@@ -129,6 +158,19 @@ namespace dxvk {
+       m_fsrView = nullptr;
+     }
+ 
++    // Post-processing runs in the RCAS pass, which reads its source 1:1,
++    // so it needs a single-sampled source at the output size.
++    m_postActive = m_postEnabled
++      && blitView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
++      && blitRect.extent == dstRect.extent;
++
++    if (m_postActive && m_bloomStrength > 0.0f) {
++      renderBloom(ctx, blitView, blitRect, dstRect.extent);
++    } else {
++      m_bloomImages = { };
++      m_bloomViews = { };
++    }
++
+     VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+     barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+     barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+@@ -166,7 +208,7 @@ namespace dxvk {
+     ctx.cmd->cmdBeginRendering(&renderInfo);
+ 
+     performDraw(ctx, dstView, dstRect, blitView, blitRect, composite,
+-      useFsr ? DxvkFsrPass::Rcas : DxvkFsrPass::None);
++      useFsr || m_postActive ? DxvkFsrPass::Rcas : DxvkFsrPass::None);
+ 
+     if (!composite) {
+       if (m_hud)
+@@ -397,7 +439,17 @@ namespace dxvk {
+       cursorDescriptor.imageView = m_cursorView->handle();
+     }
+ 
+-    std::array<VkWriteDescriptorSet, 4> descriptorWrites = {{
++    VkDescriptorImageInfo bloomDescriptor = { };
++    bloomDescriptor.sampler = m_samplerCursorLinear->handle();
++
++    bool useBloom = fsrPass == DxvkFsrPass::Rcas && m_postActive && m_bloomViews[0] != nullptr;
++
++    if (useBloom) {
++      bloomDescriptor.imageView = m_bloomViews[0]->handle();
++      bloomDescriptor.imageLayout = m_bloomImages[0]->info().layout;
++    }
++
++    std::array<VkWriteDescriptorSet, 5> descriptorWrites = {{
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+         set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageDescriptor },
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+@@ -406,6 +458,8 @@ namespace dxvk {
+         set, 2, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &hudDescriptor },
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+         set, 3, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cursorDescriptor },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
++        set, 4, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bloomDescriptor },
+     }};
+ 
+     ctx.cmd->updateDescriptorSets(
+@@ -423,6 +477,10 @@ namespace dxvk {
+     args.cursorExtent = m_cursorRect.extent;
+     args.dstExtent = dstRect.extent;
+     args.fsrSharpness = m_fsrSharpness;
++    args.bloomStrength = useBloom ? m_bloomStrength : 0.0f;
++    args.bloomThreshold = m_bloomThreshold;
++    args.saturation = m_postActive ? m_saturation : 1.0f;
++    args.contrast = m_postActive ? m_contrast : 1.0f;
+ 
+     ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer,
+       m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+@@ -437,6 +495,9 @@ namespace dxvk {
+     ctx.cmd->track(srcView->image(), DxvkAccess::Read);
+     ctx.cmd->track(dstView->image(), DxvkAccess::Write);
+ 
++    if (useBloom)
++      ctx.cmd->track(m_bloomImages[0], DxvkAccess::Read);
++
+     if (m_gammaImage)
+       ctx.cmd->track(m_gammaImage, DxvkAccess::Read);
+ 
+@@ -579,34 +640,82 @@ namespace dxvk {
+      || m_fsrImage->info().extent != VkExtent3D { extent.width, extent.height, 1u })
+       createFsrImage(extent, colorSpace);
+ 
++    renderPostPass(ctx, m_fsrImage, m_fsrView, extent,
++      srcView, srcRect, DxvkFsrPass::Easu, "FSR EASU");
++  }
++
++
++  void DxvkSwapchainBlitter::createFsrImage(
++          VkExtent2D                  extent,
++          VkColorSpaceKHR             colorSpace) {
++    createIntermediateImage(extent, colorSpace, "FSR EASU output", m_fsrImage, m_fsrView);
++  }
++
++
++  void DxvkSwapchainBlitter::renderBloom(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect,
++          VkExtent2D                  extent) {
++    VkExtent2D bloomExtent = {
++      std::max(1u, (extent.width  + 3u) / 4u),
++      std::max(1u, (extent.height + 3u) / 4u) };
++
++    for (uint32_t i = 0; i < m_bloomImages.size(); i++) {
++      if (!m_bloomImages[i] || m_bloomImages[i]->info().extent != VkExtent3D { bloomExtent.width, bloomExtent.height, 1u }) {
++        createIntermediateImage(bloomExtent, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
++          "Bloom", m_bloomImages[i], m_bloomViews[i]);
++      }
++    }
++
++    VkRect2D bloomRect = { { 0, 0 }, bloomExtent };
++
++    renderPostPass(ctx, m_bloomImages[0], m_bloomViews[0], bloomExtent,
++      srcView, srcRect, DxvkFsrPass::BloomDown, "Bloom bright pass");
++    renderPostPass(ctx, m_bloomImages[1], m_bloomViews[1], bloomExtent,
++      m_bloomViews[0], bloomRect, DxvkFsrPass::BloomBlurH, "Bloom blur H");
++    renderPostPass(ctx, m_bloomImages[0], m_bloomViews[0], bloomExtent,
++      m_bloomViews[1], bloomRect, DxvkFsrPass::BloomBlurV, "Bloom blur V");
++  }
++
++
++  void DxvkSwapchainBlitter::renderPostPass(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImage>&              image,
++    const Rc<DxvkImageView>&          view,
++          VkExtent2D                  extent,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect,
++          DxvkFsrPass                 pass,
++    const char*                       label) {
+     if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture))) {
+       ctx.cmd->cmdBeginDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer,
+-        vk::makeLabel(0xdcc0f0, "FSR EASU"));
++        vk::makeLabel(0xdcc0f0, label));
+     }
+ 
+-    // The previous frame's RCAS pass may still read the image
++    // Earlier passes, or the previous frame, may still read the image
+     VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                          | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+     barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+     barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+-    barrier.newLayout = m_fsrImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.newLayout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-    barrier.image = m_fsrImage->handle();
+-    barrier.subresourceRange = m_fsrView->imageSubresources();
++    barrier.image = image->handle();
++    barrier.subresourceRange = view->imageSubresources();
+ 
+     VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+     depInfo.imageMemoryBarrierCount = 1;
+     depInfo.pImageMemoryBarriers = &barrier;
+ 
+     ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
+-    m_fsrImage->trackInitialization(barrier.subresourceRange);
++    image->trackInitialization(barrier.subresourceRange);
+ 
+     VkRenderingAttachmentInfo attachmentInfo = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+-    attachmentInfo.imageView = m_fsrView->handle();
+-    attachmentInfo.imageLayout = m_fsrImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    attachmentInfo.imageView = view->handle();
++    attachmentInfo.imageLayout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+     attachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+     attachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+ 
+@@ -619,31 +728,34 @@ namespace dxvk {
+ 
+     ctx.cmd->cmdBeginRendering(&renderInfo);
+ 
+-    performDraw(ctx, m_fsrView, { { 0, 0 }, extent },
+-      srcView, srcRect, VK_FALSE, DxvkFsrPass::Easu);
++    performDraw(ctx, view, { { 0, 0 }, extent },
++      srcView, srcRect, VK_FALSE, pass);
+ 
+     ctx.cmd->cmdEndRendering();
+ 
+-    // Make image shader-readable for the RCAS pass
++    // Make image shader-readable for the next pass
+     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+     barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+     barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+     barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+-    barrier.oldLayout = m_fsrImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+-    barrier.newLayout = m_fsrImage->info().layout;
++    barrier.oldLayout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.newLayout = image->info().layout;
+ 
+     ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
+ 
+     if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
+       ctx.cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
+ 
+-    ctx.cmd->track(m_fsrImage, DxvkAccess::Write);
++    ctx.cmd->track(image, DxvkAccess::Write);
+   }
+ 
+ 
+-  void DxvkSwapchainBlitter::createFsrImage(
++  void DxvkSwapchainBlitter::createIntermediateImage(
+           VkExtent2D                  extent,
+-          VkColorSpaceKHR             colorSpace) {
++          VkColorSpaceKHR             colorSpace,
++    const char*                       debugName,
++          Rc<DxvkImage>&              image,
++          Rc<DxvkImageView>&          view) {
+     DxvkImageCreateInfo imageInfo = { };
+     imageInfo.type          = VK_IMAGE_TYPE_2D;
+     imageInfo.format        = VK_FORMAT_R16G16B16A16_SFLOAT;
+@@ -662,9 +774,9 @@ namespace dxvk {
+     imageInfo.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+     imageInfo.colorSpace    = colorSpace;
+-    imageInfo.debugName     = "FSR EASU output";
++    imageInfo.debugName     = debugName;
+ 
+-    m_fsrImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++    image = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+ 
+     DxvkImageViewKey viewInfo = { };
+     viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
+@@ -677,7 +789,7 @@ namespace dxvk {
+     viewInfo.layerIndex     = 0u;
+     viewInfo.layerCount     = 1u;
+ 
+-    m_fsrView = m_fsrImage->createView(viewInfo);
++    view = image->createView(viewInfo);
+   }
+ 
+ 
+@@ -906,6 +1018,12 @@ namespace dxvk {
+       sizeof(dxvk_present_frag_fsr), dxvk_present_frag_fsr);
+     createShaderModule(m_shaderFsFsrEasu, VK_SHADER_STAGE_FRAGMENT_BIT,
+       sizeof(dxvk_present_frag_fsr_easu), dxvk_present_frag_fsr_easu);
++    createShaderModule(m_shaderFsBloomDown, VK_SHADER_STAGE_FRAGMENT_BIT,
++      sizeof(dxvk_present_frag_bloom_down), dxvk_present_frag_bloom_down);
++    createShaderModule(m_shaderFsBloomBlurH, VK_SHADER_STAGE_FRAGMENT_BIT,
++      sizeof(dxvk_present_frag_bloom_blur_h), dxvk_present_frag_bloom_blur_h);
++    createShaderModule(m_shaderFsBloomBlurV, VK_SHADER_STAGE_FRAGMENT_BIT,
++      sizeof(dxvk_present_frag_bloom_blur_v), dxvk_present_frag_bloom_blur_v);
+     createShaderModule(m_shaderFsCopy, VK_SHADER_STAGE_FRAGMENT_BIT,
+       sizeof(dxvk_present_frag), dxvk_present_frag);
+     createShaderModule(m_shaderFsMsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
+@@ -956,11 +1074,12 @@ namespace dxvk {
+   VkDescriptorSetLayout DxvkSwapchainBlitter::createSetLayout() {
+     auto vk = m_device->vkd();
+ 
+-    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {{
++    std::array<VkDescriptorSetLayoutBinding, 5> bindings = {{
+       { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT },
+       { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT },
+       { 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          1, VK_SHADER_STAGE_FRAGMENT_BIT },
+       { 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT },
++      { 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT },
+     }};
+ 
+     VkDescriptorSetLayoutCreateInfo info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+@@ -1090,6 +1209,12 @@ namespace dxvk {
+       blitStages[1] = m_shaderFsFsrEasu.stageInfo;
+     else if (key.fsrPass == DxvkFsrPass::Rcas)
+       blitStages[1] = m_shaderFsFsr.stageInfo;
++    else if (key.fsrPass == DxvkFsrPass::BloomDown)
++      blitStages[1] = m_shaderFsBloomDown.stageInfo;
++    else if (key.fsrPass == DxvkFsrPass::BloomBlurH)
++      blitStages[1] = m_shaderFsBloomBlurH.stageInfo;
++    else if (key.fsrPass == DxvkFsrPass::BloomBlurV)
++      blitStages[1] = m_shaderFsBloomBlurV.stageInfo;
+     else if (key.srcSamples == VK_SAMPLE_COUNT_1_BIT)
+       blitStages[1] = key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo;
+     else
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+index 19b64b0..9c618c9 100644
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -31,6 +31,12 @@ namespace dxvk {
+     Easu = 1,
+     /// RCAS sharpening of the intermediate image onto the swap chain
+     Rcas = 2,
++    /// Bloom bright pass, downsampled to a quarter of the output size
++    BloomDown = 3,
++    /// Horizontal bloom blur
++    BloomBlurH = 4,
++    /// Vertical bloom blur
++    BloomBlurV = 5,
+   };
+ 
+ 
+@@ -212,6 +218,10 @@ namespace dxvk {
+       VkExtent2D cursorExtent;
+       VkExtent2D dstExtent;
+       float fsrSharpness;
++      float bloomStrength;
++      float bloomThreshold;
++      float saturation;
++      float contrast;
+     };
+ 
+     struct CursorSpecConstants {
+@@ -240,10 +250,20 @@ namespace dxvk {
+     ShaderModule        m_shaderFsMsBlit;
+     ShaderModule        m_shaderFsFsr;
+     ShaderModule        m_shaderFsFsrEasu;
++    ShaderModule        m_shaderFsBloomDown;
++    ShaderModule        m_shaderFsBloomBlurH;
++    ShaderModule        m_shaderFsBloomBlurV;
+ 
+     bool                m_fsrEnabled = false;
+     float               m_fsrSharpness = 0.2f;
+ 
++    bool                m_postEnabled = false;
++    bool                m_postActive = false;
++    float               m_bloomStrength = 0.25f;
++    float               m_bloomThreshold = 0.7f;
++    float               m_saturation = 1.1f;
++    float               m_contrast = 1.05f;
++
+     ShaderModule        m_shaderVsCursor;
+     ShaderModule        m_shaderFsCursor;
+ 
+@@ -269,6 +289,9 @@ namespace dxvk {
+     Rc<DxvkImage>       m_fsrImage;
+     Rc<DxvkImageView>   m_fsrView;
+ 
++    std::array<Rc<DxvkImage>, 2>     m_bloomImages;
++    std::array<Rc<DxvkImageView>, 2> m_bloomViews;
++
+     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+     VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
+ 
+@@ -309,6 +332,29 @@ namespace dxvk {
+             VkExtent2D                  extent,
+             VkColorSpaceKHR             colorSpace);
+ 
++    void renderBloom(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect,
++            VkExtent2D                  extent);
++
++    void renderPostPass(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImage>&              image,
++      const Rc<DxvkImageView>&          view,
++            VkExtent2D                  extent,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect,
++            DxvkFsrPass                 pass,
++      const char*                       label);
++
++    void createIntermediateImage(
++            VkExtent2D                  extent,
++            VkColorSpaceKHR             colorSpace,
++      const char*                       debugName,
++            Rc<DxvkImage>&              image,
++            Rc<DxvkImageView>&          view);
++
+     void renderCursor(
+       const DxvkContextObjects&         ctx,
+       const Rc<DxvkImageView>&          dstView);
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+index 45e5e3a..ef22c27 100644
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -42,6 +42,9 @@ dxvk_shaders = files([
+ 
+   'shaders/dxvk_present_frag.frag',
+   'shaders/dxvk_present_frag_blit.frag',
++  'shaders/dxvk_present_frag_bloom_blur_h.frag',
++  'shaders/dxvk_present_frag_bloom_blur_v.frag',
++  'shaders/dxvk_present_frag_bloom_down.frag',
+   'shaders/dxvk_present_frag_fsr.frag',
+   'shaders/dxvk_present_frag_fsr_easu.frag',
+   'shaders/dxvk_present_frag_ms.frag',
+diff --git a/src/dxvk/shaders/dxvk_present_bloom_blur.glsl b/src/dxvk/shaders/dxvk_present_bloom_blur.glsl
+new file mode 100644
+index 0000000..80a3b7f
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_present_bloom_blur.glsl
+@@ -0,0 +1,21 @@
++// Separable 9-tap Gaussian over the quarter-size bloom image. Taps are
++// two texels apart to widen the glow at no extra cost.
++layout(location = 0) in  vec2 i_coord;
++layout(location = 0) out vec4 o_color;
++
++void main() {
++  const float weights[5] = float[](0.227027f, 0.1945946f, 0.1216216f, 0.054054f, 0.016216f);
++
++  ivec2 pos = ivec2(gl_FragCoord.xy);
++  ivec2 hi = textureSize(s_image, 0) - 1;
++
++  vec3 sum = texelFetch(s_image, pos, 0).rgb * weights[0];
++
++  for (int i = 1; i < 5; i++) {
++    ivec2 ofs = c_blur_dir * (2 * i);
++    sum += texelFetch(s_image, clamp(pos + ofs, ivec2(0), hi), 0).rgb * weights[i];
++    sum += texelFetch(s_image, clamp(pos - ofs, ivec2(0), hi), 0).rgb * weights[i];
++  }
++
++  o_color = vec4(sum, 1.0f);
++}
+diff --git a/src/dxvk/shaders/dxvk_present_common.glsl b/src/dxvk/shaders/dxvk_present_common.glsl
+index bf5246a..bec529a 100644
+--- a/src/dxvk/shaders/dxvk_present_common.glsl
++++ b/src/dxvk/shaders/dxvk_present_common.glsl
+@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform sampler2DMS s_image_ms;
+ layout(set = 0, binding = 1) uniform sampler1D s_gamma;
+ layout(set = 0, binding = 2) uniform texture2D s_hud;
+ layout(set = 0, binding = 3) uniform sampler2D s_cursor;
++layout(set = 0, binding = 4) uniform sampler2D s_bloom;
+ 
+ layout(push_constant)
+ uniform present_info_t {
+@@ -27,6 +28,10 @@ uniform present_info_t {
+   ivec2 cursor_extent;
+   ivec2 dst_extent;
+   float fsr_sharpness;
++  float bloom_strength;
++  float bloom_threshold;
++  float saturation;
++  float contrast;
+ };
+ 
+ 
+diff --git a/src/dxvk/shaders/dxvk_present_frag_bloom_blur_h.frag b/src/dxvk/shaders/dxvk_present_frag_bloom_blur_h.frag
+new file mode 100644
+index 0000000..80e7b4b
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_present_frag_bloom_blur_h.frag
+@@ -0,0 +1,9 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "dxvk_present_common.glsl"
++
++const ivec2 c_blur_dir = ivec2(1, 0);
++
++#include "dxvk_present_bloom_blur.glsl"
+diff --git a/src/dxvk/shaders/dxvk_present_frag_bloom_blur_v.frag b/src/dxvk/shaders/dxvk_present_frag_bloom_blur_v.frag
+new file mode 100644
+index 0000000..8f997c6
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_present_frag_bloom_blur_v.frag
+@@ -0,0 +1,9 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "dxvk_present_common.glsl"
++
++const ivec2 c_blur_dir = ivec2(0, 1);
++
++#include "dxvk_present_bloom_blur.glsl"
+diff --git a/src/dxvk/shaders/dxvk_present_frag_bloom_down.frag b/src/dxvk/shaders/dxvk_present_frag_bloom_down.frag
+new file mode 100644
+index 0000000..de0357e
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_present_frag_bloom_down.frag
+@@ -0,0 +1,34 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "dxvk_present_common.glsl"
++
++// Bloom bright pass: averages 4x4 source texels into one quarter-size
++// texel and keeps only the part above the bloom threshold.
++layout(location = 0) in  vec2 i_coord;
++layout(location = 0) out vec4 o_color;
++
++void main() {
++  ivec2 pos = ivec2(gl_FragCoord.xy) - dst_offset;
++  vec2 scale = vec2(src_extent) / vec2(dst_extent);
++
++  ivec2 lo = src_offset;
++  ivec2 hi = src_offset + src_extent - 1;
++  ivec2 base = src_offset + ivec2((vec2(pos) + 0.5f) * scale) - 2;
++
++  vec3 sum = vec3(0.0f);
++
++  for (int y = 0; y < 4; y++) {
++    for (int x = 0; x < 4; x++) {
++      vec3 texel = texelFetch(s_image, clamp(base + ivec2(x, y), lo, hi), 0).rgb;
++      sum += c_src_is_srgb ? linear_to_srgb(texel) : texel;
++    }
++  }
++
++  vec3 color = sum / 16.0f;
++  float peak = max(color.r, max(color.g, color.b));
++  float weight = max(peak - bloom_threshold, 0.0f) / max(1.0f - bloom_threshold, 0.001f);
++
++  o_color = vec4(color * weight, 1.0f);
++}
+diff --git a/src/dxvk/shaders/dxvk_present_frag_fsr.frag b/src/dxvk/shaders/dxvk_present_frag_fsr.frag
+index dd745cb..ed7fcc6 100644
+--- a/src/dxvk/shaders/dxvk_present_frag_fsr.frag
++++ b/src/dxvk/shaders/dxvk_present_frag_fsr.frag
+@@ -5,7 +5,9 @@
+ #include "dxvk_present_common.glsl"
+ 
+ // Second FSR 1.0 pass: AMD FidelityFX RCAS sharpens the EASU output
+-// and presents it with the usual color space conversion.
++// and presents it with the usual color space conversion. With DXVK_POST
++// it also runs on a native-size back buffer and adds bloom and a colour
++// grade, both in gamma space like the game's own rendering.
+ #define A_GPU 1
+ #define A_GLSL 1
+ #include "ffx_a.h"
+@@ -27,11 +29,25 @@ void main() {
+   AU4 con;
+   FsrRcasCon(con, AF1(fsr_sharpness));
+ 
+-  AU2 pos = AU2(ivec2(gl_FragCoord.xy) - dst_offset);
++  ivec2 dst_pos = ivec2(gl_FragCoord.xy) - dst_offset;
++  AU2 pos = AU2(dst_pos + src_offset);
+ 
+   AF3 color;
+   FsrRcasF(color.r, color.g, color.b, pos, con);
+ 
++  vec3 graded = c_src_is_srgb ? linear_to_srgb(color) : color;
++
++  if (bloom_strength > 0.0f) {
++    vec2 uv = (vec2(dst_pos) + 0.5f) / vec2(dst_extent);
++    graded += textureLod(s_bloom, uv, 0.0f).rgb * bloom_strength;
++  }
++
++  graded = (graded - 0.5f) * contrast + 0.5f;
++  graded = mix(vec3(dot(graded, vec3(0.2126f, 0.7152f, 0.0722f))), graded, saturation);
++  graded = clamp(graded, vec3(0.0f), vec3(1.0f));
++
++  color = c_src_is_srgb ? srgb_to_linear(graded) : graded;
++
+   o_color = input_to_sc_rgb(vec4(color, 1.0f));
+   o_color = composite_image(o_color);
+   o_color = sc_rgb_to_output(o_color);
