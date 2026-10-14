@@ -29,6 +29,7 @@ import fnmatch
 import io
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -71,19 +72,27 @@ def read_entry(entry):
 
 
 def write_big(path, files):
-    """files: list of (archive name with backslashes, bytes)."""
+    """files: list of (archive name with backslashes, bytes or Path of a file to copy in).
+
+    Path entries are streamed, so a full pack never has to fit in memory.
+    """
+    sizes = [len(data) if isinstance(data, bytes) else Path(data).stat().st_size for _, data in files]
     names = [n.encode("latin-1") + b"\0" for n, _ in files]
     header_size = 16 + sum(8 + len(n) for n in names)
     offset = header_size
     table = b""
-    for (_, data), name in zip(files, names):
-        table += struct.pack(">II", offset, len(data)) + name
-        offset += len(data)
+    for size, name in zip(sizes, names):
+        table += struct.pack(">II", offset, size) + name
+        offset += size
     with open(path, "wb") as f:
         f.write(b"BIGF" + struct.pack("<I", offset) + struct.pack(">II", len(files), header_size))
         f.write(table)
         for _, data in files:
-            f.write(data)
+            if isinstance(data, bytes):
+                f.write(data)
+            else:
+                with open(data, "rb") as src:
+                    shutil.copyfileobj(src, f)
 
 
 def collect_archives(game_dirs):
@@ -228,24 +237,32 @@ def write_dds_mipmapped(img, has_alpha):
 SHEET_CELL = 256
 
 
-def comparison_sheet(pairs, path):
-    """One image with a row per texture: plain resize on the left, pack result on the right.
+SHEET_ROWS = 40  # keeps each sheet far below the 65500 px JPEG limit
 
-    Each cell is a centre crop of SHEET_CELL px at output resolution, so detail is
-    compared 1:1 instead of being hidden by a thumbnail downscale.
+
+def comparison_cells(before, after):
+    """Centre crops of SHEET_CELL px at output resolution: plain bicubic resize and pack result.
+
+    Comparing 1:1 crops shows the detail a thumbnail downscale would hide. Only the
+    crops are kept, so previews of a full pack stay small in memory.
     """
-    if not pairs:
-        return
-    sheet = Image.new("RGB", (SHEET_CELL * 2 + 12, len(pairs) * (SHEET_CELL + 4)), (32, 32, 32))
-    for row, (before, after) in enumerate(pairs):
-        plain = before.convert("RGB").resize(after.size, Image.Resampling.BICUBIC)
-        w, h = after.size
-        cw, ch = min(SHEET_CELL, w), min(SHEET_CELL, h)
-        box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
-        y = row * (SHEET_CELL + 4)
-        sheet.paste(plain.crop(box), (0, y))
-        sheet.paste(after.convert("RGB").crop(box), (SHEET_CELL + 12, y))
-    sheet.save(path, quality=90)
+    plain = before.convert("RGB").resize(after.size, Image.Resampling.BICUBIC)
+    w, h = after.size
+    cw, ch = min(SHEET_CELL, w), min(SHEET_CELL, h)
+    box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
+    return plain.crop(box), after.convert("RGB").crop(box)
+
+
+def comparison_sheets(cells, preview_dir):
+    """compare_001.jpg, compare_002.jpg, ...: a row per texture, SHEET_ROWS rows per sheet."""
+    for page, first in enumerate(range(0, len(cells), SHEET_ROWS), start=1):
+        rows = cells[first:first + SHEET_ROWS]
+        sheet = Image.new("RGB", (SHEET_CELL * 2 + 12, len(rows) * (SHEET_CELL + 4)), (32, 32, 32))
+        for row, (plain, upscaled) in enumerate(rows):
+            y = row * (SHEET_CELL + 4)
+            sheet.paste(plain, (0, y))
+            sheet.paste(upscaled, (SHEET_CELL + 12, y))
+        sheet.save(Path(preview_dir, f"compare_{page:03d}.jpg"), quality=90)
 
 
 # ---------------------------------------------------------------- main
@@ -322,6 +339,7 @@ def main():
 
     output = []
     pairs = []
+    spool = tempfile.TemporaryDirectory()
     session = None
     for start in range(0, len(keys), args.batch):
         batch = {}
@@ -358,16 +376,19 @@ def main():
             result.putalpha(alpha.resize(size, Image.Resampling.LANCZOS))
             original = sources[stem][3]
             name = original[:original.rfind(".")] + ".dds"
-            output.append((name, write_dds_mipmapped(result, has_alpha)))
+            spooled = Path(spool.name, f"{len(output):05d}.dds")
+            spooled.write_bytes(write_dds_mipmapped(result, has_alpha))
+            output.append((name, spooled))
             if args.preview_dir:
                 img.save(Path(args.preview_dir, f"{stem}_before.png"))
                 result.save(Path(args.preview_dir, f"{stem}_after.png"))
-                pairs.append((img, result))
+                pairs.append(comparison_cells(img, result))
         print(f"  {min(start + args.batch, len(keys))}/{len(keys)}")
 
     write_big(args.out, output)
+    spool.cleanup()
     if args.preview_dir:
-        comparison_sheet(pairs, Path(args.preview_dir, "compare.jpg"))
+        comparison_sheets(pairs, args.preview_dir)
     print(f"wrote {len(output)} textures to {args.out}")
 
 
