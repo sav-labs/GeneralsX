@@ -387,7 +387,13 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT message,
 				// If not in a match (e.g. main menu), the command instantly closes the application.
 				if (TheGameEngine && !TheGameEngine->getQuitting())
 				{
-					if (TheMessageStream && TheMessageStream->isReadyForMessages())
+					// GeneralsX @bugfix Claude 13/10/2026 A minimized window never processes the message stream
+					// (Win32GameEngine::update waits until it is restored), so the quit message would hang the
+					// game. Quit directly unless a network match keeps the logic running.
+					const Bool streamRunning = !::IsIconic(hWnd)
+						|| (TheGameLogic && (TheGameLogic->isInInternetGame() || TheGameLogic->isInLanGame()));
+
+					if (streamRunning && TheMessageStream && TheMessageStream->isReadyForMessages())
 					{
 						TheMessageStream->appendMessage(GameMessage::MSG_META_DEMO_INSTANT_QUIT);
 					}

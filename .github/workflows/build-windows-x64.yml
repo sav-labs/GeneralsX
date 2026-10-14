@@ -20,6 +20,7 @@ jobs:
   # GeneralsX @build Claude 12/10/2026 DXVK 2.6 for Windows with FSR 1.0 (EASU upscale + RCAS sharpening) in the swap chain blitter.
   # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
   # DXVK_FSR_SHARPNESS sets RCAS sharpening in stops (0 = sharpest, default 0.2).
+  # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -179,6 +180,7 @@ jobs:
           Rendering goes through DXVK (Vulkan); delete d3d8.dll and d3d9.dll to use native DirectX 8.
           Play-FSR.cmd runs borderless at display size and upscales the game resolution with FSR 1.0.
           To soften the FSR sharpening, edit Play-FSR.cmd and add: set DXVK_FSR_SHARPNESS=1 (0 is sharpest, default 0.2).
+          For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           Pick the game resolution in Options; use the same aspect ratio as the display.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.

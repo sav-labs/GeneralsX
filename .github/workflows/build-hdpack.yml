@@ -1,0 +1,107 @@
+name: Build HD texture pack tool
+
+# GeneralsX @build sav-labs 14/10/2026 Package the HD texture pack builder for Windows.
+# The artifact holds the tool and the upscaler only; textures are built on the
+# player's machine from their own copy of the game and are never published.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - "scripts/tooling/hdpack/**"
+      - ".github/workflows/build-hdpack.yml"
+  pull_request:
+    paths:
+      - "scripts/tooling/hdpack/**"
+      - ".github/workflows/build-hdpack.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-hdpack-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Real-ESRGAN ncnn Vulkan build (BSD-3-Clause), pinned by checksum.
+  ESRGAN_URL: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip
+  ESRGAN_SHA256: abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d
+  # upscayl-bin (AGPL-3.0): the same CLI on a newer ncnn, which works on the Radeon 780M
+  # where the 2022 build above fails vkAllocateMemory. Shipped unmodified with its licence.
+  UPSCAYL_URL: https://github.com/upscayl/upscayl-ncnn/releases/download/20240601-103425/upscayl-bin-20240601-103425-windows.zip
+  UPSCAYL_SHA256: 2707e7904cc186ca1e47be3a3735feb56219975b6926ff1c35e0dd21dbed2b81
+  # Real-ESRGAN x4plus weights (BSD-3-Clause), converted to ONNX for the DirectML path,
+  # which is the default: both ncnn builds fail vkAllocateMemory on the Radeon 780M.
+  X4PLUS_URL: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+  X4PLUS_SHA256: 4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1
+
+jobs:
+  hdpack:
+    name: HD pack tool (Win64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install pillow==12.0.0 pyinstaller==6.11.1 numpy==2.1.3 onnx==1.17.0 onnxruntime-directml==1.20.1
+
+      - name: Self-test
+        run: python scripts/tooling/hdpack/test_hdpack.py
+
+      - name: Build hdpack.exe
+        run: pyinstaller --onefile --name hdpack --collect-binaries onnxruntime --distpath dist --workpath build-hdpack scripts/tooling/hdpack/hdpack.py
+
+      - name: Export Real-ESRGAN x4plus to ONNX
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:X4PLUS_URL -OutFile RealESRGAN_x4plus.pth
+          $hash = (Get-FileHash RealESRGAN_x4plus.pth -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:X4PLUS_SHA256) { throw "x4plus checksum mismatch: $hash" }
+          python scripts/tooling/hdpack/export_onnx.py RealESRGAN_x4plus.pth dist/realesrgan_x4plus.onnx
+
+      - name: Bundle Real-ESRGAN
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:ESRGAN_URL -OutFile esrgan.zip
+          $hash = (Get-FileHash esrgan.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:ESRGAN_SHA256) { throw "Real-ESRGAN checksum mismatch: $hash" }
+          Expand-Archive esrgan.zip -DestinationPath esrgan
+          New-Item -ItemType Directory -Force dist/models | Out-Null
+          Copy-Item esrgan/realesrgan-ncnn-vulkan.exe, esrgan/vcomp140.dll dist/
+          Copy-Item esrgan/models/realesrgan-x4plus.* dist/models/
+          Copy-Item scripts/tooling/hdpack/README.md dist/
+
+      - name: Bundle upscayl-bin
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:UPSCAYL_URL -OutFile upscayl.zip
+          $hash = (Get-FileHash upscayl.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:UPSCAYL_SHA256) { throw "upscayl-bin checksum mismatch: $hash" }
+          Expand-Archive upscayl.zip -DestinationPath upscayl
+          $dir = Get-ChildItem upscayl -Directory | Select-Object -First 1
+          Copy-Item (Join-Path $dir.FullName "upscayl-bin.exe") dist/
+          Copy-Item (Join-Path $dir.FullName "LICENSE") dist/LICENSE-upscayl-bin.txt
+
+      - name: Check the bundle runs
+        shell: pwsh
+        run: |
+          dist/hdpack.exe --help
+          New-Item -ItemType Directory -Force smoke/game | Out-Null
+          python -c "import io, sys; sys.path.insert(0, 'scripts/tooling/hdpack'); import hdpack; from PIL import Image; b = io.BytesIO(); Image.new('RGBA', (64, 64), (90, 120, 60, 255)).save(b, 'TGA'); hdpack.write_big('smoke/game/Textures.big', [('Art\\Textures\\AVTank.tga', b.getvalue())])"
+          dist/hdpack.exe --game-dir smoke/game --out "smoke/!HDTextures.big"
+          if ($LASTEXITCODE -ne 0) { throw "hdpack.exe failed" }
+          if (!(Test-Path "smoke/!HDTextures.big")) { throw "no pack written" }
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: hdpack-win64
+          path: dist/

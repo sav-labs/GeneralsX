@@ -1,0 +1,374 @@
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+index 61992c7..56dc4ae 100644
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -11,6 +11,10 @@
+ #include <dxvk_present_frag_ms_blit.h>
+ #include <dxvk_present_vert.h>
+ 
++#include <array>
++#include <cstdio>
++#include <fstream>
++
+ namespace dxvk {
+   
+   DxvkSwapchainBlitter::DxvkSwapchainBlitter(
+@@ -34,6 +38,23 @@ namespace dxvk {
+     if (m_fsrEnabled)
+       Logger::info(str::format("Swap chain: FSR 1.0 upscaling enabled, sharpness ", m_fsrSharpness));
+ 
++    // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
++    // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
++    m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
++
++    std::string interval = env::getEnvVar("DXVK_CAPTURE_INTERVAL");
++
++    if (!interval.empty()) {
++      float seconds = std::clamp(std::strtof(interval.c_str(), nullptr), 1.0f, 3600.0f);
++      m_captureInterval = std::chrono::milliseconds(uint32_t(seconds * 1000.0f));
++    }
++
++    if (!m_capturePath.empty()) {
++      m_captureNext = high_resolution_clock::now() + m_captureInterval;
++      Logger::info(str::format("Swap chain: capturing frames to ", m_capturePath,
++        " every ", m_captureInterval.count(), " ms"));
++    }
++
+     this->createSampler();
+     this->createShaders();
+   }
+@@ -201,6 +222,21 @@ namespace dxvk {
+     depInfo.pImageMemoryBarriers = &barrier;
+ 
+     ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (!m_capturePath.empty()) {
++      if (m_capturePending && !m_captureBuffer->isInUse(DxvkAccess::Write)) {
++        writeCapture();
++        m_capturePending = false;
++      }
++
++      auto now = high_resolution_clock::now();
++
++      if (!m_capturePending && now >= m_captureNext) {
++        captureFrame(ctx, dstView, dstRect, blitView, blitRect,
++          useFsr ? DxvkFsrPass::Rcas : DxvkFsrPass::None);
++        m_captureNext = now + m_captureInterval;
++      }
++    }
+   }
+ 
+ 
+@@ -647,6 +683,268 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkSwapchainBlitter::captureFrame(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          dstView,
++          VkRect2D                    dstRect,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect,
++          DxvkFsrPass                 fsrPass) {
++    VkFormat format = dstView->info().format;
++
++    if (format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB
++     && format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB) {
++      Logger::warn(str::format("Swap chain: cannot capture format ", format));
++      m_capturePath.clear();
++      return;
++    }
++
++    VkExtent3D extent = dstView->mipLevelExtent(0u);
++
++    if (!m_captureImage || m_captureImage->info().extent != extent
++     || m_captureImage->info().format != format
++     || m_captureImage->info().colorSpace != dstView->image()->info().colorSpace) {
++      DxvkImageCreateInfo imageInfo = { };
++      imageInfo.type          = VK_IMAGE_TYPE_2D;
++      imageInfo.format        = format;
++      imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++      imageInfo.extent        = extent;
++      imageInfo.mipLevels     = 1;
++      imageInfo.numLayers     = 1;
++      imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                              | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++      imageInfo.stages        = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
++                              | VK_PIPELINE_STAGE_TRANSFER_BIT;
++      imageInfo.access        = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
++                              | VK_ACCESS_TRANSFER_READ_BIT;
++      imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++      imageInfo.layout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++      imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++      imageInfo.colorSpace    = dstView->image()->info().colorSpace;
++      imageInfo.debugName     = "Swap chain capture";
++
++      m_captureImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++      DxvkImageViewKey viewInfo = { };
++      viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++      viewInfo.usage          = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++      viewInfo.format         = format;
++      viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++      viewInfo.mipIndex       = 0u;
++      viewInfo.mipCount       = 1u;
++      viewInfo.layerIndex     = 0u;
++      viewInfo.layerCount     = 1u;
++
++      m_captureView = m_captureImage->createView(viewInfo);
++
++      DxvkBufferCreateInfo bufferInfo = { };
++      bufferInfo.size   = VkDeviceSize(extent.width) * extent.height * 4u;
++      bufferInfo.usage  = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
++      bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
++      bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
++      bufferInfo.debugName = "Swap chain capture";
++
++      m_captureBuffer = m_device->createBuffer(bufferInfo,
++        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
++    }
++
++    // Draw the same image as the swap chain blit, without HUD and cursor
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = m_captureImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_captureImage->handle();
++    barrier.subresourceRange = m_captureView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++    m_captureImage->trackInitialization(barrier.subresourceRange);
++
++    VkRenderingAttachmentInfo attachmentInfo = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
++    attachmentInfo.imageView = m_captureView->handle();
++    attachmentInfo.imageLayout = m_captureImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    attachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
++    attachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
++
++    VkRenderingInfo renderInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
++    renderInfo.renderArea.offset = { 0, 0 };
++    renderInfo.renderArea.extent = { extent.width, extent.height };
++    renderInfo.layerCount = 1u;
++    renderInfo.colorAttachmentCount = 1;
++    renderInfo.pColorAttachments = &attachmentInfo;
++
++    ctx.cmd->cmdBeginRendering(&renderInfo);
++
++    performDraw(ctx, m_captureView, dstRect, srcView, srcRect, VK_FALSE, fsrPass);
++
++    ctx.cmd->cmdEndRendering();
++
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
++    barrier.oldLayout = m_captureImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.newLayout = m_captureImage->info().layout;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    DxvkBufferSliceHandle bufferSlice = m_captureBuffer->getSliceHandle();
++
++    VkBufferImageCopy2 region = { VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2 };
++    region.bufferOffset = bufferSlice.offset;
++    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u };
++    region.imageExtent = extent;
++
++    VkCopyImageToBufferInfo2 copyInfo = { VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2 };
++    copyInfo.srcImage = m_captureImage->handle();
++    copyInfo.srcImageLayout = m_captureImage->info().layout;
++    copyInfo.dstBuffer = bufferSlice.handle;
++    copyInfo.regionCount = 1;
++    copyInfo.pRegions = &region;
++
++    ctx.cmd->cmdCopyImageToBuffer(DxvkCmdBuffer::ExecBuffer, &copyInfo);
++
++    VkMemoryBarrier2 hostBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    hostBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
++    hostBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
++    hostBarrier.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
++    hostBarrier.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
++
++    VkDependencyInfo hostDepInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    hostDepInfo.memoryBarrierCount = 1;
++    hostDepInfo.pMemoryBarriers = &hostBarrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &hostDepInfo);
++
++    ctx.cmd->track(m_captureImage, DxvkAccess::Write);
++    ctx.cmd->track(m_captureBuffer, DxvkAccess::Write);
++
++    m_capturePending = true;
++  }
++
++
++  void DxvkSwapchainBlitter::writeCapture() {
++    const DxvkImageCreateInfo& info = m_captureImage->info();
++    const uint32_t width = info.extent.width;
++    const uint32_t height = info.extent.height;
++    const bool bgra = info.format == VK_FORMAT_B8G8R8A8_UNORM
++                   || info.format == VK_FORMAT_B8G8R8A8_SRGB;
++
++    auto pushBigEndian = [] (std::vector<uint8_t>& dst, uint32_t value) {
++      dst.push_back(uint8_t(value >> 24));
++      dst.push_back(uint8_t(value >> 16));
++      dst.push_back(uint8_t(value >> 8));
++      dst.push_back(uint8_t(value));
++    };
++
++    // PNG scanlines: filter byte, then RGB
++    const size_t rowSize = 1u + size_t(width) * 3u;
++    std::vector<uint8_t> raw(rowSize * height);
++    auto src = reinterpret_cast<const uint8_t*>(m_captureBuffer->mapPtr(0));
++
++    for (uint32_t y = 0; y < height; y++) {
++      uint8_t* dst = &raw[rowSize * y];
++      *(dst++) = 0u;
++
++      for (uint32_t x = 0; x < width; x++) {
++        const uint8_t* px = &src[(size_t(y) * width + x) * 4u];
++        *(dst++) = px[bgra ? 2 : 0];
++        *(dst++) = px[1];
++        *(dst++) = px[bgra ? 0 : 2];
++      }
++    }
++
++    // zlib stream with stored (uncompressed) deflate blocks
++    std::vector<uint8_t> zlib = { 0x78u, 0x01u };
++    uint32_t adlerA = 1u, adlerB = 0u;
++
++    for (size_t offset = 0; offset < raw.size(); ) {
++      size_t length = std::min<size_t>(raw.size() - offset, 65535u);
++      bool last = offset + length == raw.size();
++
++      zlib.push_back(last ? 1u : 0u);
++      zlib.push_back(uint8_t(length));
++      zlib.push_back(uint8_t(length >> 8));
++      zlib.push_back(uint8_t(~length));
++      zlib.push_back(uint8_t(~length >> 8));
++      zlib.insert(zlib.end(), raw.begin() + offset, raw.begin() + offset + length);
++
++      for (size_t i = offset; i < offset + length; i++) {
++        adlerA = (adlerA + raw[i]) % 65521u;
++        adlerB = (adlerB + adlerA) % 65521u;
++      }
++
++      offset += length;
++    }
++
++    pushBigEndian(zlib, (adlerB << 16) | adlerA);
++
++    std::array<uint32_t, 256> crcTable;
++
++    for (uint32_t n = 0; n < 256; n++) {
++      uint32_t c = n;
++
++      for (uint32_t k = 0; k < 8; k++)
++        c = (c & 1u) ? 0xedb88320u ^ (c >> 1) : (c >> 1);
++
++      crcTable[n] = c;
++    }
++
++    std::vector<uint8_t> png = { 0x89u, 'P', 'N', 'G', 0x0du, 0x0au, 0x1au, 0x0au };
++
++    auto writeChunk = [&] (const char* type, const std::vector<uint8_t>& data) {
++      pushBigEndian(png, uint32_t(data.size()));
++
++      size_t crcStart = png.size();
++      png.insert(png.end(), type, type + 4);
++      png.insert(png.end(), data.begin(), data.end());
++
++      uint32_t crc = 0xffffffffu;
++
++      for (size_t i = crcStart; i < png.size(); i++)
++        crc = crcTable[(crc ^ png[i]) & 0xffu] ^ (crc >> 8);
++
++      pushBigEndian(png, crc ^ 0xffffffffu);
++    };
++
++    // 8-bit RGB, no interlacing
++    std::vector<uint8_t> header;
++    pushBigEndian(header, width);
++    pushBigEndian(header, height);
++    header.insert(header.end(), { 8u, 2u, 0u, 0u, 0u });
++
++    writeChunk("IHDR", header);
++    writeChunk("IDAT", zlib);
++    writeChunk("IEND", { });
++
++    // Write a temporary file first so readers never see a partial image
++    std::string tmpPath = m_capturePath + ".tmp";
++
++    {
++      std::ofstream file(str::topath(tmpPath.c_str()).c_str(), std::ios::binary | std::ios::trunc);
++
++      if (!file.write(reinterpret_cast<const char*>(png.data()), png.size())) {
++        Logger::warn(str::format("Swap chain: failed to write ", tmpPath));
++        return;
++      }
++    }
++
++    std::remove(m_capturePath.c_str());
++
++    if (std::rename(tmpPath.c_str(), m_capturePath.c_str()))
++      Logger::warn(str::format("Swap chain: failed to replace ", m_capturePath));
++    else
++      Logger::info(str::format("Swap chain: captured ", width, "x", height, " frame to ", m_capturePath));
++  }
++
++
+   void DxvkSwapchainBlitter::createFsrImage(
+           VkExtent2D                  extent,
+           VkColorSpaceKHR             colorSpace) {
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+index b497d37..61dd17b 100644
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <functional>
++#include <string>
+ #include <thread>
+ #include <unordered_map>
+ 
+@@ -269,6 +270,14 @@ namespace dxvk {
+     Rc<DxvkImage>       m_fsrImage;
+     Rc<DxvkImageView>   m_fsrView;
+ 
++    std::string         m_capturePath;
++    std::chrono::milliseconds m_captureInterval = std::chrono::milliseconds(10000);
++    high_resolution_clock::time_point m_captureNext = { };
++    bool                m_capturePending = false;
++    Rc<DxvkImage>       m_captureImage;
++    Rc<DxvkImageView>   m_captureView;
++    Rc<DxvkBuffer>      m_captureBuffer;
++
+     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+     VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
+ 
+@@ -305,6 +314,16 @@ namespace dxvk {
+             VkRect2D                    srcRect,
+             VkExtent2D                  extent);
+ 
++    void captureFrame(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          dstView,
++            VkRect2D                    dstRect,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect,
++            DxvkFsrPass                 fsrPass);
++
++    void writeCapture();
++
+     void createFsrImage(
+             VkExtent2D                  extent,
+             VkColorSpaceKHR             colorSpace);

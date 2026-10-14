@@ -1,5 +1,5 @@
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
-index 044c3ea..d82f0ed 100644
+index 044c3ea..61992c7 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
 @@ -4,6 +4,8 @@
@@ -40,10 +40,16 @@ index 044c3ea..d82f0ed 100644
  
      vk->vkDestroyShaderModule(vk->device(), m_shaderVsCursor.stageInfo.module, nullptr);
      vk->vkDestroyShaderModule(vk->device(), m_shaderFsCursor.stageInfo.module, nullptr);
-@@ -91,6 +108,27 @@ namespace dxvk {
+@@ -91,6 +108,33 @@ namespace dxvk {
      else
        destroyHudImage();
  
++    // With FSR, keep the aspect ratio of the back buffer and center it in
++    // the window. The area outside is cleared to black. GeneralsX maps
++    // mouse input with the same rounding, see Win32Mouse.cpp.
++    if (m_fsrEnabled && dstRect.extent != srcRect.extent)
++      dstRect = fitAspectRatio(dstRect, srcRect.extent);
++
 +    // With FSR, EASU upscales into an intermediate image first, and the
 +    // final blit sharpens that image with RCAS at a 1:1 scale.
 +    bool useFsr = m_fsrEnabled
@@ -68,7 +74,7 @@ index 044c3ea..d82f0ed 100644
      VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
      barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
      barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-@@ -127,8 +165,8 @@ namespace dxvk {
+@@ -127,8 +171,8 @@ namespace dxvk {
  
      ctx.cmd->cmdBeginRendering(&renderInfo);
  
@@ -79,7 +85,7 @@ index 044c3ea..d82f0ed 100644
  
      if (!composite) {
        if (m_hud)
-@@ -263,7 +301,8 @@ namespace dxvk {
+@@ -263,7 +307,8 @@ namespace dxvk {
            VkRect2D            dstRect,
      const Rc<DxvkImageView>&  srcView,
            VkRect2D            srcRect,
@@ -89,7 +95,7 @@ index 044c3ea..d82f0ed 100644
      VkColorSpaceKHR dstColorSpace = dstView->image()->info().colorSpace;
      VkColorSpaceKHR srcColorSpace = srcView->image()->info().colorSpace;
  
-@@ -315,6 +354,7 @@ namespace dxvk {
+@@ -315,6 +360,7 @@ namespace dxvk {
      key.needsBlit = dstRect.extent != srcRect.extent;
      key.compositeHud = composite && m_hudView;
      key.compositeCursor = composite && m_cursorView;
@@ -97,7 +103,7 @@ index 044c3ea..d82f0ed 100644
  
      VkPipeline pipeline = getPipeline(key);
  
-@@ -381,6 +421,8 @@ namespace dxvk {
+@@ -381,6 +427,8 @@ namespace dxvk {
      args.dstOffset = dstRect.offset;
      args.cursorOffset = m_cursorRect.offset;
      args.cursorExtent = m_cursorRect.extent;
@@ -106,7 +112,7 @@ index 044c3ea..d82f0ed 100644
  
      ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer,
        m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-@@ -526,6 +568,119 @@ namespace dxvk {
+@@ -526,6 +574,119 @@ namespace dxvk {
    }
  
  
@@ -226,7 +232,7 @@ index 044c3ea..d82f0ed 100644
    void DxvkSwapchainBlitter::renderCursor(
      const DxvkContextObjects&         ctx,
      const Rc<DxvkImageView>&          dstView) {
-@@ -747,6 +902,10 @@ namespace dxvk {
+@@ -747,6 +908,10 @@ namespace dxvk {
        sizeof(dxvk_present_vert), dxvk_present_vert);
      createShaderModule(m_shaderFsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
        sizeof(dxvk_present_frag_blit), dxvk_present_frag_blit);
@@ -237,7 +243,7 @@ index 044c3ea..d82f0ed 100644
      createShaderModule(m_shaderFsCopy, VK_SHADER_STAGE_FRAGMENT_BIT,
        sizeof(dxvk_present_frag), dxvk_present_frag);
      createShaderModule(m_shaderFsMsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
-@@ -927,7 +1086,11 @@ namespace dxvk {
+@@ -927,7 +1092,11 @@ namespace dxvk {
      std::array<VkPipelineShaderStageCreateInfo, 2> blitStages = { };
      blitStages[0] = m_shaderVsBlit.stageInfo;
  
@@ -250,8 +256,40 @@ index 044c3ea..d82f0ed 100644
        blitStages[1] = key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo;
      else
        blitStages[1] = key.needsBlit ? m_shaderFsMsBlit.stageInfo : m_shaderFsMsResolve.stageInfo;
+@@ -1121,6 +1290,31 @@ namespace dxvk {
+   }
+ 
+ 
++  VkRect2D DxvkSwapchainBlitter::fitAspectRatio(
++          VkRect2D                    dstRect,
++          VkExtent2D                  srcExtent) {
++    uint64_t dw = dstRect.extent.width;
++    uint64_t dh = dstRect.extent.height;
++    uint64_t sw = srcExtent.width;
++    uint64_t sh = srcExtent.height;
++
++    if (!sw || !sh)
++      return dstRect;
++
++    VkRect2D result = dstRect;
++
++    if (dw * sh > dh * sw) {
++      result.extent.width = uint32_t((sw * dh + sh / 2u) / sh);
++      result.offset.x += int32_t((dw - result.extent.width) / 2u);
++    } else {
++      result.extent.height = uint32_t((sh * dw + sw / 2u) / sw);
++      result.offset.y += int32_t((dh - result.extent.height) / 2u);
++    }
++
++    return result;
++  }
++
++
+   bool DxvkSwapchainBlitter::needsComposition(
+     const Rc<DxvkImageView>&          dstView) {
+     VkColorSpaceKHR colorSpace = dstView->image()->info().colorSpace;
 diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
-index 2635049..19b64b0 100644
+index 2635049..b497d37 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.h
 +++ b/src/dxvk/dxvk_swapchain_blitter.h
 @@ -21,6 +21,19 @@ namespace dxvk {
@@ -359,6 +397,17 @@ index 2635049..19b64b0 100644
      void renderCursor(
        const DxvkContextObjects&         ctx,
        const Rc<DxvkImageView>&          dstView);
+@@ -316,6 +354,10 @@ namespace dxvk {
+     VkPipeline getCursorPipeline(
+       const DxvkCursorPipelineKey&      key);
+ 
++    static VkRect2D fitAspectRatio(
++            VkRect2D                    dstRect,
++            VkExtent2D                  srcExtent);
++
+     static bool needsComposition(
+       const Rc<DxvkImageView>&          dstView);
+ 
 diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
 index b6222dd..45e5e3a 100644
 --- a/src/dxvk/meson.build
