@@ -39,3 +39,4 @@ Useful options:
 - `--exclude-list keep.txt`: texture names that keep the original (one per line)
 - `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
 - `--scale 2`: 2x instead of 4x
+- `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)
