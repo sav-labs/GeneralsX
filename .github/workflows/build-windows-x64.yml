@@ -21,6 +21,12 @@ jobs:
   # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
   # DXVK_FSR_SHARPNESS sets RCAS sharpening in stops (0 = sharpest, default 0.2).
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
+  # DXVK_CAPTURE_VIDEO records every presented frame for DXVK_CAPTURE_VIDEO_SECONDS (default 10), starting
+  # DXVK_CAPTURE_VIDEO_START seconds (default 5) after the first present, at DXVK_CAPTURE_VIDEO_SCALE percent
+  # (default 50) of the presented size, with the DXVK HUD. raw:<path> writes <path>.bgra and <path>.txt
+  # (scripts/qa/dxvk_video_to_mp4.py turns them into an mp4); any other value is a command that reads
+  # Matroska raw BGRA video with present time stamps on stdin, e.g.
+  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 clip.mp4
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -181,6 +187,11 @@ jobs:
           Play-FSR.cmd runs borderless at display size and upscales the game resolution with FSR 1.0.
           To soften the FSR sharpening, edit Play-FSR.cmd and add: set DXVK_FSR_SHARPNESS=1 (0 is sharpest, default 0.2).
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
+          For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
+          into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and
+          DXVK_CAPTURE_VIDEO_SCALE change the window and size; set DXVK_HUD=fps,frametimes to include the HUD in the video.
+          With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
+          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
           Pick the game resolution in Options; use the same aspect ratio as the display.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
