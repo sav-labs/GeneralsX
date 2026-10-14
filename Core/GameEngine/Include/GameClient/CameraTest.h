@@ -20,8 +20,11 @@
 
 // GeneralsX @feature Claude 14/10/2026 Input-free camera flight requested with -camtest [seconds].
 // Once a match is running, the tactical camera waits for the world to settle, snaps to the local
-// player's start position at the closest zoom, pans and turns slowly over a fixed path and finally
-// zooms out. The path is a function of real elapsed time only, so recordings made at different
-// frame rates (for example with and without a texture pack) show identical camera motion.
-// The flight only drives the client view and never touches the game logic.
+// player's start position at the closest zoom, pans and turns slowly and finally zooms out. Turn and zoom
+// are a function of real elapsed time only, so recordings made at different frame rates (for example with
+// and without a texture pack) show the same camera motion.
+// GeneralsX @feature Claude 15/10/2026 When the flight begins, a test convoy of the local player's side
+// (ground vehicles plus helicopters when the side has them) is spawned between the start position and the
+// map center and ordered to drive towards the center; the camera follows the convoy instead of a fixed pan.
+// This changes the match, so it only happens with -camtest; without it nothing is spawned or moved.
 void UpdateCameraTest();
