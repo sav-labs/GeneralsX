@@ -653,6 +653,9 @@ GlobalData::GlobalData()
 	m_checkForUpdates = TRUE;
 	m_windowed = 0;
 	m_upscaleToDisplay = FALSE;
+	m_renderScale = 0;
+	m_renderScaleDisplayWidth = 0;
+	m_renderScaleDisplayHeight = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;
 	m_maxShellScreens = 0;
@@ -1279,6 +1282,18 @@ void GlobalData::parseCustomDefinition()
 	{
 		// TheSuperHackers @tweak xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 		m_viewportHeightScale = 1.0f;
+	}
+
+	// GeneralsX @feature Claude 14/10/2026 With a render scale below 100 the game renders at that share of
+	// the display size and the swap chain upscales it to the display-size window with FSR 1.0.
+	if (m_upscaleToDisplay)
+	{
+		Int xres, yres;
+		if (OptionPreferences::getRenderScaleResolution(m_renderScale, m_renderScaleDisplayWidth, m_renderScaleDisplayHeight, &xres, &yres))
+		{
+			m_xResolution = xres;
+			m_yResolution = yres;
+		}
 	}
 }
 

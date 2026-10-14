@@ -43,6 +43,7 @@
 #include "Common/CommandLine.h"
 #include "Common/CriticalSection.h"
 #include "Common/GlobalData.h"
+#include "Common/OptionPreferences.h"
 #include "Common/GameEngine.h"
 #include "Common/GameSounds.h"
 #include "Common/Debug.h"
@@ -386,7 +387,13 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT message,
 				// If not in a match (e.g. main menu), the command instantly closes the application.
 				if (TheGameEngine && !TheGameEngine->getQuitting())
 				{
-					if (TheMessageStream && TheMessageStream->isReadyForMessages())
+					// GeneralsX @bugfix Claude 13/10/2026 A minimized window never processes the message stream
+					// (Win32GameEngine::update waits until it is restored), so the quit message would hang the
+					// game. Quit directly unless a network match keeps the logic running.
+					const Bool streamRunning = !::IsIconic(hWnd)
+						|| (TheGameLogic && (TheGameLogic->isInInternetGame() || TheGameLogic->isInLanGame()));
+
+					if (streamRunning && TheMessageStream && TheMessageStream->isReadyForMessages())
 					{
 						TheMessageStream->appendMessage(GameMessage::MSG_META_DEMO_INSTANT_QUIT);
 					}
@@ -800,6 +807,34 @@ static LONG WINAPI UnHandledExceptionFilter( struct _EXCEPTION_POINTERS* e_info 
 	return EXCEPTION_EXECUTE_HANDLER;
 }
 
+// applyRenderScale ===========================================================
+// GeneralsX @feature Claude 14/10/2026 Options.ini RenderScale (or -renderscale) below 100 turns on the
+// FSR 1.0 upscaling path: the same borderless display-size window as -upscale, a game resolution of
+// RenderScale percent of the display size (set in GlobalData::parseCustomDefinition), and DXVK_FSR=1.
+// DXVK reads DXVK_FSR when it creates the swap chain blitter, so it must be in the process environment
+// before the D3D8 device exists. A DXVK_FSR value the player set already is kept.
+//=============================================================================
+static void applyRenderScale()
+{
+	TheWritableGlobalData->m_renderScaleDisplayWidth = GetSystemMetrics( SM_CXSCREEN );
+	TheWritableGlobalData->m_renderScaleDisplayHeight = GetSystemMetrics( SM_CYSCREEN );
+
+	if (TheGlobalData->m_renderScale <= 0)
+	{
+		OptionPreferences optionPref;
+		TheWritableGlobalData->m_renderScale = optionPref.getRenderScale();
+	}
+
+	if (TheGlobalData->m_headless || TheGlobalData->m_renderScale >= OptionPreferences::RENDER_SCALE_OFF)
+		return;
+
+	TheWritableGlobalData->m_windowed = true;
+	TheWritableGlobalData->m_upscaleToDisplay = true;
+
+	if (GetEnvironmentVariableA( "DXVK_FSR", nullptr, 0 ) == 0)
+		SetEnvironmentVariableA( "DXVK_FSR", "1" );
+}
+
 // WinMain ====================================================================
 /** Application entry point */
 //=============================================================================
@@ -852,6 +887,8 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		// Initialize minidump facilities - requires TheGlobalData so performed after parseCommandLineForStartup
 		MiniDumper::initMiniDumper(TheGlobalData->getPath_UserData());
 #endif
+		applyRenderScale();
+
 		// register windows class and create application window
 		if(!TheGlobalData->m_headless && initializeAppWindows(hInstance, nCmdShow, TheGlobalData->m_windowed) == false)
 		{

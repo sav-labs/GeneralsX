@@ -70,6 +70,7 @@
 #include "GameClient/GadgetSlider.h"
 #include "GameClient/GameText.h"
 #include "GameClient/HeaderTemplate.h"
+#include "GameClient/UILayout.h"
 
 
 
@@ -558,12 +559,15 @@ static Bool parseScreenRect( const char *token, char *buffer,
 	// shrink or expand the screen region by the ratio of the current
 	// resolution divided by the creation resolution
 	//
-	Real xScale = (Real)TheDisplay->getWidth() / (Real)createRes.x;
-	Real yScale = (Real)TheDisplay->getHeight() / (Real)createRes.y;
-	screenRegion.lo.x = (Int)((Real)screenRegion.lo.x * xScale);
-	screenRegion.lo.y = (Int)((Real)screenRegion.lo.y * yScale);
-	screenRegion.hi.x = (Int)((Real)screenRegion.hi.x * xScale);
-	screenRegion.hi.y = (Int)((Real)screenRegion.hi.y * yScale);
+	// GeneralsX @feature Claude 14/10/2026 Keep the authored aspect ratio on displays wider than
+	// the creation resolution: one uniform scale and a horizontal centering offset. The rect is
+	// absolute screen space, so applying the same transform to every window keeps the parent
+	// relative positions computed below consistent. Identical to retail at 4:3 and taller.
+	const UILayoutTransform layout = UILayoutGetTransform( createRes.x, createRes.y );
+	screenRegion.lo.x = layout.toScreenX( (Real)screenRegion.lo.x );
+	screenRegion.lo.y = layout.toScreenY( (Real)screenRegion.lo.y );
+	screenRegion.hi.x = layout.toScreenX( (Real)screenRegion.hi.x );
+	screenRegion.hi.y = layout.toScreenY( (Real)screenRegion.hi.y );
 
 	//
 	// given the screen region upper left compute the upper left that we

@@ -55,6 +55,7 @@
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/Display.h"
+#include "GameClient/UILayout.h"
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -180,8 +181,10 @@ void ControlBarResizer::sizeWindowsAlt()
 {
 	ResizerWindowList::iterator it = m_resizerWindowsList.begin();
 	GameWindow *win = nullptr;
-	Real x = (Real)TheDisplay->getWidth() / DEFAULT_DISPLAY_WIDTH;
-	Real y = (Real)TheDisplay->getHeight() / DEFAULT_DISPLAY_HEIGHT;
+	// GeneralsX @feature Claude 14/10/2026 Use the shared UI layout transform (uniform scale on wide displays)
+	const UILayoutTransform layout = UILayoutGetDefaultTransform();
+	Real x = layout.scaleX;
+	Real y = layout.scaleY;
 	while (it != m_resizerWindowsList.end())
 	{
 		ResizerWindow *rWin = *it;
@@ -198,7 +201,9 @@ void ControlBarResizer::sizeWindowsAlt()
 			continue;
 		}
 
-		win->winSetPosition(rWin->m_altPos.x * x, rWin->m_altPos.y * y);
+		// GeneralsX @feature Claude 14/10/2026 Positions are parent relative; only top level windows take the centering offset
+		const Bool isTopLevel = (win->winGetParent() == nullptr);
+		win->winSetPosition(rWin->m_altPos.x * x + (isTopLevel ? layout.offsetX : 0), rWin->m_altPos.y * y + (isTopLevel ? layout.offsetY : 0));
 		if(rWin->m_altSize.x >0 || rWin->m_altSize.y > 0)
 			win->winSetSize(rWin->m_altSize.x *x, rWin->m_altSize.y *y);
 		DEBUG_LOG(("sizeWindowsAlt:%s pos X:%d pos Y: %d size X:%d sizeY: %d",rWin->m_name.str(), rWin->m_altPos.x*x, rWin->m_altPos.y*y,rWin->m_altSize.x*x, rWin->m_altSize.y *y));
