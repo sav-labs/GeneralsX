@@ -1,0 +1,44 @@
+# HD texture pack builder
+
+`hdpack.py` builds an HD texture pack from the player's own copy of the game. No retail file is shipped or modified: the tool reads the installed `.big` archives and writes a new mod archive next to them.
+
+## What it does
+
+1. Reads every retail `*.big` in the given game folders (archives starting with `!` are skipped).
+2. Takes the textures under `Art/Textures/` and skips the ones used by `MappedImage` INI entries (UI, cameos, cursors), whose coordinates depend on the original size. Terrain tiles live outside `Art/Textures/` and are not touched.
+3. Upscales colour with Real-ESRGAN x4plus (ONNX Runtime with DirectML on the GPU, or the CPU; `realesrgan-ncnn-vulkan` as an alternative) and alpha with Lanczos, capped at 2048 px.
+4. Writes mipmapped DXT1 (opaque) or DXT5 (alpha) `.dds` files into `!HDTextures.big`. The `!` prefix makes the game prefer this archive over retail ones, and the texture loader opens `name.dds` before `name.tga`.
+
+Delete `!HDTextures.big` to go back to the original textures.
+
+## Requirements
+
+- Python 3.9+ and Pillow 11.2+ (`python -m pip install pillow`)
+- For `--upscaler onnx` (the default when `realesrgan_x4plus.onnx` sits next to the tool): numpy and `onnxruntime-directml` (Windows GPU) or `onnxruntime` (CPU). Build the model with `python export_onnx.py RealESRGAN_x4plus.pth realesrgan_x4plus.onnx` (needs `onnx`, no PyTorch).
+- [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases) (BSD-3-Clause) with its `models/` folder, or [upscayl-bin](https://github.com/upscayl/upscayl-ncnn/releases) (AGPL-3.0, same command line on a newer ncnn) with the same models. Both ncnn builds fail `vkAllocateMemory` while loading the model on the Radeon 780M, so the Windows package defaults to the ONNX/DirectML path and keeps them only as `--upscaler esrgan`.
+
+## Usage
+
+Windows package (artifact `hdpack-win64` of the "Build HD texture pack tool" workflow, Real-ESRGAN included):
+
+```
+hdpack.exe --game-dir "<Zero Hour folder>" --out "<Zero Hour folder>\!HDTextures.big" --include "AV*" --limit 30 --preview-dir previews
+```
+
+From source:
+
+```
+python hdpack.py --game-dir "<Zero Hour folder>" --out "<Zero Hour folder>/!HDTextures.big" \
+    --esrgan "<path>/realesrgan-ncnn-vulkan.exe"
+```
+
+Useful options:
+
+- `--include "AV*"`: only textures matching a glob (prototype on one faction)
+- `--limit 30`: stop after N textures
+- `--preview-dir previews`: write `<name>_before.png` / `<name>_after.png` pairs and `compare_001.jpg`, `compare_002.jpg`, ... (40 textures per sheet, 1:1 crops, bicubic on the left, pack on the right)
+- `--exclude-list keep.txt`: texture names that keep the original (one per line)
+- `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
+- `--scale 2`: 2x instead of 4x
+- `--esrgan-args "-g 0 -j 1:1:1"`: extra upscaler arguments (GPU id, thread counts)
+- `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)

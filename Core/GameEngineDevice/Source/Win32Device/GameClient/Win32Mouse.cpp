@@ -34,6 +34,8 @@
 #include "Common/LocalFileSystem.h"
 #include "GameClient/Display.h"
 #include "GameClient/GameClient.h"
+#include <algorithm>
+
 #include "Win32Device/GameClient/Win32Mouse.h"
 #include "WinMain.h"
 
@@ -237,16 +239,57 @@ void Win32Mouse::translateEvent( UnsignedInt eventIndex, MouseIO *result )
 
 	// GeneralsX @feature Claude 12/10/2026 With -upscale the window covers the display while the game
 	// renders at its own resolution, so map window client coordinates to game coordinates.
-	if (TheGlobalData->m_upscaleToDisplay && TheDisplay)
+	RECT image;
+	if (getUpscaledImageRect(image))
 	{
-		RECT client;
-		if (::GetClientRect(ApplicationHWnd, &client) && client.right > 0 && client.bottom > 0)
-		{
-			result->pos.x = result->pos.x * (Int)TheDisplay->getWidth() / client.right;
-			result->pos.y = result->pos.y * (Int)TheDisplay->getHeight() / client.bottom;
-		}
+		const Int gameWidth = (Int)TheDisplay->getWidth();
+		const Int gameHeight = (Int)TheDisplay->getHeight();
+		const Int x = (result->pos.x - image.left) * gameWidth / (image.right - image.left);
+		const Int y = (result->pos.y - image.top) * gameHeight / (image.bottom - image.top);
+		result->pos.x = std::clamp(x, 0, gameWidth - 1);
+		result->pos.y = std::clamp(y, 0, gameHeight - 1);
 	}
 
+}
+
+//-------------------------------------------------------------------------------------------------
+/** GeneralsX @feature Claude 13/10/2026 With -upscale, DXVK presents the game image at its own
+	* aspect ratio, centered in the window with black bars. Returns that image rectangle in client
+	* coordinates. Uses the same rounding as fitAspectRatio in cmake/dxvk-patches/0001-present-fsr1.patch. */
+//-------------------------------------------------------------------------------------------------
+Bool Win32Mouse::getUpscaledImageRect(RECT &image)
+{
+	if (!TheGlobalData->m_upscaleToDisplay || !TheDisplay)
+		return FALSE;
+
+	RECT client;
+	if (!::GetClientRect(ApplicationHWnd, &client) || client.right <= 0 || client.bottom <= 0)
+		return FALSE;
+
+	const Int64 dw = client.right;
+	const Int64 dh = client.bottom;
+	const Int64 sw = TheDisplay->getWidth();
+	const Int64 sh = TheDisplay->getHeight();
+	if (sw <= 0 || sh <= 0)
+		return FALSE;
+
+	image = client;
+	if (dw == sw && dh == sh)
+		return TRUE;
+
+	if (dw * sh > dh * sw)
+	{
+		const Int64 width = (sw * dh + sh / 2) / sh;
+		image.left = (LONG)((dw - width) / 2);
+		image.right = image.left + (LONG)width;
+	}
+	else
+	{
+		const Int64 height = (sh * dw + sw / 2) / sw;
+		image.top = (LONG)((dh - height) / 2);
+		image.bottom = image.top + (LONG)height;
+	}
+	return TRUE;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -448,7 +491,9 @@ void Win32Mouse::capture()
 {
 
 	RECT rect;
-	::GetClientRect(ApplicationHWnd, &rect);
+	// GeneralsX @feature Claude 13/10/2026 With -upscale, keep the cursor on the image, not the black bars.
+	if (!getUpscaledImageRect(rect))
+		::GetClientRect(ApplicationHWnd, &rect);
 
 	POINT leftTop;
 	leftTop.x = rect.left;
