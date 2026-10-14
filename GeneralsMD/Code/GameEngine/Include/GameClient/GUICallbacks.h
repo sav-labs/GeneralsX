@@ -109,6 +109,8 @@ extern void SkirmishGameOptionsMenuUpdate( WindowLayout *layout, void *userData 
 extern void SkirmishGameOptionsMenuShutdown( WindowLayout *layout, void *userData );
 extern WindowMsgHandledType SkirmishGameOptionsMenuSystem( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
 extern WindowMsgHandledType SkirmishGameOptionsMenuInput( GameWindow *window, UnsignedInt msg, WindowMsgData mData1, WindowMsgData mData2 );
+// GeneralsX @feature Claude 14/10/2026 Start the skirmish queued with the -skirmish command line flag
+extern Bool StartQueuedSkirmishGame();
 
 // SkirmishMapSelectMenu
 extern void SkirmishMapSelectMenuInit( WindowLayout *layout, void *userData );

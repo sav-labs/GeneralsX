@@ -431,20 +431,34 @@ void setFPSTextBox( Int sliderPos )
 	GadgetStaticTextSetText(staticTextGameSpeed, text);
 }
 
-void reallyDoStart()
+// GeneralsX @refactor Claude 14/10/2026 Shared by SkirmishGameOptionsMenuInit and the -skirmish command line flag
+static void resetSkirmishGameInfo()
+{
+	TheSkirmishGameInfo->init();
+	TheSkirmishGameInfo->clearSlotList();
+	TheSkirmishGameInfo->reset();
+	Int localIP = TheSkirmishGameInfo->getSlot(0)->getIP();
+	TheSkirmishGameInfo->setLocalIP(localIP);
+
+	TheSkirmishGameInfo->enterGame();
+}
+
+// GeneralsX @refactor Claude 14/10/2026 Default AI difficulty for a new skirmish, scaled by the player's battle honors
+static SlotState getDefaultSkirmishAIState()
+{
+	SkirmishBattleHonors honors;
+	if (honors.getWins() > 10)
+		return SLOT_BRUTAL_AI;
+	if (honors.getWins() > 5)
+		return SLOT_MED_AI;
+	return SLOT_EASY_AI;
+}
+
+// GeneralsX @refactor Claude 14/10/2026 Shared skirmish launch path used by the Start button and the -skirmish command line flag
+static void startSkirmishGame(Int maxFPS)
 {
 	if (TheGameLogic->isInGame())
 		TheGameLogic->clearGameData(FALSE);
-
-	//NameKeyType sliderGameSpeedID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:SliderGameSpeed" );
-	GameWindow *sliderGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, sliderGameSpeedID );
-	Int maxFPS = GadgetSliderGetPosition( sliderGameSpeed );
-	DEBUG_LOG(("GameSpeedSlider was at %d", maxFPS));
-	if (maxFPS > GREATER_NO_FPS_LIMIT)
-		maxFPS = 1000;
-	// GeneralsX @tweak felipebraz 20/06/2026 Clamp FPS limit from skirmish game speed slider to 30..120
-	if (maxFPS < 30)
-		maxFPS = 30;
 
 	// GeneralsX @feature felipebraz 17/09/2026 Read configured Skirmish simulation tick rate (#281)
 	SkirmishPreferences prefs;
@@ -480,6 +494,99 @@ void reallyDoStart()
 		msg->appendIntegerArgument(0);									// not really used; just specified so we can add the game speed last
 		msg->appendIntegerArgument(maxFPS);							// FPS limit
 	}
+}
+
+void reallyDoStart()
+{
+	//NameKeyType sliderGameSpeedID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:SliderGameSpeed" );
+	GameWindow *sliderGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, sliderGameSpeedID );
+	Int maxFPS = GadgetSliderGetPosition( sliderGameSpeed );
+	DEBUG_LOG(("GameSpeedSlider was at %d", maxFPS));
+	if (maxFPS > GREATER_NO_FPS_LIMIT)
+		maxFPS = 1000;
+	// GeneralsX @tweak felipebraz 20/06/2026 Clamp FPS limit from skirmish game speed slider to 30..120
+	if (maxFPS < 30)
+		maxFPS = 30;
+
+	startSkirmishGame(maxFPS);
+}
+
+// GeneralsX @feature Claude 14/10/2026 Start a skirmish match requested with -skirmish <map> [aiCount].
+// Builds TheSkirmishGameInfo like SkirmishGameOptionsMenuInit does (local player from the skirmish
+// preferences, AI opponents with random faction, color and start position resolved by GameLogic)
+// and launches it through the same path as the Start button, so the match gets the standard
+// skirmish setup (command center and dozer). Used by automated tests to skip the menus.
+Bool StartQueuedSkirmishGame()
+{
+	const AsciiString requestedMap = TheGlobalData->m_initialSkirmishMap;
+	Int aiCount = TheGlobalData->m_initialSkirmishAICount;
+	TheWritableGlobalData->m_initialSkirmishMap.clear();
+
+	if (requestedMap.isEmpty() || TheMapCache == nullptr)
+		return FALSE;
+
+	TheMapCache->updateCache();
+	const MapMetaData *md = TheMapCache->findMap(requestedMap);
+	if (md == nullptr)
+	{
+		fprintf(stderr, "[SKIRMISH] -skirmish: map '%s' was not found in the map cache\n", requestedMap.str());
+		fflush(stderr);
+		return FALSE;
+	}
+
+	Int maxAICount = min(md->m_numPlayers, (Int)MAX_SLOTS) - 1;
+	if (maxAICount < 1)
+	{
+		fprintf(stderr, "[SKIRMISH] -skirmish: map '%s' has only %d start position(s)\n", md->m_fileName.str(), md->m_numPlayers);
+		fflush(stderr);
+		return FALSE;
+	}
+	aiCount = max(1, min(aiCount, maxAICount));
+
+	if (!TheSkirmishGameInfo)
+	{
+		TheSkirmishGameInfo = NEW SkirmishGameInfo;
+	}
+	else if (TheSkirmishGameInfo->isInGame())
+	{
+		TheSkirmishGameInfo->endGame();
+	}
+	resetSkirmishGameInfo();
+
+	SkirmishPreferences prefs;
+	GameSlot playerSlot;
+	playerSlot.setName(prefs.getUserName());
+	playerSlot.setState(SLOT_PLAYER, prefs.getUserName());
+	playerSlot.setColor(prefs.getPreferredColor());
+	playerSlot.setPlayerTemplate(prefs.getPreferredFaction());
+	TheSkirmishGameInfo->setSlot(0, playerSlot);
+
+	// Test runs want a predictable opponent: never go above Normal, whatever the battle honors say
+	SlotState aiState = getDefaultSkirmishAIState();
+	if (aiState == SLOT_BRUTAL_AI)
+		aiState = SLOT_MED_AI;
+	for (Int i = 1; i <= aiCount; ++i)
+	{
+		GameSlot aiSlot;
+		aiSlot.setState(aiState);
+		TheSkirmishGameInfo->setSlot(i, aiSlot);
+	}
+
+	TheSkirmishGameInfo->setSeed(GetTickCount());
+	TheSkirmishGameInfo->setMap(md->m_fileName);
+	TheSkirmishGameInfo->setMapCRC(md->m_CRC);
+	TheSkirmishGameInfo->setMapSize(md->m_filesize);
+
+	// Same FPS limit the game speed slider would start with
+	Int maxFPS = max(30, min(121, prefs.getInt("FPS", TheGlobalData->m_framesPerSecondLimit)));
+	if (maxFPS > GREATER_NO_FPS_LIMIT)
+		maxFPS = 1000;
+
+	fprintf(stderr, "[SKIRMISH] -skirmish: starting '%s' with %d AI opponent(s)\n", md->m_fileName.str(), aiCount);
+	fflush(stderr);
+
+	startSkirmishGame(maxFPS);
+	return TRUE;
 }
 
 Bool sandboxOk = FALSE;
@@ -1232,13 +1339,7 @@ void SkirmishGameOptionsMenuInit( WindowLayout *layout, void *userData )
 	{
 		SignalUIInteraction(SHELL_SCRIPT_HOOK_SKIRMISH_OPENED);
 	}
-  TheSkirmishGameInfo->init();
-  TheSkirmishGameInfo->clearSlotList();
-	TheSkirmishGameInfo->reset();
-  Int localIP = TheSkirmishGameInfo->getSlot(0)->getIP();
-	TheSkirmishGameInfo->setLocalIP(localIP);
-
-  TheSkirmishGameInfo->enterGame();
+  resetSkirmishGameInfo();
 
   EnableSlotListUpdates(FALSE);
 	//initialize the gadgets
@@ -1253,13 +1354,7 @@ void SkirmishGameOptionsMenuInit( WindowLayout *layout, void *userData )
   gSlot.setPlayerTemplate(prefs.getPreferredFaction());
   TheSkirmishGameInfo->setSlot(0,gSlot);
 
-	SkirmishBattleHonors honors;
-	if (honors.getWins() > 10)
-		gSlot.setState(SLOT_BRUTAL_AI);
-	else if (honors.getWins() > 5)
-		gSlot.setState(SLOT_MED_AI);
-	else
-		gSlot.setState(SLOT_EASY_AI);
+	gSlot.setState(getDefaultSkirmishAIState());
 	TheSkirmishGameInfo->setSlot(1, gSlot);
 
 	ParseAsciiStringToGameInfo(TheSkirmishGameInfo, prefs.getSlotList());

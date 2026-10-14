@@ -760,6 +760,29 @@ Int parseLoadSave(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 14/10/2026 Start a skirmish match from the command line: -skirmish <map path> [aiCount]
+// The map path is the one the map cache knows, e.g. "Maps\Tournament Desert\Tournament Desert.map".
+// The optional AI opponent count defaults to 1 and is clamped to the map's start positions at launch.
+Int parseSkirmish(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_initialSkirmishMap = args[1];
+		TheWritableGlobalData->m_initialSkirmishAICount = 1;
+		TheWritableGlobalData->m_shellMapOn = FALSE;
+		TheWritableGlobalData->m_playIntro = FALSE;
+		TheWritableGlobalData->m_playSizzle = FALSE;
+
+		if (num > 2 && args[2][0] >= '0' && args[2][0] <= '9')
+		{
+			TheWritableGlobalData->m_initialSkirmishAICount = atoi(args[2]);
+			return 3;
+		}
+		return 2;
+	}
+	return 1;
+}
+
 Int parseLoadReplay(char *args[], int num)
 {
 	if (num > 1)
@@ -1238,6 +1261,9 @@ static CommandLineParam paramsForEngineInit[] =
 
 	// TheSuperHackers @feature bobtista 08/08/2026 Play a replay file from the command line.
 	{ "-loadreplay", parseLoadReplay },
+
+	// GeneralsX @feature Claude 14/10/2026 Start a skirmish match against AI from the command line.
+	{ "-skirmish", parseSkirmish },
 
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },
