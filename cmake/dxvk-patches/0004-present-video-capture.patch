@@ -1,0 +1,1053 @@
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -12,10 +12,499 @@
+ #include <dxvk_present_vert.h>
+ 
+ #include <array>
++#include <atomic>
+ #include <cstdio>
++#include <cstring>
++#include <deque>
+ #include <fstream>
++#include <optional>
++#include <vector>
++
++#ifndef _WIN32
++#include <pthread.h>
++#include <signal.h>
++#endif
+ 
+ namespace dxvk {
++
++  /**
++   * \brief Video capture writer
++   *
++   * Writes captured BGRA frames on a dedicated thread, so that a slow
++   * encoder or disk does not stall presentation until the bounded frame
++   * queue is full. A target of the form raw:<path> writes the frames to
++   * <path>.bgra and their present time stamps to <path>.txt. Any other
++   * target is a command line that receives the frames on its standard
++   * input as Matroska raw BGRA video with present time stamps, so that
++   * the encoder sees the exact frame timing even when it falls behind.
++   */
++  class DxvkVideoWriter {
++    constexpr static size_t QueueSize = 16u;
++  public:
++
++    DxvkVideoWriter(
++      const std::string&  target,
++            uint32_t      width,
++            uint32_t      height)
++    : m_width(width), m_height(height),
++      m_frameSize(size_t(width) * height * 4u) {
++      if (target.compare(0, 4, "raw:") == 0)
++        m_rawPath = target.substr(4);
++      else
++        m_command = expandCommand(target);
++
++      m_thread = dxvk::thread([this] { run(); });
++    }
++
++    ~DxvkVideoWriter() {
++      finish();
++    }
++
++    bool failed() const {
++      return m_failed.load();
++    }
++
++    /**
++     * \brief Queues a frame
++     *
++     * Copies the frame. Blocks while the queue is full, and only drops
++     * the frame if the writer makes no progress for two seconds.
++     * \param [in] data Tightly packed BGRA pixels
++     * \param [in] timeUs Present time stamp, in microseconds
++     */
++    void submit(const void* data, uint64_t timeUs) {
++      std::unique_lock lock(m_mutex);
++
++      auto t0 = high_resolution_clock::now();
++      auto deadline = t0 + std::chrono::seconds(2);
++
++      std::vector<uint8_t> pixels;
++
++      while (true) {
++        if (m_failed)
++          return;
++
++        if (!m_free.empty()) {
++          pixels = std::move(m_free.back());
++          m_free.pop_back();
++          break;
++        }
++
++        if (m_allocated < QueueSize) {
++          pixels.resize(m_frameSize);
++          m_allocated += 1u;
++          break;
++        }
++
++        if (high_resolution_clock::now() >= deadline) {
++          m_dropped += 1u;
++          Logger::warn("Swap chain: video writer stalled for 2 s, dropping a frame");
++          return;
++        }
++
++        m_cond.wait_for(lock, std::chrono::milliseconds(2));
++      }
++
++      auto blocked = std::chrono::duration_cast<std::chrono::microseconds>(
++        high_resolution_clock::now() - t0);
++
++      if (blocked.count() >= 1000) {
++        if (!m_blockedFrames) {
++          Logger::warn("Swap chain: video writer queue is full, "
++            "presentation waits for the writer instead of dropping frames");
++        }
++
++        m_blockedFrames += 1u;
++        m_blockedUs += blocked.count();
++      }
++
++      lock.unlock();
++      std::memcpy(pixels.data(), data, m_frameSize);
++      lock.lock();
++
++      m_queue.push_back({ std::move(pixels), timeUs });
++      m_cond.notify_all();
++    }
++
++    /**
++     * \brief Writes all queued frames and closes the output
++     */
++    void finish() {
++      { std::unique_lock lock(m_mutex);
++        m_stopping = true;
++        m_cond.notify_all();
++      }
++
++      if (m_thread.joinable())
++        m_thread.join();
++    }
++
++  private:
++
++    struct Frame {
++      std::vector<uint8_t>  pixels;
++      uint64_t              timeUs = 0u;
++    };
++
++    uint32_t                m_width;
++    uint32_t                m_height;
++    size_t                  m_frameSize;
++
++    std::string             m_rawPath;
++    std::string             m_command;
++
++    dxvk::mutex             m_mutex;
++    dxvk::condition_variable m_cond;
++    std::deque<Frame>       m_queue;
++    std::vector<std::vector<uint8_t>> m_free;
++    size_t                  m_allocated = 0u;
++    bool                    m_stopping = false;
++    std::atomic<bool>       m_failed = { false };
++
++    uint32_t                m_dropped = 0u;
++    uint32_t                m_blockedFrames = 0u;
++    uint64_t                m_blockedUs = 0u;
++
++    std::ofstream           m_file;
++#ifdef _WIN32
++    HANDLE                  m_pipe = nullptr;
++    HANDLE                  m_process = nullptr;
++#else
++    FILE*                   m_pipe = nullptr;
++#endif
++
++    dxvk::thread            m_thread;
++
++    std::string expandCommand(std::string command) const {
++      auto replace = [&command] (const std::string& key, uint32_t value) {
++        std::string text = std::to_string(value);
++        size_t pos = command.find(key);
++
++        while (pos != std::string::npos) {
++          command.replace(pos, key.size(), text);
++          pos = command.find(key, pos + text.size());
++        }
++      };
++
++      replace("{w}", m_width);
++      replace("{h}", m_height);
++      return command;
++    }
++
++    void run() {
++      env::setThreadName("dxvk-video");
++
++#ifndef _WIN32
++      // Report a closed pipe as a write error instead of a fatal signal
++      sigset_t sigset;
++      sigemptyset(&sigset);
++      sigaddset(&sigset, SIGPIPE);
++      pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
++#endif
++
++      bool ok = m_rawPath.empty()
++        ? openPipe() && writeHeader()
++        : openFile();
++
++      if (!ok)
++        m_failed = true;
++
++      std::vector<uint64_t> timestamps;
++
++      while (true) {
++        Frame frame;
++
++        { std::unique_lock lock(m_mutex);
++
++          while (m_queue.empty() && !m_stopping)
++            m_cond.wait(lock);
++
++          if (m_queue.empty())
++            break;
++
++          frame = std::move(m_queue.front());
++          m_queue.pop_front();
++        }
++
++        if (!m_failed) {
++          if (writeFrame(frame)) {
++            timestamps.push_back(frame.timeUs);
++          } else {
++            Logger::err("Swap chain: failed to write video frame, stopping capture");
++            m_failed = true;
++          }
++        }
++
++        { std::unique_lock lock(m_mutex);
++          m_free.push_back(std::move(frame.pixels));
++          m_cond.notify_all();
++        }
++      }
++
++      close(timestamps);
++    }
++
++    bool openFile() {
++      std::string path = m_rawPath + ".bgra";
++      m_file.open(str::topath(path.c_str()).c_str(), std::ios::binary | std::ios::trunc);
++
++      if (!m_file) {
++        Logger::err(str::format("Swap chain: failed to create ", path));
++        return false;
++      }
++
++      Logger::info(str::format("Swap chain: writing ", m_width, "x", m_height, " BGRA video to ", path));
++      return true;
++    }
++
++    bool openPipe() {
++#ifdef _WIN32
++      // Start the command directly: _popen does not work in GUI
++      // applications, and it would open a console window.
++      SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
++      HANDLE readPipe = nullptr;
++      HANDLE writePipe = nullptr;
++
++      if (!CreatePipe(&readPipe, &writePipe, &sa, 4u << 20)) {
++        Logger::err(str::format("Swap chain: failed to create video pipe, error ", GetLastError()));
++        return false;
++      }
++
++      SetHandleInformation(writePipe, HANDLE_FLAG_INHERIT, 0);
++
++      HANDLE nul = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
++        &sa, OPEN_EXISTING, 0, nullptr);
++
++      // Forward the command's diagnostics to our stderr when there is one
++      HANDLE errHandle = nullptr;
++      HANDLE parentErr = GetStdHandle(STD_ERROR_HANDLE);
++
++      if (parentErr && parentErr != INVALID_HANDLE_VALUE) {
++        if (!DuplicateHandle(GetCurrentProcess(), parentErr, GetCurrentProcess(),
++            &errHandle, 0, TRUE, DUPLICATE_SAME_ACCESS))
++          errHandle = nullptr;
++      }
++
++      STARTUPINFOW si = { };
++      si.cb = sizeof(si);
++      si.dwFlags = STARTF_USESTDHANDLES;
++      si.hStdInput = readPipe;
++      si.hStdOutput = nul;
++      si.hStdError = errHandle ? errHandle : nul;
++
++      PROCESS_INFORMATION pi = { };
++      std::wstring commandLine = str::tows(m_command.c_str());
++
++      BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr,
++        TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
++      DWORD error = GetLastError();
++
++      CloseHandle(readPipe);
++
++      if (nul != INVALID_HANDLE_VALUE)
++        CloseHandle(nul);
++
++      if (errHandle)
++        CloseHandle(errHandle);
++
++      if (!created) {
++        CloseHandle(writePipe);
++        Logger::err(str::format("Swap chain: failed to start video command, error ", error, ": ", m_command));
++        return false;
++      }
++
++      CloseHandle(pi.hThread);
++      m_process = pi.hProcess;
++      m_pipe = writePipe;
++#else
++      m_pipe = popen(m_command.c_str(), "w");
++
++      if (!m_pipe) {
++        Logger::err(str::format("Swap chain: failed to start video command: ", m_command));
++        return false;
++      }
++#endif
++
++      Logger::info(str::format("Swap chain: streaming ", m_width, "x", m_height, " video to: ", m_command));
++      return true;
++    }
++
++    bool writeBytes(const void* data, size_t size) {
++      if (!m_rawPath.empty())
++        return bool(m_file.write(reinterpret_cast<const char*>(data), size));
++
++#ifdef _WIN32
++      auto ptr = reinterpret_cast<const uint8_t*>(data);
++
++      while (size) {
++        DWORD written = 0;
++
++        if (!WriteFile(m_pipe, ptr, DWORD(std::min<size_t>(size, 1u << 30)), &written, nullptr))
++          return false;
++
++        ptr += written;
++        size -= written;
++      }
++
++      return true;
++#else
++      return std::fwrite(data, 1, size, m_pipe) == size;
++#endif
++    }
++
++    static void ebmlId(std::vector<uint8_t>& out, uint32_t id) {
++      for (int32_t shift = 24; shift >= 0; shift -= 8) {
++        if ((id >> shift) || !shift)
++          out.push_back(uint8_t(id >> shift));
++      }
++    }
++
++    static void ebmlSize(std::vector<uint8_t>& out, uint64_t size) {
++      // Always use the 8-byte encoding
++      out.push_back(0x01u);
++
++      for (int32_t shift = 48; shift >= 0; shift -= 8)
++        out.push_back(uint8_t(size >> shift));
++    }
++
++    static void ebmlBinary(std::vector<uint8_t>& out, uint32_t id, const void* data, size_t size) {
++      ebmlId(out, id);
++      ebmlSize(out, size);
++
++      auto bytes = reinterpret_cast<const uint8_t*>(data);
++      out.insert(out.end(), bytes, bytes + size);
++    }
++
++    static void ebmlString(std::vector<uint8_t>& out, uint32_t id, const char* text) {
++      ebmlBinary(out, id, text, std::strlen(text));
++    }
++
++    static void ebmlUint(std::vector<uint8_t>& out, uint32_t id, uint64_t value) {
++      ebmlId(out, id);
++      ebmlSize(out, 8u);
++
++      for (int32_t shift = 56; shift >= 0; shift -= 8)
++        out.push_back(uint8_t(value >> shift));
++    }
++
++    static void ebmlMaster(std::vector<uint8_t>& out, uint32_t id, const std::vector<uint8_t>& body) {
++      ebmlBinary(out, id, body.data(), body.size());
++    }
++
++    bool writeHeader() {
++      std::vector<uint8_t> ebml;
++      ebmlUint(ebml, 0x4286u, 1u);              // EBMLVersion
++      ebmlUint(ebml, 0x42f7u, 1u);              // EBMLReadVersion
++      ebmlUint(ebml, 0x42f2u, 4u);              // EBMLMaxIDLength
++      ebmlUint(ebml, 0x42f3u, 8u);              // EBMLMaxSizeLength
++      ebmlString(ebml, 0x4282u, "matroska");    // DocType
++      ebmlUint(ebml, 0x4287u, 4u);              // DocTypeVersion
++      ebmlUint(ebml, 0x4285u, 2u);              // DocTypeReadVersion
++
++      std::vector<uint8_t> info;
++      ebmlUint(info, 0x2ad7b1u, 1000000u);      // TimestampScale: 1 ms
++      ebmlString(info, 0x4d80u, "DXVK");        // MuxingApp
++      ebmlString(info, 0x5741u, "DXVK");        // WritingApp
++
++      std::vector<uint8_t> video;
++      ebmlUint(video, 0xb0u, m_width);          // PixelWidth
++      ebmlUint(video, 0xbau, m_height);         // PixelHeight
++      ebmlBinary(video, 0x2eb524u, "BGRA", 4u); // ColourSpace
++
++      std::vector<uint8_t> track;
++      ebmlUint(track, 0xd7u, 1u);               // TrackNumber
++      ebmlUint(track, 0x73c5u, 1u);             // TrackUID
++      ebmlUint(track, 0x83u, 1u);               // TrackType: video
++      ebmlUint(track, 0x9cu, 0u);               // FlagLacing
++      ebmlString(track, 0x86u, "V_UNCOMPRESSED");
++      ebmlMaster(track, 0xe0u, video);
++
++      std::vector<uint8_t> tracks;
++      ebmlMaster(tracks, 0xaeu, track);         // TrackEntry
++
++      std::vector<uint8_t> header;
++      ebmlMaster(header, 0x1a45dfa3u, ebml);
++
++      // Segment of unknown size, since the output is a stream
++      ebmlId(header, 0x18538067u);
++      header.insert(header.end(), { 0x01u, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu });
++
++      ebmlMaster(header, 0x1549a966u, info);
++      ebmlMaster(header, 0x1654ae6bu, tracks);
++      return writeBytes(header.data(), header.size());
++    }
++
++    bool writeFrame(const Frame& frame) {
++      if (m_rawPath.empty()) {
++        // One cluster per frame, with the time stamp and one key frame block
++        const std::array<uint8_t, 4> blockHeader = { 0x81u, 0x00u, 0x00u, 0x80u };
++
++        std::vector<uint8_t> timecode;
++        ebmlUint(timecode, 0xe7u, (frame.timeUs + 500u) / 1000u);
++
++        std::vector<uint8_t> cluster;
++        ebmlId(cluster, 0x1f43b675u);
++        ebmlSize(cluster, timecode.size() + 9u + blockHeader.size() + m_frameSize);
++        cluster.insert(cluster.end(), timecode.begin(), timecode.end());
++        ebmlId(cluster, 0xa3u);                 // SimpleBlock
++        ebmlSize(cluster, blockHeader.size() + m_frameSize);
++        cluster.insert(cluster.end(), blockHeader.begin(), blockHeader.end());
++
++        if (!writeBytes(cluster.data(), cluster.size()))
++          return false;
++      }
++
++      return writeBytes(frame.pixels.data(), m_frameSize);
++    }
++
++    void close(const std::vector<uint64_t>& timestamps) {
++      std::string result;
++
++      if (!m_rawPath.empty()) {
++        if (m_file.is_open())
++          m_file.close();
++
++        std::string path = m_rawPath + ".txt";
++        std::ofstream file(str::topath(path.c_str()).c_str(), std::ios::trunc);
++        file << m_width << " " << m_height << "\n";
++
++        for (uint64_t t : timestamps)
++          file << t << "\n";
++
++        result = file ? str::format("wrote ", m_rawPath, ".bgra and ", path)
++                      : str::format("failed to write ", path);
++      } else {
++#ifdef _WIN32
++        if (m_pipe) {
++          CloseHandle(m_pipe);
++
++          DWORD exitCode = 0;
++
++          if (WaitForSingleObject(m_process, 60000) == WAIT_OBJECT_0
++           && GetExitCodeProcess(m_process, &exitCode))
++            result = str::format("command exited with code ", exitCode);
++          else
++            result = "command still running";
++
++          CloseHandle(m_process);
++        }
++#else
++        if (m_pipe)
++          result = str::format("command exited with status ", pclose(m_pipe));
++#endif
++        m_pipe = nullptr;
++      }
++
++      double seconds = timestamps.size() > 1u
++        ? double(timestamps.back() - timestamps.front()) / 1000000.0 : 0.0;
++      double fps = seconds > 0.0 ? double(timestamps.size() - 1u) / seconds : 0.0;
++
++      Logger::info(str::format("Swap chain: video capture finished, ", timestamps.size(),
++        " frames in ", seconds, " s, average ", fps, " fps, ", m_dropped, " dropped, ",
++        m_blockedFrames, " frames waited ", m_blockedUs / 1000u, " ms for the writer; ", result));
++    }
++
++  };
+   
+   DxvkSwapchainBlitter::DxvkSwapchainBlitter(
+     const Rc<DxvkDevice>& device,
+@@ -55,12 +544,47 @@
+         " every ", m_captureInterval.count(), " ms"));
+     }
+ 
++    // DXVK_CAPTURE_VIDEO records DXVK_CAPTURE_VIDEO_SECONDS (default 10) of
++    // presented frames, starting DXVK_CAPTURE_VIDEO_START seconds (default 5)
++    // after the first present, at DXVK_CAPTURE_VIDEO_SCALE percent (default
++    // 50) of the presented size. The value is either raw:<path>, which writes
++    // <path>.bgra and <path>.txt, or a command line that receives Matroska
++    // raw BGRA video on its standard input. In the command, {w} and {h} are
++    // replaced with the frame size.
++    m_videoTarget = env::getEnvVar("DXVK_CAPTURE_VIDEO");
++
++    if (!m_videoTarget.empty()) {
++      auto getSeconds = [] (const char* name, float minValue, float maxValue) {
++        std::string value = env::getEnvVar(name);
++        return value.empty() ? std::optional<std::chrono::microseconds>()
++          : std::chrono::microseconds(uint64_t(1000000.0f *
++              std::clamp(std::strtof(value.c_str(), nullptr), minValue, maxValue)));
++      };
++
++      m_videoStart = getSeconds("DXVK_CAPTURE_VIDEO_START", 0.0f, 3600.0f).value_or(m_videoStart);
++      m_videoLength = getSeconds("DXVK_CAPTURE_VIDEO_SECONDS", 0.1f, 600.0f).value_or(m_videoLength);
++
++      std::string scale = env::getEnvVar("DXVK_CAPTURE_VIDEO_SCALE");
++
++      if (!scale.empty())
++        m_videoScale = uint32_t(std::clamp(std::strtol(scale.c_str(), nullptr, 10), 10l, 100l));
++
++      m_videoState = VideoState::Waiting;
++
++      Logger::info(str::format("Swap chain: video capture of ", m_videoLength.count() / 1000u,
++        " ms at ", m_videoScale, "% scale, starting ", m_videoStart.count() / 1000u,
++        " ms after the first present"));
++    }
++
+     this->createSampler();
+     this->createShaders();
+   }
+ 
+ 
+   DxvkSwapchainBlitter::~DxvkSwapchainBlitter() {
++    // Pending frames may never be submitted at this point, do not wait
++    finishVideo(false);
++
+     auto vk = m_device->vkd();
+ 
+     for (const auto& p : m_pipelines)
+@@ -121,8 +645,15 @@
+     if (m_cursorBuffer)
+       uploadCursorImage(ctx);
+ 
+-    // If we can't do proper blending, render the HUD into a separate image
+-    bool composite = needsComposition(dstView);
++    auto presentTime = high_resolution_clock::now();
++    bool videoActive = updateVideoState(presentTime);
++
++    // If we can't do proper blending, render the HUD into a separate image.
++    // While recording video, do the same so that the video frame can blend
++    // in the same HUD image: rendering the HUD twice would add a second data
++    // point per frame to the frame time graph.
++    bool composite = needsComposition(dstView)
++      || (videoActive && m_hud && !m_hud->empty());
+ 
+     if (m_hud && composite)
+       renderHudImage(ctx, dstView->mipLevelExtent(0));
+@@ -237,6 +768,10 @@
+         m_captureNext = now + m_captureInterval;
+       }
+     }
++
++    if (m_videoState == VideoState::Waiting || m_videoState == VideoState::Recording)
++      processVideo(ctx, presentTime, videoActive, { dstExtent.width, dstExtent.height },
++        dstRect, blitView, blitRect, composite);
+   }
+ 
+ 
+@@ -945,6 +1480,373 @@
+   }
+ 
+ 
++  bool DxvkSwapchainBlitter::updateVideoState(
++          high_resolution_clock::time_point now) {
++    if (m_videoState != VideoState::Waiting && m_videoState != VideoState::Recording)
++      return false;
++
++    if (m_videoFirstPresent == high_resolution_clock::time_point())
++      m_videoFirstPresent = now;
++
++    // The writer is created up to a second before recording starts,
++    // so that starting the encoder does not delay the first frames.
++    if (m_videoState == VideoState::Waiting && m_videoWriter
++     && now - m_videoFirstPresent >= m_videoStart) {
++      m_videoState = VideoState::Recording;
++      m_videoBegin = now;
++    }
++
++    // Frames before recording starts go through the same passes without
++    // a readback, so that pipelines are compiled before the first frame.
++    if (m_videoState == VideoState::Waiting)
++      return m_videoWriter != nullptr;
++
++    return now - m_videoBegin < m_videoLength;
++  }
++
++
++  void DxvkSwapchainBlitter::processVideo(
++    const DxvkContextObjects&         ctx,
++          high_resolution_clock::time_point now,
++          bool                        active,
++          VkExtent2D                  swapExtent,
++          VkRect2D                    dstRect,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect,
++          VkBool32                    composite) {
++    if (m_videoState == VideoState::Waiting && !m_videoWriter
++     && now - m_videoFirstPresent + std::chrono::seconds(1) >= m_videoStart)
++      startVideo(dstRect.extent);
++
++    if (!m_videoWriter)
++      return;
++
++    drainVideoFrames(0u);
++
++    if (m_videoWriter->failed()) {
++      finishVideo(false);
++      return;
++    }
++
++    if (m_videoState == VideoState::Recording && !active) {
++      finishVideo(true);
++      return;
++    }
++
++    bool readback = m_videoState == VideoState::Recording;
++
++    // If the GPU is more than a full ring of frames behind, wait for the
++    // oldest frame rather than drop the new one.
++    if (readback && m_videoPending == VideoSlotCount) {
++      m_videoGpuWaits += 1u;
++      drainVideoFrames(1u);
++    }
++
++    auto timeUs = std::chrono::duration_cast<std::chrono::microseconds>(now - m_videoBegin);
++
++    recordVideoFrame(ctx, swapExtent, dstRect, srcView, srcRect,
++      composite, readback, readback ? uint64_t(timeUs.count()) : 0u);
++  }
++
++
++  void DxvkSwapchainBlitter::startVideo(
++          VkExtent2D                  presentExtent) {
++    // Only record one clip per process, even if the swap chain is recreated
++    static std::atomic<bool> s_videoStarted = { false };
++
++    if (s_videoStarted.exchange(true)) {
++      m_videoState = VideoState::Finished;
++      return;
++    }
++
++    // Even dimensions keep 4:2:0 encoders happy
++    VkExtent3D extent = {
++      std::max(16u, presentExtent.width  * m_videoScale / 100u) & ~1u,
++      std::max(16u, presentExtent.height * m_videoScale / 100u) & ~1u, 1u };
++
++    // The video always uses the same 8-bit BGRA sRGB format, whatever the
++    // swap chain format and color space are. The blit converts as needed.
++    DxvkImageCreateInfo imageInfo = { };
++    imageInfo.type          = VK_IMAGE_TYPE_2D;
++    imageInfo.format        = VK_FORMAT_B8G8R8A8_UNORM;
++    imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++    imageInfo.extent        = extent;
++    imageInfo.mipLevels     = 1;
++    imageInfo.numLayers     = 1;
++    imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                            | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++    imageInfo.stages        = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
++                            | VK_PIPELINE_STAGE_TRANSFER_BIT;
++    imageInfo.access        = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
++                            | VK_ACCESS_TRANSFER_READ_BIT;
++    imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++    imageInfo.layout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    imageInfo.colorSpace    = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++    imageInfo.debugName     = "Swap chain video";
++
++    m_videoImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++    DxvkImageViewKey viewInfo = { };
++    viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++    viewInfo.usage          = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++    viewInfo.format         = imageInfo.format;
++    viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++    viewInfo.mipIndex       = 0u;
++    viewInfo.mipCount       = 1u;
++    viewInfo.layerIndex     = 0u;
++    viewInfo.layerCount     = 1u;
++
++    m_videoView = m_videoImage->createView(viewInfo);
++
++    // Cached memory, since the CPU reads every byte of these buffers
++    DxvkBufferCreateInfo bufferInfo = { };
++    bufferInfo.size   = VkDeviceSize(extent.width) * extent.height * 4u;
++    bufferInfo.usage  = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
++    bufferInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
++    bufferInfo.access = VK_ACCESS_TRANSFER_WRITE_BIT;
++    bufferInfo.debugName = "Swap chain video";
++
++    for (auto& slot : m_videoSlots) {
++      slot.buffer = m_device->createBuffer(bufferInfo,
++        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
++      | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
++    }
++
++    m_videoOldest = 0u;
++    m_videoPending = 0u;
++    m_videoGpuWaits = 0u;
++
++    Logger::info(str::format("Swap chain: recording ", m_videoLength.count() / 1000u,
++      " ms of video at ", extent.width, "x", extent.height));
++
++    m_videoWriter = std::make_unique<DxvkVideoWriter>(m_videoTarget, extent.width, extent.height);
++  }
++
++
++  void DxvkSwapchainBlitter::recordVideoFrame(
++    const DxvkContextObjects&         ctx,
++          VkExtent2D                  swapExtent,
++          VkRect2D                    dstRect,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect,
++          VkBool32                    composite,
++          bool                        readback,
++          uint64_t                    timeUs) {
++    auto drawPass = [&] (
++      const Rc<DxvkImage>&      image,
++      const Rc<DxvkImageView>&  view,
++            VkRect2D            rect,
++      const Rc<DxvkImageView>&  passSrcView,
++            VkRect2D            passSrcRect,
++            VkBool32            passComposite,
++            VkPipelineStageFlags2 dstStages,
++            VkAccessFlags2      dstAccess) {
++      VkExtent3D extent = image->info().extent;
++
++      // The previous frame may still read the image
++      VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++      barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT
++                           | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++      barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++      barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++      barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++      barrier.newLayout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++      barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barrier.image = image->handle();
++      barrier.subresourceRange = view->imageSubresources();
++
++      VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++      depInfo.imageMemoryBarrierCount = 1;
++      depInfo.pImageMemoryBarriers = &barrier;
++
++      ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++      image->trackInitialization(barrier.subresourceRange);
++
++      VkRenderingAttachmentInfo attachmentInfo = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
++      attachmentInfo.imageView = view->handle();
++      attachmentInfo.imageLayout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++      attachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
++      attachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
++
++      VkRenderingInfo renderInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
++      renderInfo.renderArea.offset = { 0, 0 };
++      renderInfo.renderArea.extent = { extent.width, extent.height };
++      renderInfo.layerCount = 1u;
++      renderInfo.colorAttachmentCount = 1;
++      renderInfo.pColorAttachments = &attachmentInfo;
++
++      ctx.cmd->cmdBeginRendering(&renderInfo);
++
++      performDraw(ctx, view, rect, passSrcView, passSrcRect, passComposite, DxvkFsrPass::None);
++
++      ctx.cmd->cmdEndRendering();
++
++      barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++      barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++      barrier.dstStageMask = dstStages;
++      barrier.dstAccessMask = dstAccess;
++      barrier.oldLayout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++      barrier.newLayout = image->info().layout;
++
++      ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++      ctx.cmd->track(image, DxvkAccess::Write);
++    };
++
++    Rc<DxvkImageView> videoSrcView = srcView;
++    VkRect2D videoSrcRect = srcRect;
++
++    // The HUD and the software cursor are positioned in swap chain pixels.
++    // To include them, compose the frame at swap chain size first, exactly
++    // like the swap chain image, then downscale that.
++    if (composite && (m_hudView || m_cursorView)) {
++      VkExtent3D fullExtent = { swapExtent.width, swapExtent.height, 1u };
++
++      if (!m_videoFullImage || m_videoFullImage->info().extent != fullExtent) {
++        DxvkImageCreateInfo imageInfo = { };
++        imageInfo.type          = VK_IMAGE_TYPE_2D;
++        imageInfo.format        = VK_FORMAT_B8G8R8A8_UNORM;
++        imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++        imageInfo.extent        = fullExtent;
++        imageInfo.mipLevels     = 1;
++        imageInfo.numLayers     = 1;
++        imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                                | VK_IMAGE_USAGE_SAMPLED_BIT;
++        imageInfo.stages        = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
++                                | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++        imageInfo.access        = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
++                                | VK_ACCESS_SHADER_READ_BIT;
++        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++        imageInfo.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++        imageInfo.colorSpace    = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++        imageInfo.debugName     = "Swap chain video composition";
++
++        m_videoFullImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++        DxvkImageViewKey viewInfo = { };
++        viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++        viewInfo.usage          = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                                | VK_IMAGE_USAGE_SAMPLED_BIT;
++        viewInfo.format         = imageInfo.format;
++        viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++        viewInfo.mipIndex       = 0u;
++        viewInfo.mipCount       = 1u;
++        viewInfo.layerIndex     = 0u;
++        viewInfo.layerCount     = 1u;
++
++        m_videoFullView = m_videoFullImage->createView(viewInfo);
++      }
++
++      drawPass(m_videoFullImage, m_videoFullView, dstRect, srcView, srcRect, composite,
++        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
++
++      videoSrcView = m_videoFullView;
++      videoSrcRect = dstRect;
++    } else {
++      m_videoFullImage = nullptr;
++      m_videoFullView = nullptr;
++    }
++
++    // Downscale with the linear blit shader
++    VkExtent3D extent = m_videoImage->info().extent;
++
++    drawPass(m_videoImage, m_videoView, { { 0, 0 }, { extent.width, extent.height } },
++      videoSrcView, videoSrcRect, VK_FALSE,
++      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
++
++    if (!readback)
++      return;
++
++    VideoSlot& slot = m_videoSlots[(m_videoOldest + m_videoPending) % VideoSlotCount];
++    slot.timeUs = timeUs;
++
++    DxvkBufferSliceHandle bufferSlice = slot.buffer->getSliceHandle();
++
++    VkBufferImageCopy2 region = { VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2 };
++    region.bufferOffset = bufferSlice.offset;
++    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u };
++    region.imageExtent = extent;
++
++    VkCopyImageToBufferInfo2 copyInfo = { VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2 };
++    copyInfo.srcImage = m_videoImage->handle();
++    copyInfo.srcImageLayout = m_videoImage->info().layout;
++    copyInfo.dstBuffer = bufferSlice.handle;
++    copyInfo.regionCount = 1;
++    copyInfo.pRegions = &region;
++
++    ctx.cmd->cmdCopyImageToBuffer(DxvkCmdBuffer::ExecBuffer, &copyInfo);
++
++    VkMemoryBarrier2 hostBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    hostBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
++    hostBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
++    hostBarrier.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
++    hostBarrier.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
++
++    VkDependencyInfo hostDepInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    hostDepInfo.memoryBarrierCount = 1;
++    hostDepInfo.pMemoryBarriers = &hostBarrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &hostDepInfo);
++    ctx.cmd->track(slot.buffer, DxvkAccess::Write);
++
++    m_videoPending += 1u;
++  }
++
++
++  void DxvkSwapchainBlitter::drainVideoFrames(
++          uint32_t                    waitCount) {
++    // Hand finished frames to the writer in present order. Frames recorded
++    // in earlier presents have been submitted, so waiting on them is safe.
++    while (m_videoPending) {
++      VideoSlot& slot = m_videoSlots[m_videoOldest];
++
++      if (slot.buffer->isInUse(DxvkAccess::Write)) {
++        if (!waitCount)
++          break;
++
++        m_device->waitForResource(*slot.buffer, DxvkAccess::Write);
++      }
++
++      m_videoWriter->submit(slot.buffer->mapPtr(0), slot.timeUs);
++
++      m_videoOldest = (m_videoOldest + 1u) % VideoSlotCount;
++      m_videoPending -= 1u;
++
++      if (waitCount)
++        waitCount -= 1u;
++    }
++  }
++
++
++  void DxvkSwapchainBlitter::finishVideo(
++          bool                        drain) {
++    if (m_videoWriter) {
++      if (drain)
++        drainVideoFrames(VideoSlotCount);
++
++      m_videoWriter->finish();
++      m_videoWriter = nullptr;
++
++      if (m_videoGpuWaits) {
++        Logger::warn(str::format("Swap chain: video capture waited for the GPU on ",
++          m_videoGpuWaits, " frames"));
++      }
++    }
++
++    for (auto& slot : m_videoSlots)
++      slot.buffer = nullptr;
++
++    m_videoImage = nullptr;
++    m_videoView = nullptr;
++    m_videoFullImage = nullptr;
++    m_videoFullView = nullptr;
++    m_videoPending = 0u;
++    m_videoState = VideoState::Finished;
++  }
++
++
+   void DxvkSwapchainBlitter::createFsrImage(
+           VkExtent2D                  extent,
+           VkColorSpaceKHR             colorSpace) {
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
++#include <array>
+ #include <functional>
++#include <memory>
+ #include <string>
+ #include <thread>
+ #include <unordered_map>
+@@ -120,6 +122,9 @@
+   };
+ 
+ 
++  class DxvkVideoWriter;
++
++
+   /**
+    * \brief Swap chain blitter
+    *
+@@ -278,6 +283,37 @@
+     Rc<DxvkImageView>   m_captureView;
+     Rc<DxvkBuffer>      m_captureBuffer;
+ 
++    enum class VideoState : uint32_t {
++      Disabled,
++      Waiting,
++      Recording,
++      Finished,
++    };
++
++    struct VideoSlot {
++      Rc<DxvkBuffer>    buffer;
++      uint64_t          timeUs = 0u;
++    };
++
++    static constexpr uint32_t VideoSlotCount = 4u;
++
++    std::string         m_videoTarget;
++    std::chrono::microseconds m_videoStart = std::chrono::seconds(5);
++    std::chrono::microseconds m_videoLength = std::chrono::seconds(10);
++    uint32_t            m_videoScale = 50u;
++    VideoState          m_videoState = VideoState::Disabled;
++    high_resolution_clock::time_point m_videoFirstPresent = { };
++    high_resolution_clock::time_point m_videoBegin = { };
++    std::unique_ptr<DxvkVideoWriter> m_videoWriter;
++    Rc<DxvkImage>       m_videoImage;
++    Rc<DxvkImageView>   m_videoView;
++    Rc<DxvkImage>       m_videoFullImage;
++    Rc<DxvkImageView>   m_videoFullView;
++    std::array<VideoSlot, VideoSlotCount> m_videoSlots;
++    uint32_t            m_videoOldest = 0u;
++    uint32_t            m_videoPending = 0u;
++    uint32_t            m_videoGpuWaits = 0u;
++
+     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+     VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
+ 
+@@ -324,6 +360,38 @@
+ 
+     void writeCapture();
+ 
++    bool updateVideoState(
++            high_resolution_clock::time_point now);
++
++    void processVideo(
++      const DxvkContextObjects&         ctx,
++            high_resolution_clock::time_point now,
++            bool                        active,
++            VkExtent2D                  swapExtent,
++            VkRect2D                    dstRect,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect,
++            VkBool32                    composite);
++
++    void startVideo(
++            VkExtent2D                  presentExtent);
++
++    void recordVideoFrame(
++      const DxvkContextObjects&         ctx,
++            VkExtent2D                  swapExtent,
++            VkRect2D                    dstRect,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect,
++            VkBool32                    composite,
++            bool                        readback,
++            uint64_t                    timeUs);
++
++    void drainVideoFrames(
++            uint32_t                    waitCount);
++
++    void finishVideo(
++            bool                        drain);
++
+     void createFsrImage(
+             VkExtent2D                  extent,
+             VkColorSpaceKHR             colorSpace);
