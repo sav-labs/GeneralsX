@@ -56,6 +56,14 @@ public:
 		AntiAliasingMode_Count
 	};
 
+	// GeneralsX @feature Claude 14/10/2026 FSR render scale limits, in percent of the display size.
+	enum RenderScaleLimits CPP_11(: Int)
+	{
+		RENDER_SCALE_MIN = 50,
+		RENDER_SCALE_OFF = 100,
+		RENDER_SCALE_MIN_HEIGHT = 600
+	};
+
 	Bool loadFromIniFile();
 
 	WW3D::MultiSampleModeEnum getAntiAliasing() const;
@@ -139,4 +147,7 @@ public:
 	Real getGameWindowTransitionSpeedMultiplier() const;
 	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
 	Int getSkirmishTickRate() const;
+	// GeneralsX @feature Claude 14/10/2026 FSR render scale (Options.ini RenderScale, 100 = off)
+	Int getRenderScale() const;
+	static Bool getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres);
 };

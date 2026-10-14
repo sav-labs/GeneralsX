@@ -182,6 +182,8 @@ jobs:
           To soften the FSR sharpening, edit Play-FSR.cmd and add: set DXVK_FSR_SHARPNESS=1 (0 is sharpest, default 0.2).
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           Pick the game resolution in Options; use the same aspect ratio as the display.
+          FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
+          the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
           "@ | Set-Content artifacts/INSTALL.txt
           Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip
 

@@ -62,6 +62,7 @@
 #include "GameClient/Image.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetPushButton.h"
+#include "GameClient/UILayout.h"
 
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -427,9 +428,15 @@ void ControlBarScheme::init()
 		TheControlBar->setArrowImage( m_genArrow);
 	}
 	GameWindow *win = nullptr;
+	// GeneralsX @feature Claude 14/10/2026 Use the shared UI layout transform so the control bar
+	// buttons keep their proportions and stay centered with the .wnd layout on wide displays.
+	const UILayoutTransform layout = UILayoutGetTransform( m_ScreenCreationRes.x, m_ScreenCreationRes.y );
 	Coord2D resMultiplier;
-	resMultiplier.x = TheDisplay->getWidth()/INT_TO_REAL(m_ScreenCreationRes.x) ;
-	resMultiplier.y = TheDisplay->getHeight()/INT_TO_REAL(m_ScreenCreationRes.y);
+	resMultiplier.x = layout.scaleX;
+	resMultiplier.y = layout.scaleY;
+	ICoord2D layoutOffset;
+	layoutOffset.x = layout.offsetX;
+	layoutOffset.y = layout.offsetY;
 
 	win= TheWindowManager->winGetWindowFromId( nullptr, TheNameKeyGenerator->nameToKey( "ControlBar.wnd:PopupCommunicator" ) );
 	if(win)
@@ -448,13 +455,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_chatUL.x * resMultiplier.x - parX;
-			y = m_chatUL.y * resMultiplier.y - parY;
+			x = m_chatUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_chatUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_chatUL.x * resMultiplier.x;
-			y = m_chatUL.y * resMultiplier.y;
+			x = m_chatUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_chatUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_chatLR.x - m_chatUL.x)*resMultiplier.x + static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_chatLR.y - m_chatUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -473,13 +480,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_workerUL.x * resMultiplier.x - parX;
-			y = m_workerUL.y * resMultiplier.y - parY;
+			x = m_workerUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_workerUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_workerUL.x * resMultiplier.x;
-			y = m_workerUL.y * resMultiplier.y;
+			x = m_workerUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_workerUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 
@@ -504,13 +511,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_optionsUL.x * resMultiplier.x - parX;
-			y = m_optionsUL.y * resMultiplier.y - parY;
+			x = m_optionsUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_optionsUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_optionsUL.x * resMultiplier.x;
-			y = m_optionsUL.y * resMultiplier.y;
+			x = m_optionsUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_optionsUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_optionsLR.x - m_optionsUL.x)*resMultiplier.x+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_optionsLR.y - m_optionsUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -529,13 +536,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_beaconUL.x * resMultiplier.x - parX;
-			y = m_beaconUL.y * resMultiplier.y - parY;
+			x = m_beaconUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_beaconUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_beaconUL.x * resMultiplier.x;
-			y = m_beaconUL.y * resMultiplier.y;
+			x = m_beaconUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_beaconUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_beaconLR.x - m_beaconUL.x)*resMultiplier.x+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_beaconLR.y - m_beaconUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -551,13 +558,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_moneyUL.x * resMultiplier.x - parX;
-			y = m_moneyUL.y * resMultiplier.y - parY;
+			x = m_moneyUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_moneyUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_moneyUL.x * resMultiplier.x;
-			y = m_moneyUL.y * resMultiplier.y;
+			x = m_moneyUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_moneyUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_moneyLR.x - m_moneyUL.x)*resMultiplier.x+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_moneyLR.y - m_moneyUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -573,13 +580,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_powerBarUL.x * resMultiplier.x - parX;
-			y = m_powerBarUL.y * resMultiplier.y - parY;
+			x = m_powerBarUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_powerBarUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_powerBarUL.x * resMultiplier.x;
-			y = m_powerBarUL.y * resMultiplier.y;
+			x = m_powerBarUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_powerBarUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_powerBarLR.x - m_powerBarUL.x)*resMultiplier.x+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_powerBarLR.y - m_powerBarUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -601,13 +608,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_generalUL.x * resMultiplier.x - parX;
-			y = m_generalUL.y * resMultiplier.y - parY;
+			x = m_generalUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_generalUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_generalUL.x * resMultiplier.x;
-			y = m_generalUL.y * resMultiplier.y;
+			x = m_generalUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_generalUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_generalLR.x - m_generalUL.x)*resMultiplier.x+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_generalLR.y - m_generalUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -627,13 +634,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_minMaxUL.x * resMultiplier.x - parX;
-			y = m_minMaxUL.y * resMultiplier.y - parY;
+			x = m_minMaxUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_minMaxUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_minMaxUL.x * resMultiplier.x;
-			y = m_minMaxUL.y * resMultiplier.y;
+			x = m_minMaxUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_minMaxUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_minMaxLR.x - m_minMaxUL.x)*resMultiplier.x + static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_minMaxLR.y - m_minMaxUL.y)*resMultiplier.y + static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -651,13 +658,13 @@ void ControlBarScheme::init()
 		{
 			Int parX, parY;
 			parent->winGetScreenPosition(&parX, &parY);
-			x = m_uAttackUL.x * resMultiplier.x - parX;
-			y = m_uAttackUL.y * resMultiplier.y - parY;
+			x = m_uAttackUL.x * resMultiplier.x + layoutOffset.x - parX;
+			y = m_uAttackUL.y * resMultiplier.y + layoutOffset.y - parY;
 		}
 		else
 		{
-			x = m_uAttackUL.x * resMultiplier.x;
-			y = m_uAttackUL.y * resMultiplier.y;
+			x = m_uAttackUL.x * resMultiplier.x + layoutOffset.x;
+			y = m_uAttackUL.y * resMultiplier.y + layoutOffset.y;
 		}
 		win->winSetPosition(x,y );
 		win->winSetSize((m_uAttackLR.x - m_uAttackUL.x)*resMultiplier.x+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET),(m_uAttackLR.y - m_uAttackUL.y)*resMultiplier.y+ static_cast<float>(COMMAND_BAR_SIZE_OFFSET));
@@ -831,6 +838,7 @@ ControlBarSchemeManager::ControlBarSchemeManager()
 	m_currentScheme = nullptr;
 	m_schemeList.clear();
 	m_multiplier.x = m_multiplier.y = 1;
+	m_layoutOffset.x = m_layoutOffset.y = 0;
 }
 
 //
@@ -1050,8 +1058,12 @@ void ControlBarSchemeManager::setControlBarScheme(AsciiString schemeName)
 	if(tempScheme)
 	{
 		// setup the multiplier value
-		m_multiplier.x = (Real)TheDisplay->getWidth() / tempScheme->m_ScreenCreationRes.x;
-		m_multiplier.y = (Real)TheDisplay->getHeight() / tempScheme->m_ScreenCreationRes.y;
+		// GeneralsX @feature Claude 14/10/2026 Uniform scale plus centering offset on wide displays
+		const UILayoutTransform layout = UILayoutGetTransform( tempScheme->m_ScreenCreationRes.x, tempScheme->m_ScreenCreationRes.y );
+		m_multiplier.x = layout.scaleX;
+		m_multiplier.y = layout.scaleY;
+		m_layoutOffset.x = layout.offsetX;
+		m_layoutOffset.y = layout.offsetY;
 		m_currentScheme = tempScheme;
 	}
 	else
@@ -1075,12 +1087,18 @@ void ControlBarSchemeManager::update()
 //-----------------------------------------------------------------------------
 void ControlBarSchemeManager::drawForeground( ICoord2D offset )
 {
+	// GeneralsX @feature Claude 14/10/2026 Center the scheme art with the .wnd layout on wide displays
+	offset.x += m_layoutOffset.x;
+	offset.y += m_layoutOffset.y;
 	if(m_currentScheme)
 		m_currentScheme->drawForeground( m_multiplier, offset);
 }
 //-----------------------------------------------------------------------------
 void ControlBarSchemeManager::drawBackground( ICoord2D offset )
 {
+	// GeneralsX @feature Claude 14/10/2026 Center the scheme art with the .wnd layout on wide displays
+	offset.x += m_layoutOffset.x;
+	offset.y += m_layoutOffset.y;
 	if(m_currentScheme)
 		m_currentScheme->drawBackground( m_multiplier, offset );
 }
@@ -1132,8 +1150,12 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayerTemplate( const PlayerT
 	if(tempScheme)
 	{
 		// setup the multiplier value
-		m_multiplier.x = TheDisplay->getWidth() / (Real)tempScheme->m_ScreenCreationRes.x;
-		m_multiplier.y = TheDisplay->getHeight() / (Real)tempScheme->m_ScreenCreationRes.y;
+		// GeneralsX @feature Claude 14/10/2026 Uniform scale plus centering offset on wide displays
+		const UILayoutTransform layout = UILayoutGetTransform( tempScheme->m_ScreenCreationRes.x, tempScheme->m_ScreenCreationRes.y );
+		m_multiplier.x = layout.scaleX;
+		m_multiplier.y = layout.scaleY;
+		m_layoutOffset.x = layout.offsetX;
+		m_layoutOffset.y = layout.offsetY;
 		m_currentScheme = tempScheme;
 	}
 	else
@@ -1200,8 +1222,12 @@ void ControlBarSchemeManager::setControlBarSchemeByPlayer(Player *p)
 	if(tempScheme)
 	{
 		// setup the multiplier value
-		m_multiplier.x = TheDisplay->getWidth() / (Real)tempScheme->m_ScreenCreationRes.x;
-		m_multiplier.y = TheDisplay->getHeight() / (Real)tempScheme->m_ScreenCreationRes.y;
+		// GeneralsX @feature Claude 14/10/2026 Uniform scale plus centering offset on wide displays
+		const UILayoutTransform layout = UILayoutGetTransform( tempScheme->m_ScreenCreationRes.x, tempScheme->m_ScreenCreationRes.y );
+		m_multiplier.x = layout.scaleX;
+		m_multiplier.y = layout.scaleY;
+		m_layoutOffset.x = layout.offsetX;
+		m_layoutOffset.y = layout.offsetY;
 		m_currentScheme = tempScheme;
 	}
 	else
