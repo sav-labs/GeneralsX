@@ -550,6 +550,14 @@ StaticGameLODLevel GameLODManager::getRecommendedStaticLODLevel()
 				if (m_idealDetailLevel >= i)
 					break;	//we already found a higher level than the remaining presets so no need to keep searching.
 		}
+
+		// GeneralsX @tweak sav-labs 14/10/2026 The GameLOD.ini presets only describe 2003-era hardware and never
+		// reach Very High. A shader-capable GPU with 4 GB of RAM or more is far beyond any preset, so recommend Very High.
+		if (m_idealDetailLevel < STATIC_GAME_LOD_VERY_HIGH &&
+				m_videoChipType >= DC_GENERIC_PIXEL_SHADER_1_1 &&
+				numMBRam >= 4096)
+			m_idealDetailLevel = STATIC_GAME_LOD_VERY_HIGH;
+
 		//Save ideal detail level for future usage
 		OptionPreferences optionPref;
 		optionPref["IdealStaticGameLOD"] = getStaticGameLODLevelName(m_idealDetailLevel);

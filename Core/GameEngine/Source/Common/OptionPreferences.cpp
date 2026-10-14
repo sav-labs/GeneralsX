@@ -82,18 +82,20 @@ WW3D::MultiSampleModeEnum OptionPreferences::getAntiAliasing() const
 
 TextureFilterClass::TextureFilterMode OptionPreferences::getTextureFilterMode() const
 {
+	// GeneralsX @tweak sav-labs 14/10/2026 Default to anisotropic filtering; every DXVK-capable GPU supports it.
 	OptionPreferences::const_iterator it = find("TextureFilter");
 	if (it == end())
-		return TextureFilterClass::TEXTURE_FILTER_BILINEAR;
+		return TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC;
 
 	return TextureFilterClass::getTextureFilterMode(it->second.str());
 }
 
 TextureFilterClass::AnisotropicFilterMode OptionPreferences::getTextureAnisotropyLevel() const
 {
+	// GeneralsX @tweak sav-labs 14/10/2026 Default to 16x anisotropy for sharp terrain at oblique camera angles.
 	OptionPreferences::const_iterator it = find("AnisotropyLevel");
 	if (it == end())
-		return TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC_2X;
+		return TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC_16X;
 
 	TextureFilterClass::AnisotropicFilterMode level = (TextureFilterClass::AnisotropicFilterMode)atoi(it->second.str());
 	level = clamp(TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC_2X, level, TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC_16X);
