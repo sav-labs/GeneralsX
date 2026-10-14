@@ -82,6 +82,7 @@
 #include "GameClient/GameText.h"
 
 #include "WW3D2/ww3d.h"
+#include "WWMath/quat.h"
 
 #define VERY_TRANSPARENT_MATERIAL_PASS_OPACITY (0.001f)
 #define MATERIAL_PASS_OPACITY_FADE_SCALAR (0.8f)
@@ -418,6 +419,13 @@ Drawable::Drawable( const ThingTemplate *thingTemplate, DrawableStatusBits statu
 
 	m_locoInfo = nullptr;
 	m_physicsXform = nullptr;
+
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames.
+	m_smoothMotionPrevTransform.Make_Identity();
+	m_smoothMotionLastTransform.Make_Identity();
+	m_smoothMotionOffset.zero();
+	m_smoothMotionLogicFrame = 0;
+	m_smoothMotionValid = FALSE;
 
 	// sanity
 	if( TheGameClient == nullptr || thingTemplate == nullptr )
@@ -2669,6 +2677,9 @@ void Drawable::draw()
 		}
 	}
 
+	// GeneralsX @feature Claude 14/10/2026 Overlays of undrawn drawables stay at the logic position.
+	m_smoothMotionOffset.zero();
+
 	if (m_hidden || m_hiddenByStealth || getFullyObscuredByShroud())
 		return;	// my, that was easy
 
@@ -2682,7 +2693,16 @@ void Drawable::draw()
 #endif
 
 	// call the database defined draw action method
-	Matrix3D transformMtx = *getTransformMatrix();
+	// GeneralsX @feature Claude 14/10/2026 Draw moving objects between their logic frame transforms.
+	Matrix3D transformMtx;
+	getSmoothMotionTransform(transformMtx);
+	{
+		const Matrix3D *logicMtx = getTransformMatrix();
+		m_smoothMotionOffset.x = transformMtx.Get_X_Translation() - logicMtx->Get_X_Translation();
+		m_smoothMotionOffset.y = transformMtx.Get_Y_Translation() - logicMtx->Get_Y_Translation();
+		m_smoothMotionOffset.z = transformMtx.Get_Z_Translation() - logicMtx->Get_Z_Translation();
+	}
+
 	if (!isInstanceIdentity())
 	{
 #ifdef ALLOW_TEMPORARIES
@@ -2720,6 +2740,8 @@ static Bool computeHealthRegion( const Drawable *draw, IRegion2D& region )
 
 	Coord3D p;
 	obj->getHealthBoxPosition(p);
+	// GeneralsX @feature Claude 14/10/2026 Keep the health bar and its icons on the drawn model.
+	p.add(*draw->getSmoothMotionOffset());
 	ICoord2D screenCenter;
 	if( !TheTacticalView->worldToScreen( &p, &screenCenter ) )
 		return FALSE;
@@ -3188,6 +3210,8 @@ void Drawable::drawUIText()
 		Coord3D p;
 		ICoord2D screenCenter;
 		obj->getHealthBoxPosition(p);
+		// GeneralsX @feature Claude 14/10/2026 Keep the formation mark on the drawn model.
+		p.add(m_smoothMotionOffset);
 		if( ! TheTacticalView->worldToScreen( &p, &screenCenter ) )
 			return;
 
@@ -3814,6 +3838,8 @@ void Drawable::drawVeterancy( const IRegion2D *healthBarRegion )
 	Coord3D p;
 	ICoord2D screenCenter;
 	obj->getHealthBoxPosition(p);
+	// GeneralsX @feature Claude 14/10/2026 Keep the veterancy mark on the drawn model.
+	p.add(m_smoothMotionOffset);
 	if( !TheTacticalView->worldToScreen( &p, &screenCenter ) )
 		return;
 
@@ -4307,6 +4333,136 @@ const Matrix3D *Drawable::getTransformMatrix() const
 		return obj->getTransformMatrix();
 	else
 		return Thing::getTransformMatrix();
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames.
+// Objects move in discrete logic frames (30 Hz), while the render rate can be higher. To draw them
+// smoothly, the drawable remembers the object transform of the previous logic frame and blends it
+// with the current one by the logic frame phase: linear for the position, normalized quaternion
+// lerp for the rotation. Rendering then trails the logic by up to one logic frame, like the camera,
+// animation and particle updates that already use the phase. This is purely visual: the logic
+// transform is never changed, and nothing here is read back by the simulation.
+//-------------------------------------------------------------------------------------------------
+
+/// A move longer than this within one logic frame is a teleport and is not blended.
+static const Real SMOOTH_MOTION_SNAP_DISTANCE_SQR = 100.0f * 100.0f;
+
+static Bool isSmoothMotionActive()
+{
+	return TheGlobalData->m_smoothMotion
+		&& TheFramePacer != nullptr
+		&& TheFramePacer->isLogicTimeScaleEnabled()
+		&& TheGameLogic != nullptr
+		&& !TheGameLogic->isGamePaused();
+}
+
+static Bool isSameRotation(const Matrix3D& a, const Matrix3D& b)
+{
+	for (Int row = 0; row < 3; ++row)
+	{
+		if (a[row][0] != b[row][0] || a[row][1] != b[row][1] || a[row][2] != b[row][2])
+			return false;
+	}
+	return true;
+}
+
+static Bool isPureRotation(const Matrix3D& m)
+{
+	// Scaled or skewed matrices do not convert to quaternions.
+	const Real tolerance = 0.01f;
+	for (Int row = 0; row < 3; ++row)
+	{
+		const Real lengthSqr = m[row][0] * m[row][0] + m[row][1] * m[row][1] + m[row][2] * m[row][2];
+		if (lengthSqr < 1.0f - tolerance || lengthSqr > 1.0f + tolerance)
+			return false;
+	}
+	return true;
+}
+
+static void blendSmoothMotionTransform(const Matrix3D& prev, const Matrix3D& cur, Real t, Matrix3D& out)
+{
+	Vector3 prevPos;
+	Vector3 curPos;
+	Vector3 pos;
+	prev.Get_Translation(&prevPos);
+	cur.Get_Translation(&curPos);
+	Vector3::Lerp(prevPos, curPos, t, &pos);
+
+	if (isSameRotation(prev, cur) || !isPureRotation(prev) || !isPureRotation(cur))
+	{
+		out = cur;
+		out.Set_Translation(pos);
+		return;
+	}
+
+	const Quaternion qa = Build_Quaternion(prev);
+	const Quaternion qb = Build_Quaternion(cur);
+
+	// Take the shorter arc. The rotation of one logic frame is small, so nlerp is as good as slerp.
+	const Real dot = qa.X * qb.X + qa.Y * qb.Y + qa.Z * qb.Z + qa.W * qb.W;
+	const Real wa = 1.0f - t;
+	const Real wb = (dot < 0.0f) ? -t : t;
+	Quaternion q(
+		wa * qa.X + wb * qb.X,
+		wa * qa.Y + wb * qb.Y,
+		wa * qa.Z + wb * qb.Z,
+		wa * qa.W + wb * qb.W);
+	q.Normalize();
+
+	out.Set(q, pos);
+}
+
+void Drawable::getSmoothMotionTransform(Matrix3D& mtx)
+{
+	const Object *obj = getObject();
+	if (obj == nullptr || TheGameLogic == nullptr)
+	{
+		// Client only drawables move at the render rate already.
+		mtx = *getTransformMatrix();
+		return;
+	}
+
+	const Matrix3D& logicMtx = *obj->getTransformMatrix();
+	mtx = logicMtx;
+
+	// Remember the transform of the previous logic frame. A drawable that was not seen in the
+	// previous logic frame (new, hidden, off screen, or after a load) starts without a blend.
+	const UnsignedInt logicFrame = TheGameLogic->getFrame();
+	if (!m_smoothMotionValid || logicFrame != m_smoothMotionLogicFrame)
+	{
+		if (m_smoothMotionValid && logicFrame == m_smoothMotionLogicFrame + 1)
+			m_smoothMotionPrevTransform = m_smoothMotionLastTransform;
+		else
+			m_smoothMotionPrevTransform = logicMtx;
+
+		m_smoothMotionLogicFrame = logicFrame;
+		m_smoothMotionValid = TRUE;
+	}
+	m_smoothMotionLastTransform = logicMtx;
+
+	if (!isSmoothMotionActive())
+		return;
+
+	const Real phase = TheFramePacer->getLogicFramePhase();
+	if (!(phase > 0.0f && phase < 1.0f))
+		return;
+
+	const Matrix3D& prevMtx = m_smoothMotionPrevTransform;
+	if (memcmp(&prevMtx, &logicMtx, sizeof(Matrix3D)) == 0)
+		return;
+
+	const Real dx = logicMtx.Get_X_Translation() - prevMtx.Get_X_Translation();
+	const Real dy = logicMtx.Get_Y_Translation() - prevMtx.Get_Y_Translation();
+	const Real dz = logicMtx.Get_Z_Translation() - prevMtx.Get_Z_Translation();
+	if (dx * dx + dy * dy + dz * dz > SMOOTH_MOTION_SNAP_DISTANCE_SQR)
+	{
+		// Teleported: show the new place for the rest of this logic frame.
+		m_smoothMotionPrevTransform = logicMtx;
+		return;
+	}
+
+	blendSmoothMotionTransform(prevMtx, logicMtx, phase, mtx);
 }
 
 //-------------------------------------------------------------------------------------------------

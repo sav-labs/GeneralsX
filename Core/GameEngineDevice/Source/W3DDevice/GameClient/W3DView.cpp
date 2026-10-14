@@ -1483,6 +1483,14 @@ void W3DView::update()
 			}
 			else
 			{	Coord3D objpos = *cameraLockObj->getPosition();
+				// GeneralsX @feature Claude 14/10/2026 Follow the drawn position, so the camera moves as smoothly as the unit.
+				if (Drawable *cameraLockObjDraw = cameraLockObj->getDrawable())
+				{
+					Matrix3D drawnMtx;
+					cameraLockObjDraw->getSmoothMotionTransform(drawnMtx);
+					objpos.x = drawnMtx.Get_X_Translation();
+					objpos.y = drawnMtx.Get_Y_Translation();
+				}
 				Coord3D curpos = getPosition();
 				// don't "snap" directly to the pos, but move there smoothly.
 				Real snapThreshSqr = sqr(TheGlobalData->m_partitionCellSize);
