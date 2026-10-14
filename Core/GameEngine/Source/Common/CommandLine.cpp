@@ -698,14 +698,8 @@ Int parsePreload( char *args[], int num )
 #endif
 
 
-#if defined(RTS_DEBUG)
-Int parseDisplayDebug(char *args[], int)
-{
-	TheWritableGlobalData->m_displayDebug = TRUE;
-
-	return 1;
-}
-
+// GeneralsX @feature Claude 14/10/2026 -file <map> is available in release builds so automated
+// tests can start a match on a map directly, for example to capture gameplay frames.
 Int parseFile(char *args[], int num)
 {
 	if (num > 1)
@@ -716,6 +710,14 @@ Int parseFile(char *args[], int num)
 	return 2;
 }
 
+
+#if defined(RTS_DEBUG)
+Int parseDisplayDebug(char *args[], int)
+{
+	TheWritableGlobalData->m_displayDebug = TRUE;
+
+	return 1;
+}
 
 Int parsePreloadEverything( char *args[], int num )
 {
@@ -784,7 +786,9 @@ Int parseNoFX(char *args[], int)
 	return 1;
 }
 
-#if defined(RTS_DEBUG) && ENABLE_CONFIGURABLE_SHROUD
+// GeneralsX @feature Claude 14/10/2026 -noshroud is available in release builds so a map started with
+// -file (no units, no vision) shows the battlefield in automated screenshots. Shroud is client-side only.
+#if ENABLE_CONFIGURABLE_SHROUD
 Int parseNoShroud(char *args[], int)
 {
 	TheWritableGlobalData->m_shroudOn = FALSE;
@@ -1219,6 +1223,10 @@ static CommandLineParam paramsForStartup[] =
 // These Params are parsed during Engine Init before INI data is loaded
 static CommandLineParam paramsForEngineInit[] =
 {
+#if ENABLE_CONFIGURABLE_SHROUD
+	{ "-noshroud", parseNoShroud },
+#endif
+	{ "-file", parseFile },
 	{ "-nologo", parseNoLogo }, // TheSuperHackers @tweak Is now available in Release builds.
 	{ "-noshellmap", parseNoShellMap },
 	{ "-noShellAnim", parseNoWindowAnimation }, // TheSuperHackers @tweak Is now available in Release builds.
@@ -1332,7 +1340,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-jabber", parseJabber },
 	{ "-munkee", parseMunkee },
 	{ "-displayDebug", parseDisplayDebug },
-	{ "-file", parseFile },
 
 //	{ "-preload", parsePreload },
 
@@ -1345,9 +1352,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-vTune", parseVTune },
 	{ "-selectTheUnselectable", parseSelectAll },
 	{ "-RunAhead", parseRunAhead },
-#if ENABLE_CONFIGURABLE_SHROUD
-	{ "-noshroud", parseNoShroud },
-#endif
 	{ "-forceBenchmark", parseForceBenchmark },
 	{ "-buildmapcache", parseBuildMapCache },
 	{ "-noshadowvolumes", parseNoShadows },
