@@ -6,7 +6,7 @@
 
 1. Reads every retail `*.big` in the given game folders (archives starting with `!` are skipped).
 2. Takes the textures under `Art/Textures/` and skips the ones used by `MappedImage` INI entries (UI, cameos, cursors), whose coordinates depend on the original size. Terrain tiles live outside `Art/Textures/` and are not touched.
-3. Upscales colour with Real-ESRGAN (`realesrgan-ncnn-vulkan`, runs on Vulkan) and alpha with Lanczos, capped at 2048 px.
+3. Upscales colour with Real-ESRGAN x4plus (ONNX Runtime with DirectML on the GPU, or the CPU; `realesrgan-ncnn-vulkan` as an alternative) and alpha with Lanczos, capped at 2048 px.
 4. Writes mipmapped DXT1 (opaque) or DXT5 (alpha) `.dds` files into `!HDTextures.big`. The `!` prefix makes the game prefer this archive over retail ones, and the texture loader opens `name.dds` before `name.tga`.
 
 Delete `!HDTextures.big` to go back to the original textures.
@@ -14,7 +14,8 @@ Delete `!HDTextures.big` to go back to the original textures.
 ## Requirements
 
 - Python 3.9+ and Pillow 11.2+ (`python -m pip install pillow`)
-- [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases) (BSD-3-Clause) with its `models/` folder, or [upscayl-bin](https://github.com/upscayl/upscayl-ncnn/releases) (AGPL-3.0, same command line on a newer ncnn) with the same models. The Windows package ships both and uses upscayl-bin: the 2022 realesrgan-ncnn-vulkan build fails `vkAllocateMemory` on the Radeon 780M.
+- For `--upscaler onnx` (the default when `realesrgan_x4plus.onnx` sits next to the tool): numpy and `onnxruntime-directml` (Windows GPU) or `onnxruntime` (CPU). Build the model with `python export_onnx.py RealESRGAN_x4plus.pth realesrgan_x4plus.onnx` (needs `onnx`, no PyTorch).
+- [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases) (BSD-3-Clause) with its `models/` folder, or [upscayl-bin](https://github.com/upscayl/upscayl-ncnn/releases) (AGPL-3.0, same command line on a newer ncnn) with the same models. Both ncnn builds fail `vkAllocateMemory` while loading the model on the Radeon 780M, so the Windows package defaults to the ONNX/DirectML path and keeps them only as `--upscaler esrgan`.
 
 ## Usage
 
