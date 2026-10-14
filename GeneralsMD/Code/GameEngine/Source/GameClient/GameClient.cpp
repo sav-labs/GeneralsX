@@ -61,6 +61,7 @@
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GlobalLanguage.h"
 #include "GameClient/GraphDraw.h"
+#include "GameClient/GUICallbacks.h"
 #include "GameClient/GUICommandTranslator.h"
 #include "GameClient/HeaderTemplate.h"
 #include "GameClient/HintSpy.h"
@@ -556,6 +557,11 @@ void GameClient::update()
 			else if (TheGlobalData->m_loadReplayGame.isNotEmpty())
 			{
 				TheRecorder->loadQueuedReplay();
+			}
+			// GeneralsX @feature Claude 14/10/2026 Start the skirmish requested with -skirmish once the shell is up
+			else if (TheGlobalData->m_initialSkirmishMap.isNotEmpty())
+			{
+				StartQueuedSkirmishGame();
 			}
 		}
 	}
