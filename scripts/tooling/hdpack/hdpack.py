@@ -115,7 +115,7 @@ def mapped_image_textures(archives, game_dirs):
 
 # ---------------------------------------------------------------- upscaling
 
-def upscale_rgb_esrgan(images, esrgan, model, scale, tile):
+def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
     """Upscale a dict of {key: RGB image} with realesrgan-ncnn-vulkan in one run."""
     with tempfile.TemporaryDirectory() as tmp:
         src, dst = Path(tmp, "in"), Path(tmp, "out")
@@ -130,6 +130,7 @@ def upscale_rgb_esrgan(images, esrgan, model, scale, tile):
         models = Path(esrgan).resolve().parent / "models"
         if models.is_dir():
             cmd += ["-m", str(models)]
+        cmd += extra_args
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
         out = {}
         for i, key in enumerate(images):
@@ -213,9 +214,12 @@ def decode(data):
 def default_esrgan():
     """The packaged hdpack.exe ships realesrgan-ncnn-vulkan.exe next to itself."""
     if getattr(sys, "frozen", False):
-        bundled = Path(sys.executable).parent / "realesrgan-ncnn-vulkan.exe"
-        if bundled.is_file():
-            return str(bundled)
+        # upscayl-bin is the same CLI on a newer ncnn; the 2022 realesrgan-ncnn-vulkan
+        # build fails vkAllocateMemory on the Radeon 780M before the first tile.
+        for exe in ("upscayl-bin.exe", "realesrgan-ncnn-vulkan.exe"):
+            bundled = Path(sys.executable).parent / exe
+            if bundled.is_file():
+                return str(bundled)
     return "realesrgan-ncnn-vulkan"
 
 
@@ -225,9 +229,10 @@ def main():
                     help="Folder with the retail .big files (repeat for Generals + Zero Hour; later wins)")
     ap.add_argument("--out", required=True, help="Output archive, e.g. <game>/!HDTextures.big")
     ap.add_argument("--upscaler", choices=("esrgan", "lanczos"), default="esrgan")
-    ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan")
+    ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan or upscayl-bin")
     ap.add_argument("--model", default="realesrgan-x4plus", help="Real-ESRGAN model name")
     ap.add_argument("--scale", type=int, choices=(2, 4), default=4)
+    ap.add_argument("--esrgan-args", default="", help='Extra upscaler arguments, e.g. "-g 0 -j 1:1:1"')
     ap.add_argument("--tile", type=int, default=128, help="Real-ESRGAN tile size in px (lower uses less VRAM, min 32)")
     ap.add_argument("--include", action="append", help="Only texture names matching this glob (e.g. AV*)")
     ap.add_argument("--exclude-list", help="Text file with texture names (no extension) to keep original")
@@ -280,7 +285,7 @@ def main():
 
         rgb = {k: v.convert("RGB") for k, v in batch.items()}
         if args.upscaler == "esrgan":
-            up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile)
+            up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
         else:
             up_rgb = {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
 

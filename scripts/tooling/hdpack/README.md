@@ -14,7 +14,7 @@ Delete `!HDTextures.big` to go back to the original textures.
 ## Requirements
 
 - Python 3.9+ and Pillow 11.2+ (`python -m pip install pillow`)
-- [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases) (BSD-3-Clause) with its `models/` folder
+- [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases) (BSD-3-Clause) with its `models/` folder, or [upscayl-bin](https://github.com/upscayl/upscayl-ncnn/releases) (AGPL-3.0, same command line on a newer ncnn) with the same models. The Windows package ships both and uses upscayl-bin: the 2022 realesrgan-ncnn-vulkan build fails `vkAllocateMemory` on the Radeon 780M.
 
 ## Usage
 
@@ -39,4 +39,5 @@ Useful options:
 - `--exclude-list keep.txt`: texture names that keep the original (one per line)
 - `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
 - `--scale 2`: 2x instead of 4x
+- `--esrgan-args "-g 0 -j 1:1:1"`: extra upscaler arguments (GPU id, thread counts)
 - `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)
