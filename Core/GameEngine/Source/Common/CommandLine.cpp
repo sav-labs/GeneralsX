@@ -34,6 +34,7 @@
 #include "Common/CommandLine.h"
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
+#include "Common/OptionPreferences.h"
 #include "Common/version.h"
 #include "Common/WorkingDirectory.h"
 #include "GameClient/ClientInstance.h"
@@ -134,6 +135,20 @@ Int parseUpscale(char *args[], int)
 	TheWritableGlobalData->m_windowed = true;
 	TheWritableGlobalData->m_upscaleToDisplay = true;
 
+	return 1;
+}
+
+// GeneralsX @feature Claude 14/10/2026 -renderscale <percent> overrides Options.ini RenderScale. Below 100 the
+// game renders at that share of the display size and FSR 1.0 upscales it; 100 turns it off.
+Int parseRenderScale(char *args[], int num)
+{
+	if (num > 1)
+	{
+		Int scale = atoi(args[1]);
+		if (scale > 0)
+			TheWritableGlobalData->m_renderScale = clamp((Int)OptionPreferences::RENDER_SCALE_MIN, scale, (Int)OptionPreferences::RENDER_SCALE_OFF);
+		return 2;
+	}
 	return 1;
 }
 
@@ -1218,6 +1233,7 @@ static CommandLineParam paramsForStartup[] =
 {
 	{ "-win", parseWin },
 	{ "-upscale", parseUpscale },
+	{ "-renderscale", parseRenderScale },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025

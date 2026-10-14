@@ -131,6 +131,11 @@ public:
 	Bool m_windowed;
 	// GeneralsX @feature Claude 12/10/2026 Borderless window at display size; the game renders at its own resolution and the swap chain upscales it.
 	Bool m_upscaleToDisplay;
+	// GeneralsX @feature Claude 14/10/2026 FSR render scale in percent of the display size (0 = read Options.ini RenderScale, 100 = off)
+	// and the display size the platform layer measured for it (0 when unknown).
+	Int m_renderScale;
+	Int m_renderScaleDisplayWidth;
+	Int m_renderScaleDisplayHeight;
 	Int m_xResolution;
 	Int m_yResolution;
 	Int m_maxShellScreens;  ///< this many shells layouts can be loaded at once
