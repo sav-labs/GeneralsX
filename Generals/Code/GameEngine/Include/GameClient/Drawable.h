@@ -411,6 +411,12 @@ public:
 
 	const Matrix3D *getTransformMatrix() const;	///< return the world transform
 
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames.
+	// Gets the world transform to render at: the logic transform, or a blend of the previous and the
+	// current logic transform by the logic frame phase. Client only, never feed the result into logic.
+	void getSmoothMotionTransform(Matrix3D& mtx);
+	const Coord3D *getSmoothMotionOffset() const { return &m_smoothMotionOffset; } ///< Rendered minus logic position of the last draw
+
 	void draw();													///< render the drawable to the given view
 	void updateDrawable(Real timeScale);														///< update the drawable
 
@@ -711,6 +717,13 @@ private:
 	DrawableLocoInfo*	m_locoInfo;	// lazily allocated
 
 	PhysicsXformInfo* m_physicsXform;
+
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames.
+	Matrix3D m_smoothMotionPrevTransform;	///< Object transform at the end of the previous logic frame
+	Matrix3D m_smoothMotionLastTransform;	///< Latest object transform seen in the current logic frame
+	Coord3D m_smoothMotionOffset;					///< Rendered minus logic position of the last draw, for screen overlays
+	UnsignedInt m_smoothMotionLogicFrame;	///< Logic frame of m_smoothMotionLastTransform
+	Bool m_smoothMotionValid;							///< The transforms above hold data
 
 	RefCountPtr<DynamicAudioEventRTS> m_ambientSound;		///< sound module for ambient sound (lazily allocated)
 

@@ -137,6 +137,8 @@ public:
 	Real getResolutionFontAdjustment();
 
 	Bool getShowMoneyPerMinute() const;
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	Bool getSmoothMotion() const;
 
 	Real getMaxCameraHeight() const;
 	Real getMinCameraHeight() const;
