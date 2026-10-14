@@ -28,6 +28,10 @@ env:
   # Real-ESRGAN ncnn Vulkan build (BSD-3-Clause), pinned by checksum.
   ESRGAN_URL: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip
   ESRGAN_SHA256: abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d
+  # upscayl-bin (AGPL-3.0): the same CLI on a newer ncnn, which works on the Radeon 780M
+  # where the 2022 build above fails vkAllocateMemory. Shipped unmodified with its licence.
+  UPSCAYL_URL: https://github.com/upscayl/upscayl-ncnn/releases/download/20240601-103425/upscayl-bin-20240601-103425-windows.zip
+  UPSCAYL_SHA256: 2707e7904cc186ca1e47be3a3735feb56219975b6926ff1c35e0dd21dbed2b81
 
 jobs:
   hdpack:
@@ -62,6 +66,17 @@ jobs:
           Copy-Item esrgan/realesrgan-ncnn-vulkan.exe, esrgan/vcomp140.dll dist/
           Copy-Item esrgan/models/realesrgan-x4plus.* dist/models/
           Copy-Item scripts/tooling/hdpack/README.md dist/
+
+      - name: Bundle upscayl-bin
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:UPSCAYL_URL -OutFile upscayl.zip
+          $hash = (Get-FileHash upscayl.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:UPSCAYL_SHA256) { throw "upscayl-bin checksum mismatch: $hash" }
+          Expand-Archive upscayl.zip -DestinationPath upscayl
+          $dir = Get-ChildItem upscayl -Directory | Select-Object -First 1
+          Copy-Item (Join-Path $dir.FullName "upscayl-bin.exe") dist/
+          Copy-Item (Join-Path $dir.FullName "LICENSE") dist/LICENSE-upscayl-bin.txt
 
       - name: Check the bundle runs
         shell: pwsh
