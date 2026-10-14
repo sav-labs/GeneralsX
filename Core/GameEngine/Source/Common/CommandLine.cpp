@@ -783,6 +783,25 @@ Int parseSkirmish(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 14/10/2026 Drive the tactical camera on a fixed, input-free script once a match
+// has started: -camtest [seconds]. The optional duration of the pan defaults to 8 seconds.
+// Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
+Int parseCameraTest(char *args[], int num)
+{
+	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
+
+	if (num > 1 && args[1][0] >= '0' && args[1][0] <= '9')
+	{
+		const Real seconds = (Real)atof(args[1]);
+		if (seconds > 0.0f)
+		{
+			TheWritableGlobalData->m_cameraTestSeconds = seconds;
+		}
+		return 2;
+	}
+	return 1;
+}
+
 Int parseLoadReplay(char *args[], int num)
 {
 	if (num > 1)
@@ -1264,6 +1283,9 @@ static CommandLineParam paramsForEngineInit[] =
 
 	// GeneralsX @feature Claude 14/10/2026 Start a skirmish match against AI from the command line.
 	{ "-skirmish", parseSkirmish },
+
+	// GeneralsX @feature Claude 14/10/2026 Fly the tactical camera on a fixed script without user input.
+	{ "-camtest", parseCameraTest },
 
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },

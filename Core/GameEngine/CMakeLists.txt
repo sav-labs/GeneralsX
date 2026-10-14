@@ -144,6 +144,7 @@ set(GAMEENGINE_SRC
     Include/Common/XferSave.h
     Include/GameClient/Anim2D.h
     Include/GameClient/AnimateWindowManager.h
+    Include/GameClient/CameraTest.h
 #    Include/GameClient/CampaignManager.h
     Include/GameClient/ChallengeGenerals.h
     Include/GameClient/ClientInstance.h
@@ -705,6 +706,7 @@ set(GAMEENGINE_SRC
     Source/Common/version.cpp
     Source/Common/WorkerProcess.cpp
     Source/Common/WorkingDirectory.cpp
+    Source/GameClient/CameraTest.cpp
     Source/GameClient/ClientInstance.cpp
     Source/GameClient/Color.cpp
     Source/GameClient/Credits.cpp

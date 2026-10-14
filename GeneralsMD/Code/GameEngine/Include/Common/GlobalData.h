@@ -369,6 +369,8 @@ public:
 	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish <map> [aiCount]
 	AsciiString m_initialSkirmishMap;	///< If this is specified, start a skirmish on this map from the command-line
 	Int m_initialSkirmishAICount;			///< Number of AI opponents for m_initialSkirmishMap
+	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest [seconds]
+	Real m_cameraTestSeconds;				///< Duration of the -camtest pan in seconds, 0 when disabled
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation

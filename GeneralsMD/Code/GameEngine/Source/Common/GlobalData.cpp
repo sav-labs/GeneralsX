@@ -1023,6 +1023,8 @@ GlobalData::GlobalData()
 	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish
 	m_initialSkirmishMap.clear();
 	m_initialSkirmishAICount = 1;
+	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
+	m_cameraTestSeconds = 0.0f;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
