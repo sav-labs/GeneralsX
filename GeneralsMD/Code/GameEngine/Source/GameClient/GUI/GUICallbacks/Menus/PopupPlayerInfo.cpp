@@ -47,6 +47,7 @@
 #include "GameClient/GadgetProgressBar.h"
 #include "GameClient/GadgetStaticText.h"
 #include "GameClient/Display.h"
+#include "GameClient/UILayout.h"
 #include "GameClient/MessageBox.h"
 #include "GameNetwork/GameSpyOverlay.h"
 #include "GameNetwork/GameSpy/PeerDefs.h"
@@ -479,8 +480,11 @@ void ResetBattleHonorInsertion()
 }
 void InsertBattleHonor(GameWindow *list, const Image *image, Bool enabled, Int itemData, Int& row, Int& column, UnicodeString text = UnicodeString::TheEmptyString, Int extra = 0)
 {
-	Int width = MAX_BATTLE_HONOR_IMAGE_WIDTH * (TheDisplay->getWidth() / static_cast<float>(DEFAULT_DISPLAY_WIDTH));
-	Int height = MAX_BATTLE_HONOR_IMAGE_HEIGHT * (TheDisplay->getHeight() / static_cast<float>(DEFAULT_DISPLAY_HEIGHT));
+	// GeneralsX @feature Claude 14/10/2026 Size battle honor icons with the shared UI layout scale so
+	// they keep their proportions inside the list box on displays wider than 4:3
+	const UILayoutTransform layout = UILayoutGetDefaultTransform();
+	Int width = MAX_BATTLE_HONOR_IMAGE_WIDTH * layout.scaleX;
+	Int height = MAX_BATTLE_HONOR_IMAGE_HEIGHT * layout.scaleY;
 
 	static Int enabledColor = 0xFFFFFFFF;
 	static Int disabledColor = GameMakeColor(80, 80, 80, 255);

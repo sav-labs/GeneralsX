@@ -193,6 +193,8 @@ jobs:
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
           ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
           Pick the game resolution in Options; use the same aspect ratio as the display.
+          FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
+          the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
           "@ | Set-Content artifacts/INSTALL.txt
           Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip
 

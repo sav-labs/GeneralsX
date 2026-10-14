@@ -202,6 +202,62 @@ Bool dispChanged = FALSE;
 extern Int timer;
 extern void DoResolutionDialog();
 static Bool ignoreSelected = FALSE;
+
+// GeneralsX @feature Claude 14/10/2026 FSR render scales offered as extra entries of the resolution combo box,
+// so no new control (and no OptionsMenu.wnd change) is needed. The entry's item data holds the scale percent.
+static const Int renderScaleChoices[] = { 77, 67, 59, 50 };
+static Bool renderScaleChanged = FALSE;
+
+static Int getActiveRenderScale()
+{
+	if (TheGlobalData->m_upscaleToDisplay && TheGlobalData->m_renderScale > 0 && TheGlobalData->m_renderScale < OptionPreferences::RENDER_SCALE_OFF)
+		return TheGlobalData->m_renderScale;
+	return OptionPreferences::RENDER_SCALE_OFF;
+}
+
+static Int getRenderScaleOfResolutionEntry(Int index)
+{
+	Int scale = (Int)(uintptr_t)GadgetComboBoxGetItemData(comboBoxResolution, index);
+	if (scale <= 0 || scale > OptionPreferences::RENDER_SCALE_OFF)
+		return OptionPreferences::RENDER_SCALE_OFF;
+	return scale;
+}
+
+static Int addRenderScaleEntry(Int scale, Color color)
+{
+	Int xres, yres;
+	if (!OptionPreferences::getRenderScaleResolution(scale, TheGlobalData->m_renderScaleDisplayWidth, TheGlobalData->m_renderScaleDisplayHeight, &xres, &yres))
+		return -1;
+
+	UnicodeString str;
+	str.format(L"%d x %d (FSR %d%%)", xres, yres, scale);
+	Int index = GadgetComboBoxAddEntry(comboBoxResolution, str, color);
+	GadgetComboBoxSetItemData(comboBoxResolution, index, (void *)(uintptr_t)scale);
+	return index;
+}
+
+// Appends the render scale entries and returns the index of the active one, or -1.
+static Int populateRenderScaleEntries(Color color)
+{
+	const Int activeRenderScale = getActiveRenderScale();
+	Int activeIndex = -1;
+	Bool activeListed = FALSE;
+
+	for (Int i = 0; i < (Int)ARRAY_SIZE(renderScaleChoices); ++i)
+	{
+		Int index = addRenderScaleEntry(renderScaleChoices[i], color);
+		if (renderScaleChoices[i] == activeRenderScale)
+		{
+			activeIndex = index;
+			activeListed = TRUE;
+		}
+	}
+
+	if (!activeListed && activeRenderScale < OptionPreferences::RENDER_SCALE_OFF)
+		activeIndex = addRenderScaleEntry(activeRenderScale, color);
+
+	return activeIndex;
+}
 WindowLayout *OptionsLayout = nullptr;
 
 static OptionPreferences *pref = nullptr;
@@ -824,7 +880,35 @@ static void saveOptions()
 	oldDispSettings.bitDepth = TheDisplay->getBitDepth();
 	oldDispSettings.windowed = TheDisplay->getWindowed();
 
-	if (comboBoxResolution && comboBoxResolution->winGetEnabled() && index < TheDisplay->getDisplayModeCount() && index >= 0)
+	// GeneralsX @feature Claude 14/10/2026 Render scale entries write RenderScale for the next start, because
+	// the borderless window and DXVK_FSR are set up before the device exists. While FSR is active, a display
+	// mode entry turns it off for the next start and becomes the saved Resolution instead of a live change.
+	renderScaleChanged = FALSE;
+	Bool renderScaleInvolved = FALSE;
+	if (comboBoxResolution && comboBoxResolution->winGetEnabled() && index >= 0)
+	{
+		const Int activeRenderScale = getActiveRenderScale();
+		const Int selectedRenderScale = getRenderScaleOfResolutionEntry(index);
+		renderScaleInvolved = activeRenderScale < OptionPreferences::RENDER_SCALE_OFF || selectedRenderScale < OptionPreferences::RENDER_SCALE_OFF;
+
+		if (selectedRenderScale != activeRenderScale)
+		{
+			AsciiString prefString;
+			prefString.format("%d", selectedRenderScale);
+			(*pref)["RenderScale"] = prefString;
+			renderScaleChanged = TRUE;
+		}
+
+		if (activeRenderScale < OptionPreferences::RENDER_SCALE_OFF && index < TheDisplay->getDisplayModeCount())
+		{
+			TheDisplay->getDisplayModeDescription(index, &xres, &yres, &bitDepth);
+			AsciiString prefString;
+			prefString.format("%d %d", xres, yres);
+			(*pref)["Resolution"] = prefString;
+		}
+	}
+
+	if (!renderScaleInvolved && comboBoxResolution && comboBoxResolution->winGetEnabled() && index < TheDisplay->getDisplayModeCount() && index >= 0)
 	{
 		TheDisplay->getDisplayModeDescription(index,&xres,&yres,&bitDepth);
 		if (TheGlobalData->m_xResolution != xres || TheGlobalData->m_yResolution != yres)
@@ -1197,6 +1281,12 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 		if ( xres == displayWidth && yres == displayHeight )
 			selectedResIndex=i;
 	}
+
+	// GeneralsX @feature Claude 14/10/2026 With FSR active the display runs at a scaled resolution;
+	// select its render scale entry instead of a display mode of the same size.
+	Int renderScaleIndex = populateRenderScaleEntries(color);
+	if (renderScaleIndex >= 0)
+		selectedResIndex = renderScaleIndex;
 
 	if (selectedResIndex == -1)
 	{
@@ -1605,6 +1695,13 @@ WindowMsgHandledType OptionsMenuSystem( GameWindow *window, UnsignedInt msg,
 					{
 						DoResolutionDialog();
 					}
+				}
+
+				// GeneralsX @feature Claude 14/10/2026 A new render scale applies on the next start.
+				if (renderScaleChanged)
+				{
+					renderScaleChanged = FALSE;
+					MessageBoxOk(UnicodeString(L"Render Scale"), UnicodeString(L"Restart the game to apply the new render scale."), nullptr);
 				}
 
 			}
