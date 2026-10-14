@@ -78,6 +78,8 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 {
 	// GeneralsX @feature BenderAI 21/04/2026 Opt-out flag for in-game update checker
 	{ "CheckForUpdates",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_checkForUpdates ) },
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	{ "SmoothMotion",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_smoothMotion ) },
 	{ "Windowed",									INI::parseBool,				nullptr,			offsetof( GlobalData, m_windowed ) },
 	{ "XResolution",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_xResolution ) },
 	{ "YResolution",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_yResolution ) },
@@ -651,6 +653,8 @@ GlobalData::GlobalData()
 	m_headless = FALSE;
 	// GeneralsX @feature BenderAI 21/04/2026 Default to TRUE; user can override via Options.ini
 	m_checkForUpdates = TRUE;
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	m_smoothMotion = TRUE;
 	m_windowed = 0;
 	m_upscaleToDisplay = FALSE;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
@@ -1239,6 +1243,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_gameTimeFontSize = optionPref.getGameTimeFontSize();
 	TheWritableGlobalData->m_playerInfoListFontSize = optionPref.getPlayerInfoListFontSize();
 	TheWritableGlobalData->m_showMoneyPerMinute = optionPref.getShowMoneyPerMinute();
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	TheWritableGlobalData->m_smoothMotion = optionPref.getSmoothMotion();
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
 	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
 	TheWritableGlobalData->m_skirmishTickRate = optionPref.getSkirmishTickRate();

@@ -889,6 +889,20 @@ Bool OptionPreferences::getShowMoneyPerMinute() const
 	return FALSE;
 }
 
+// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+Bool OptionPreferences::getSmoothMotion() const
+{
+	OptionPreferences::const_iterator it = find("SmoothMotion");
+	if (it == end())
+		return TheGlobalData->m_smoothMotion;
+
+	if (stricmp(it->second.str(), "yes") == 0)
+	{
+		return TRUE;
+	}
+	return FALSE;
+}
+
 Real OptionPreferences::getMaxCameraHeight() const
 {
 	OptionPreferences::const_iterator it = find("MaxCameraHeight");

@@ -128,6 +128,9 @@ public:
 	// GeneralsX @feature BenderAI 21/04/2026 Allow user to opt out of the in-game update checker
 	Bool m_checkForUpdates;
 
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	Bool m_smoothMotion;
+
 	Bool m_windowed;
 	// GeneralsX @feature Claude 12/10/2026 Borderless window at display size; the game renders at its own resolution and the swap chain upscales it.
 	Bool m_upscaleToDisplay;
