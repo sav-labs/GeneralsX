@@ -36,7 +36,7 @@ Useful options:
 
 - `--include "AV*"`: only textures matching a glob (prototype on one faction)
 - `--limit 30`: stop after N textures
-- `--preview-dir previews`: write `<name>_before.png` / `<name>_after.png` pairs and `compare.jpg` (1:1 crops, bicubic on the left, pack on the right)
+- `--preview-dir previews`: write `<name>_before.png` / `<name>_after.png` pairs and `compare_001.jpg`, `compare_002.jpg`, ... (40 textures per sheet, 1:1 crops, bicubic on the left, pack on the right)
 - `--exclude-list keep.txt`: texture names that keep the original (one per line)
 - `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
 - `--scale 2`: 2x instead of 4x

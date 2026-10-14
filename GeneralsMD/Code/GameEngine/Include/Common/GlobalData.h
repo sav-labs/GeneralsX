@@ -371,6 +371,9 @@ public:
 	AsciiString m_pendingFile;				///< If this is specified, use this map at the next game start
 	AsciiString m_loadSaveGame;				///< If this is specified, load a save game file from the command-line
 	AsciiString m_loadReplayGame;			///< If this is specified, play a replay file from the command-line
+	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish <map> [aiCount]
+	AsciiString m_initialSkirmishMap;	///< If this is specified, start a skirmish on this map from the command-line
+	Int m_initialSkirmishAICount;			///< Number of AI opponents for m_initialSkirmishMap
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation

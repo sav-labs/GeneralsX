@@ -1009,6 +1009,9 @@ GlobalData::GlobalData()
 	m_buildMapCache = FALSE;
 	m_initialFile.clear();
 	m_pendingFile.clear();
+	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish
+	m_initialSkirmishMap.clear();
+	m_initialSkirmishAICount = 1;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
