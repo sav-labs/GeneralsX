@@ -62,6 +62,7 @@
 
 #include "GameClient/Display.h"
 #include "GameClient/GlobalLanguage.h"
+#include "GameClient/UILayout.h"
 
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -226,6 +227,12 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 {
 	Real adjustFactor;
 
+	// GeneralsX @feature Claude 14/10/2026 On displays wider than 4:3 the interface keeps its
+	// proportions (uniform scale by height, centered), so fonts must follow the layout width
+	// instead of the full display width or text would overflow its windows.
+	// Identical to retail at 4:3 and on taller displays.
+	const UILayoutTransform layout = UILayoutGetDefaultTransform();
+
 	switch (method)
 	{
 	default:
@@ -233,7 +240,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 	{
 		// TheSuperHackers @info The original font scaling for this game.
 		// Useful for not breaking legacy Addons and Mods. Scales poorly with large resolutions.
-		adjustFactor = TheDisplay->getWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
+		adjustFactor = layout.scaleX;
 		adjustFactor = 1.0f + (adjustFactor - 1.0f) * scaler;
 		if (adjustFactor > 2.0f)
 			adjustFactor = 2.0f;
@@ -243,7 +250,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 	{
 		// TheSuperHackers @feature The original font scaling, but without ceiling.
 		// Useful for not changing the original look of the game. Scales alright with large resolutions.
-		adjustFactor = TheDisplay->getWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
+		adjustFactor = layout.scaleX;
 		adjustFactor = 1.0f + (adjustFactor - 1.0f) * scaler;
 		break;
 	}
@@ -264,7 +271,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 		// prevent oversizing.
 		constexpr const Real maxAspect = 1.8f;
 		constexpr const Real minAspect = 1.0f;
-		Real w = TheDisplay->getWidth();
+		Real w = layout.isPillarboxed() ? (Real)DEFAULT_DISPLAY_WIDTH * layout.scaleX : (Real)TheDisplay->getWidth();
 		Real h = TheDisplay->getHeight();
 		const Real aspect = w / h;
 		Real wScale = w / (Real)DEFAULT_DISPLAY_WIDTH;
