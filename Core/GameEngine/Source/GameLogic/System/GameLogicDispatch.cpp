@@ -896,13 +896,22 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 	if ( msg->getArgumentCount() >= 3 )
 		rankPoints = msg->getArgument( 2 )->integer;
 
+	// GeneralsX @tweak Claude 14/10/2026 The match FPS argument is the retail game speed (Skirmish
+	// slider, stored in the replay header, usually 30). Retail tied logic to render, so it used to
+	// cap rendering too and replays showed 30[30]. It now paces the logic only, and the render cap
+	// never drops below the user's FramesPerSecondLimit. Logic frames stay discrete, so the
+	// simulation and replay CRCs are unchanged; only the drawn frames per logic frame change.
+	Int gameSpeedFps = LOGICFRAMES_PER_SECOND;
 	if ( msg->getArgumentCount() >= 4 )
 	{
 		Int maxFPS = msg->getArgument( 3 )->integer;
 		if (maxFPS < 1 || maxFPS > 1000)
 			maxFPS = TheGlobalData->m_framesPerSecondLimit;
-		DEBUG_LOG(("Setting max FPS limit to %d FPS", maxFPS));
-		TheFramePacer->setFramesPerSecondLimit(maxFPS);
+		else
+			gameSpeedFps = maxFPS;
+		const Int renderFps = std::max(maxFPS, TheGlobalData->m_framesPerSecondLimit);
+		DEBUG_LOG(("Setting max FPS limit to %d FPS (game speed %d FPS)", renderFps, gameSpeedFps));
+		TheFramePacer->setFramesPerSecondLimit(renderFps);
 		TheWritableGlobalData->m_useFpsLimit = true;
 	}
 
@@ -927,8 +936,8 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 	}
 	else
 	{
-		TheFramePacer->setLogicTimeScaleFps(LOGICFRAMES_PER_SECOND);
-		TheFramePacer->enableLogicTimeScale(LOGICFRAMES_PER_SECOND < TheFramePacer->getFramesPerSecondLimit());
+		TheFramePacer->setLogicTimeScaleFps(gameSpeedFps);
+		TheFramePacer->enableLogicTimeScale(gameSpeedFps < TheFramePacer->getFramesPerSecondLimit());
 	}
 
 	// prepare for new game
