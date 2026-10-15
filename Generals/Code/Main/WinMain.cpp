@@ -833,6 +833,16 @@ static void applyRenderScale()
 
 	if (GetEnvironmentVariableA( "DXVK_FSR", nullptr, 0 ) == 0)
 		SetEnvironmentVariableA( "DXVK_FSR", "1" );
+
+	// GeneralsX @feature Claude 15/10/2026 Options.ini FSRSharpness sets the RCAS pass that DXVK runs after
+	// EASU (DXVK_FSR_SHARPNESS, in stops, 0 = sharpest). A DXVK_FSR_SHARPNESS value the player set is kept.
+	if (GetEnvironmentVariableA( "DXVK_FSR_SHARPNESS", nullptr, 0 ) == 0)
+	{
+		OptionPreferences optionPref;
+		char sharpness[32];
+		snprintf( sharpness, sizeof(sharpness), "%.2f", optionPref.getFSRSharpness() );
+		SetEnvironmentVariableA( "DXVK_FSR_SHARPNESS", sharpness );
+	}
 }
 
 // WinMain ====================================================================
