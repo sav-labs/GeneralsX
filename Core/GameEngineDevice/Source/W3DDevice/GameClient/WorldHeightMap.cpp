@@ -979,6 +979,13 @@ Bool WorldHeightMap::ParseBlendTileDataChunk(DataChunkInput &file, DataChunkInfo
 	return pThis->ParseBlendTileData(file, info, userData);
 }
 
+// GeneralsX @feature Claude 15/10/2026 Tile sheet grid sizes, shared by readTexClass and the
+// TGA tile reader below (see ChooseTileGrid).
+#define LEGACY_TILE_PIXEL_EXTENT 64
+#define MIN_SOURCE_TILE_EXTENT LEGACY_TILE_PIXEL_EXTENT
+#define MAX_SOURCE_TILE_EXTENT 2048
+#define MAX_TILE_GRID_WIDTH 10
+
 /** Function to read in the tiles for a texture class. */
 void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
 {
@@ -1004,8 +1011,8 @@ void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
 	if (theFile != nullptr) {
 		GDIFileStream theStream(theFile);
 		InputStream *pStr = &theStream;
-		Bool isLegacyGrid = false;
-		Int numTiles = WorldHeightMap::countTiles(pStr, nullptr, texClass->numTiles, &isLegacyGrid);
+		Int srcCellExtent = 0;
+		Int numTiles = WorldHeightMap::countTiles(pStr, nullptr, texClass->numTiles, &srcCellExtent);
 		theFile->seek(0, File::START);
 		if (numTiles >= texClass->numTiles) {
 			numTiles = texClass->numTiles;
@@ -1016,7 +1023,16 @@ void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
 					break;
 				}
 			}
-			WorldHeightMap::readTiles(pStr, tileData+texClass->firstTile, width, isLegacyGrid);
+			// GeneralsX @feature Claude 15/10/2026 Report sheets that are not retail 64 px cells
+			// (HD texture packs), so a pack can be checked from the console.
+			if (srcCellExtent != LEGACY_TILE_PIXEL_EXTENT) {
+				fprintf(stderr, "[TerrainHD] %s: %dx%d tiles of %d px -> %d px atlas cells (%s)\n",
+					theFile->getName(), width, width, srcCellExtent, TILE_PIXEL_EXTENT,
+					srcCellExtent < TILE_PIXEL_EXTENT ? "upscaled" :
+					(srcCellExtent == TILE_PIXEL_EXTENT ? "full resolution" : "downscaled to fit the atlas"));
+				fflush(stderr);
+			}
+			WorldHeightMap::readTiles(pStr, tileData+texClass->firstTile, width, srcCellExtent);
 		}
 		theFile->close();
 	}
@@ -1302,35 +1318,80 @@ typedef struct {
 // fallback, a legacy file's imageWidth/TILE_PIXEL_EXTENT floors to 0 and the file is
 // silently rejected (0 tiles), breaking every unmodified map/mod.
 //
-// Detection rule (documented per plan): try the *native* 256px-cell grid first, but
-// only trust it when it alone can satisfy the texture class's INI-declared tile count
-// (expectedTileCount). This resolves the one genuinely ambiguous width -- 256px, which
-// is simultaneously a valid native 1x1 HD grid AND a valid legacy 4x4 grid of 64px
-// cells (16 tiles) -- because the base game genuinely ships 256px-wide legacy sheets
-// (width census: 32, 64, 128, 256, 640). Any other width where both interpretations
-// divide evenly is treated as legacy too (matches actual on-disk content) -- this is
-// the "treat legacy files as 64-grids by default" simplification. The old "halfTile"
-// sub-tile case (a lone 32x32 image = half of a legacy 64px cell) keeps keying off the
-// legacy half-extent (32), not a new native half-extent, so it matches the same files
-// it always did.
-#define LEGACY_TILE_PIXEL_EXTENT 64
+// GeneralsX @feature Claude 15/10/2026 Detects the source cell size of AI-upscaled tile sheets.
+// The texture class stored in the map already says how many tiles its sheet holds
+// (numTiles = gridWidth^2, counted from the retail 64px-cell sheet when the map was made).
+// A sheet upscaled by any power of two keeps that grid, so its cell size is the largest
+// power of two from 64 to 2048 px that still fits gridWidth cells across the image:
+// 64 for every retail sheet (identical to the old legacy pick), 128 for a 2x sheet,
+// 256 for a 4x sheet, 512 for 8x, and so on. The old rule only knew 64 and 256 and read
+// the top-left quarter of 2x and 8x sheets as if they were 64 or 256 px cells. Cells below
+// TILE_PIXEL_EXTENT are replicated up as before (retail path unchanged); cells above it
+// are box-filtered down, because the shared terrain atlas keeps 256 px cells (see the
+// diary entry of 15/10/2026 for the atlas budget). When the class count is unknown
+// (trees, WorldBuilder) or no power-of-two cell fits, the previous 64/256 rule is used.
+
+/// Number of whole cells of cellExtent pixels along the shorter side of the image.
+static Int TileGridForCell(Int imageWidth, Int imageHeight, Int cellExtent)
+{
+	Int gridW = imageWidth / cellExtent;
+	Int gridH = imageHeight / cellExtent;
+	return (gridW < gridH) ? gridW : gridH;
+}
+
+/// Grid width (NxN) that readTexClass uses for a texture class of tileCount tiles.
+static Int GridWidthForTileCount(Int tileCount)
+{
+	for (Int width = MAX_TILE_GRID_WIDTH; width >= 1; width--) {
+		if (tileCount >= width*width) {
+			return width;
+		}
+	}
+	return 0;
+}
+
+/// Largest power-of-two source cell that still fits gridWidth x gridWidth cells, or 0.
+static Int FindSourceCellExtent(Int imageWidth, Int imageHeight, Int gridWidth)
+{
+	if (gridWidth < 1) {
+		return 0;
+	}
+	for (Int cell = MAX_SOURCE_TILE_EXTENT; cell >= MIN_SOURCE_TILE_EXTENT; cell /= 2) {
+		if (TileGridForCell(imageWidth, imageHeight, cell) >= gridWidth) {
+			return cell;
+		}
+	}
+	return 0;
+}
 
 static Bool ChooseTileGrid(Short imageWidth, Short imageHeight, Int expectedTileCount,
-														Int &outTileWidth, Int &outTileHeight, Bool &outIsLegacyGrid)
+														Int &outTileWidth, Int &outTileHeight, Int &outCellExtent)
 {
+	// GeneralsX @feature Claude 15/10/2026 Prefer the grid the texture class asks for (see above).
+	if (expectedTileCount > 0) {
+		Int cell = FindSourceCellExtent(imageWidth, imageHeight, GridWidthForTileCount(expectedTileCount));
+		if (cell > 0) {
+			outCellExtent = cell;
+			outTileWidth = imageWidth / cell;
+			outTileHeight = imageHeight / cell;
+			return true;
+		}
+	}
+
+	// Previous rule: try the *native* 256px-cell grid first, but only trust it when it
+	// alone can satisfy the texture class's INI-declared tile count (expectedTileCount).
+	// This resolves the one genuinely ambiguous width -- 256px, which is simultaneously
+	// a valid native 1x1 HD grid AND a valid legacy 4x4 grid of 64px cells (16 tiles).
 	Int nativeW = imageWidth / TILE_PIXEL_EXTENT;
 	Int nativeH = imageHeight / TILE_PIXEL_EXTENT;
-	Bool nativeValid = (nativeW>=1 && nativeW<=10 && nativeH>=1 && nativeH<=10);
+	Bool nativeValid = (nativeW>=1 && nativeW<=MAX_TILE_GRID_WIDTH && nativeH>=1 && nativeH<=MAX_TILE_GRID_WIDTH);
 
 	Int legacyW = imageWidth / LEGACY_TILE_PIXEL_EXTENT;
 	Int legacyH = imageHeight / LEGACY_TILE_PIXEL_EXTENT;
-	Bool legacyValid = (legacyW>=1 && legacyW<=10 && legacyH>=1 && legacyH<=10);
+	Bool legacyValid = (legacyW>=1 && legacyW<=MAX_TILE_GRID_WIDTH && legacyH>=1 && legacyH<=MAX_TILE_GRID_WIDTH);
 
 	Bool useLegacy;
 	if (nativeValid && legacyValid) {
-		// Ambiguous width: only trust native when the class can't possibly want more
-		// tiles than the (smaller) native grid provides -- i.e. this really is a fresh
-		// HD single/few-tile replacement, not an unmodified legacy sheet.
 		useLegacy = !(expectedTileCount > 0 && expectedTileCount <= nativeW*nativeH);
 	} else if (legacyValid) {
 		useLegacy = true;
@@ -1340,21 +1401,21 @@ static Bool ChooseTileGrid(Short imageWidth, Short imageHeight, Int expectedTile
 		return false;
 	}
 
-	outIsLegacyGrid = useLegacy;
+	outCellExtent = useLegacy ? LEGACY_TILE_PIXEL_EXTENT : TILE_PIXEL_EXTENT;
 	outTileWidth = useLegacy ? legacyW : nativeW;
 	outTileHeight = useLegacy ? legacyH : nativeH;
 	return true;
 }
 
 /// Count how many tiles come in from a targa file.
-Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile, Int expectedTileCount, Bool *pIsLegacyGrid)
+Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile, Int expectedTileCount, Int *pSrcCellExtent)
 {
 	TTargaHeader hdr;
 	if (halfTile) {
 		*halfTile = false;
 	}
-	if (pIsLegacyGrid) {
-		*pIsLegacyGrid = false;
+	if (pSrcCellExtent) {
+		*pSrcCellExtent = 0;
 	}
 	Int len = pStr->read(&hdr,sizeof(hdr));
 	if (len!=sizeof(hdr)) return(0);
@@ -1369,10 +1430,9 @@ Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile, Int expectedTi
 	if (hdr.pixelDepth < 24) return(false);
 	if (hdr.pixelDepth > 32) return(false);
 
-	Int tileWidth, tileHeight;
-	Bool isLegacyGrid = false;
-	if (ChooseTileGrid(hdr.imageWidth, hdr.imageHeight, expectedTileCount, tileWidth, tileHeight, isLegacyGrid)) {
-		if (pIsLegacyGrid) *pIsLegacyGrid = isLegacyGrid;
+	Int tileWidth, tileHeight, cellExtent;
+	if (ChooseTileGrid(hdr.imageWidth, hdr.imageHeight, expectedTileCount, tileWidth, tileHeight, cellExtent)) {
+		if (pSrcCellExtent) *pSrcCellExtent = cellExtent;
 		// 3x3 gives 9,
 		// 2x2 gives 4,
 		// 1x1 gives 1,
@@ -1392,41 +1452,50 @@ Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile, Int expectedTi
 	// as wide/tall as one LEGACY cell (32x32), always legacy-scattered.
 	if (halfTile && hdr.imageHeight==LEGACY_TILE_PIXEL_EXTENT/2 && hdr.imageWidth==LEGACY_TILE_PIXEL_EXTENT/2) {
 		*halfTile = true;
-		if (pIsLegacyGrid) *pIsLegacyGrid = true;
+		if (pSrcCellExtent) *pSrcCellExtent = LEGACY_TILE_PIXEL_EXTENT/2;
 		return 1;
 	}
 	return(0);
 }
 /*Break down a .tga file into a collection of tiles.  numRows * numRows total tiles.
-	isLegacyGrid must be the interpretation countTiles() already chose for this same
-	file (via ChooseTileGrid) -- readTiles does not re-derive it, so the two stay
-	consistent even in the ambiguous-width case. */
-Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows, Bool isLegacyGrid)
+	srcCellExtent should be the cell size countTiles() already chose for this same file,
+	so the two stay consistent even in the ambiguous-width case. 0 derives it from
+	numRows (largest power-of-two cell that fits numRows cells, or a lone 32x32 half tile). */
+Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows, Int srcCellExtent)
 {
 	TTargaHeader hdr;
 	pStr->read(&hdr, sizeof(hdr));
 
-	// Effective source-cell pixel size for this file's grid. scale is how many times
-	// each decoded source pixel is nearest-neighbor replicated per axis into the
-	// native TILE_PIXEL_EXTENT destination cell; scale==1 (no scatter, byte-identical
-	// to the pre-patch loop) for native HD content.
-	Int srcCellExtent = isLegacyGrid ? LEGACY_TILE_PIXEL_EXTENT : TILE_PIXEL_EXTENT;
+	if (numRows < 1) {
+		return(false);
+	}
+	// GeneralsX @feature Claude 15/10/2026 Source cells of any power of two from 32 to 2048 px.
+	if (srcCellExtent <= 0) {
+		srcCellExtent = FindSourceCellExtent(hdr.imageWidth, hdr.imageHeight, numRows);
+		if (srcCellExtent == 0 && numRows == 1 &&
+				hdr.imageWidth == LEGACY_TILE_PIXEL_EXTENT/2 && hdr.imageHeight == LEGACY_TILE_PIXEL_EXTENT/2) {
+			srcCellExtent = LEGACY_TILE_PIXEL_EXTENT/2;
+		}
+	}
+	if (srcCellExtent < LEGACY_TILE_PIXEL_EXTENT/2 || srcCellExtent > MAX_SOURCE_TILE_EXTENT) {
+		return(false);
+	}
+	// scale: how many times each decoded source pixel is nearest-neighbor replicated per
+	// axis into the TILE_PIXEL_EXTENT destination cell (retail 64px cells: 4; 4x HD sheets:
+	// 1, byte-identical copy). down: how many source pixels per axis are box-averaged into
+	// one destination pixel for cells larger than TILE_PIXEL_EXTENT.
+	Int scale = 1;
+	Int down = 1;
+	if (srcCellExtent <= TILE_PIXEL_EXTENT) {
+		if (TILE_PIXEL_EXTENT % srcCellExtent != 0) return(false);
+		scale = TILE_PIXEL_EXTENT / srcCellExtent;
+	} else {
+		if (srcCellExtent % TILE_PIXEL_EXTENT != 0) return(false);
+		down = srcCellExtent / TILE_PIXEL_EXTENT;
+	}
 
 	Int tileWidth = hdr.imageWidth/srcCellExtent;
 	Int tileHeight = hdr.imageHeight/srcCellExtent;
-
-	// Legacy "halfTile" sub-tile case: a lone image half as wide/tall as one legacy
-	// cell (32x32) represents a single tile; scatter it across the full native tile.
-	if (isLegacyGrid && hdr.imageHeight==srcCellExtent/2) {
-		tileHeight = 1;
-	}
-	if (isLegacyGrid && hdr.imageWidth==srcCellExtent/2) {
-		tileWidth = 1;
-	}
-	if (isLegacyGrid && (hdr.imageWidth==LEGACY_TILE_PIXEL_EXTENT/2 || hdr.imageHeight==LEGACY_TILE_PIXEL_EXTENT/2)) {
-		srcCellExtent = LEGACY_TILE_PIXEL_EXTENT/2;
-	}
-	Int scale = TILE_PIXEL_EXTENT / srcCellExtent;
 
 	if (tileWidth<numRows && tileHeight<numRows) {
 		return(false);
@@ -1444,6 +1513,13 @@ Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows,
 	for (i=0; i<numRows*numRows; i++) {
 		if (tiles[i] == nullptr)
 			tiles[i] = MSGNEW("WorldHeightMap_readTiles") TileData;
+	}
+	// Per-channel sums of one destination row across all numRows tiles (box filter).
+	const Int accumWidth = numRows*TILE_PIXEL_EXTENT;
+	UnsignedInt *accum = nullptr;
+	if (down > 1) {
+		accum = MSGNEW("WorldHeightMap_readTiles") UnsignedInt[accumWidth*4];
+		memset(accum, 0, accumWidth*4*sizeof(UnsignedInt));
 	}
 	UnsignedByte buf[4];
 	int repeatCount = 0;
@@ -1479,6 +1555,14 @@ Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows,
 				r = g = b = a = 0;
 			}
 			if (column >= (numRows*srcCellExtent)) continue;
+			if (accum) {
+				UnsignedInt *sum = accum + (column/down)*4;
+				sum[0] += b;
+				sum[1] += g;
+				sum[2] += r;
+				sum[3] += a;
+				continue;
+			}
 			int tileNdx = (column/srcCellExtent) + numRows*(row/srcCellExtent);
 			int cellCol = column % srcCellExtent;
 			int cellRow = row % srcCellExtent;
@@ -1500,8 +1584,25 @@ Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows,
 				}
 			}
 		}
+		if (accum && (row % down) == down-1) {
+			// down source rows are summed: write one averaged destination row.
+			const Int tileRow = row / srcCellExtent;
+			const Int destRow = (row % srcCellExtent) / down;
+			const UnsignedInt divisor = (UnsignedInt)(down*down);
+			for (Int destCol = 0; destCol < accumWidth; destCol++) {
+				UnsignedInt *sum = accum + destCol*4;
+				Int tileNdx = destCol/TILE_PIXEL_EXTENT + numRows*tileRow;
+				Int pixelNdx = (destCol % TILE_PIXEL_EXTENT) + TILE_PIXEL_EXTENT*destRow;
+				UnsignedByte *pixel = tiles[tileNdx]->getDataPtr() + pixelNdx*TILE_BYTES_PER_PIXEL;
+				for (Int channel = 0; channel < 4; channel++) {
+					pixel[channel] = (UnsignedByte)((sum[channel] + divisor/2) / divisor);
+					sum[channel] = 0;
+				}
+			}
+		}
 		DEBUG_ASSERTCRASH(repeatCount==0, ("Invalid tga."));
 	}
+	delete[] accum;
 	for (i=0; i<numRows*numRows; i++) {
 		tiles[i]->updateMips();
 	}
