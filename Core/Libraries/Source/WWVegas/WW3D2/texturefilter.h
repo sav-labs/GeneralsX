@@ -132,6 +132,8 @@ public:
 	static void _Init_Filters(TextureFilterMode texture_filter, AnisotropicFilterMode anisotropy_level);
 	// GeneralsX @bugfix Copilot 24/08/2026 Return the capability-limited anisotropy level applied to the renderer.
 	static int _Set_Max_Anisotropy(int level);
+	// GeneralsX @feature Claude 15/10/2026 Set the mip LOD bias on every texture stage (negative = sharper).
+	static void _Set_Mip_Lod_Bias(float bias);
 
 	static void _Set_Default_Min_Filter(FilterType filter);
 	static void _Set_Default_Mag_Filter(FilterType filter);

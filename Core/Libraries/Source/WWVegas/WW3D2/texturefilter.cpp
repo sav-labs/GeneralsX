@@ -39,6 +39,8 @@
 
 #include "texturefilter.h"
 #include "dx8wrapper.h"
+// GeneralsX @feature Claude 15/10/2026 memcpy for the mip LOD bias bit pattern.
+#include <cstring>
 
 const char* const TextureFilterClass::TextureFilterModeString[TEXTURE_FILTER_COUNT] = {
 	"None",
@@ -317,6 +319,20 @@ int TextureFilterClass::_Set_Max_Anisotropy(int level)
 		DX8Wrapper::Set_DX8_Texture_Stage_State(stage, D3DTSS_MAXANISOTROPY, anisotropy);
 
 	return (int)anisotropy;
+}
+
+//**********************************************************************************************
+//! Set mip LOD bias
+/*!
+*/
+// GeneralsX @feature Claude 15/10/2026 Apply a mip LOD bias to all stages; D3D8 takes the float's bit pattern as a DWORD.
+void TextureFilterClass::_Set_Mip_Lod_Bias(float bias)
+{
+	DWORD value;
+	memcpy(&value, &bias, sizeof(value));
+
+	for (int stage = 0; stage < MAX_TEXTURE_STAGES; ++stage)
+		DX8Wrapper::Set_DX8_Texture_Stage_State(stage, D3DTSS_MIPMAPLODBIAS, value);
 }
 
 //**********************************************************************************************

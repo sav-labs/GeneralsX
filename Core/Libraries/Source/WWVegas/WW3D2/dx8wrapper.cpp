@@ -948,6 +948,8 @@ void DX8Wrapper::Do_Onetime_Device_Dependent_Inits()
 		(TextureFilterClass::TextureFilterMode)WW3D::Get_Texture_Filter(),
 		(TextureFilterClass::AnisotropicFilterMode)WW3D::Get_Anisotropy_Level()
 	);
+	// GeneralsX @feature Claude 15/10/2026 Re-apply the mip LOD bias after the device is (re)created.
+	TextureFilterClass::_Set_Mip_Lod_Bias(WW3D::Get_Texture_Lod_Bias());
 	TheDX8MeshRenderer.Init();
 	SHD_INIT;
 	BoxRenderObjClass::Init();

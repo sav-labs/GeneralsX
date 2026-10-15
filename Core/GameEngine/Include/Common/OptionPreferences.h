@@ -71,6 +71,8 @@ public:
 	Bool hasAntiAliasing() const;
 	TextureFilterClass::TextureFilterMode getTextureFilterMode() const;
 	TextureFilterClass::AnisotropicFilterMode getTextureAnisotropyLevel() const;
+	// GeneralsX @feature Claude 15/10/2026 Mip LOD bias from Options.ini (TextureLodBias).
+	Real getTextureLodBias() const;
 	UnsignedInt getLANIPAddress();
 	UnsignedInt getOnlineIPAddress();
 	void setLANIPAddress(AsciiString IP);

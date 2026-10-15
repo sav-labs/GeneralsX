@@ -153,6 +153,10 @@ public:
 	static void					Set_Anisotropy_Level(int level);
 	static int					Get_Anisotropy_Level() { return AnisotropyLevel; }
 
+	// GeneralsX @feature Claude 15/10/2026 Mip LOD bias for all texture stages; kept across device resets.
+	static void					Set_Texture_Lod_Bias(float bias);
+	static float				Get_Texture_Lod_Bias() { return TextureLodBias; }
+
 	/*
 	** Rendering functions
 	** Each frame should be bracketed by a Begin_Render and End_Render call.  Between these two calls you will
@@ -411,6 +415,8 @@ private:
 
 	static int							TextureFilter;
 	static int							AnisotropyLevel;
+	// GeneralsX @feature Claude 15/10/2026 Current mip LOD bias.
+	static float						TextureLodBias;
 
 	static bool							SnapshotActivated;
 	static bool							ThumbnailEnabled;
