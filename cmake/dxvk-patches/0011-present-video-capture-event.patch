@@ -1,0 +1,189 @@
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -868,6 +868,7 @@
+         cDevice         = m_device,
+         cPresenter      = m_wctx->presenter,
+         cBlitter        = m_blitter,
++        cVideoSignal    = m_blitter->pollVideoSignal(),
+         cColorSpace     = m_colorspace,
+         cSrcView        = swapImageView,
+         cSrcRect        = srcRect,
+@@ -888,6 +889,7 @@
+         // Blit back buffer onto Vulkan swap chain
+         auto contextObjects = ctx->beginExternalRendering();
+ 
++        cBlitter->setVideoSignal(cVideoSignal);
+         cBlitter->present(contextObjects,
+           cDstView, cDstRect, cSrcView, cSrcRect);
+ 
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -585,7 +585,12 @@
+     // 50) of the presented size. The value is either raw:<path>, which writes
+     // <path>.bgra and <path>.txt, or a command line that receives Matroska
+     // raw BGRA video on its standard input. In the command, {w} and {h} are
+-    // replaced with the frame size.
++    // replaced with the frame size. DXVK_CAPTURE_VIDEO_START may also be an
++    // event name instead of a number: recording then starts with the frame
++    // presented when the application sets DXVK_CAPTURE_VIDEO_SIGNAL to that
++    // name, and <name>.prepare starts the encoder ahead of it. The signal is
++    // a process environment variable, so that an application with its own
++    // C runtime can set it, and is only read while waiting to record.
+     m_videoTarget = env::getEnvVar("DXVK_CAPTURE_VIDEO");
+ 
+     if (!m_videoTarget.empty()) {
+@@ -596,7 +601,15 @@
+               std::clamp(std::strtof(value.c_str(), nullptr), minValue, maxValue)));
+       };
+ 
+-      m_videoStart = getSeconds("DXVK_CAPTURE_VIDEO_START", 0.0f, 3600.0f).value_or(m_videoStart);
++      std::string start = env::getEnvVar("DXVK_CAPTURE_VIDEO_START");
++      char* startEnd = nullptr;
++      std::strtof(start.c_str(), &startEnd);
++
++      if (!start.empty() && startEnd == start.c_str())
++        m_videoEvent = start;
++      else
++        m_videoStart = getSeconds("DXVK_CAPTURE_VIDEO_START", 0.0f, 3600.0f).value_or(m_videoStart);
++
+       m_videoLength = getSeconds("DXVK_CAPTURE_VIDEO_SECONDS", 0.1f, 600.0f).value_or(m_videoLength);
+ 
+       std::string scale = env::getEnvVar("DXVK_CAPTURE_VIDEO_SCALE");
+@@ -606,9 +619,15 @@
+ 
+       m_videoState = VideoState::Waiting;
+ 
+-      Logger::info(str::format("Swap chain: video capture of ", m_videoLength.count() / 1000u,
+-        " ms at ", m_videoScale, "% scale, starting ", m_videoStart.count() / 1000u,
+-        " ms after the first present"));
++      if (m_videoEvent.empty()) {
++        Logger::info(str::format("Swap chain: video capture of ", m_videoLength.count() / 1000u,
++          " ms at ", m_videoScale, "% scale, starting ", m_videoStart.count() / 1000u,
++          " ms after the first present"));
++      } else {
++        Logger::info(str::format("Swap chain: video capture of ", m_videoLength.count() / 1000u,
++          " ms at ", m_videoScale, "% scale, starting on event ", m_videoEvent,
++          " (DXVK_CAPTURE_VIDEO_SIGNAL)"));
++      }
+     }
+ 
+     this->createSampler();
+@@ -943,6 +962,27 @@
+   }
+ 
+ 
++  uint32_t DxvkSwapchainBlitter::pollVideoSignal() {
++    if (m_videoEvent.empty() || m_videoSignalPolled >= 2u)
++      return m_videoSignalPolled;
++
++    std::string signal = env::getEnvVar("DXVK_CAPTURE_VIDEO_SIGNAL");
++
++    if (signal == m_videoEvent)
++      m_videoSignalPolled = 2u;
++    else if (signal == m_videoEvent + ".prepare")
++      m_videoSignalPolled = 1u;
++
++    return m_videoSignalPolled;
++  }
++
++
++  void DxvkSwapchainBlitter::setVideoSignal(
++          uint32_t            level) {
++    m_videoSignal = std::max(m_videoSignal, level);
++  }
++
++
+   void DxvkSwapchainBlitter::performDraw(
+     const DxvkContextObjects& ctx,
+     const Rc<DxvkImageView>&  dstView,
+@@ -1692,12 +1732,22 @@
+     if (m_videoFirstPresent == high_resolution_clock::time_point())
+       m_videoFirstPresent = now;
+ 
+-    // The writer is created up to a second before recording starts,
+-    // so that starting the encoder does not delay the first frames.
+-    if (m_videoState == VideoState::Waiting && m_videoWriter
+-     && now - m_videoFirstPresent >= m_videoStart) {
++    // The writer is created up to a second before recording starts, or on
++    // the prepare signal, so that starting the encoder does not delay the
++    // first frames.
++    bool start = m_videoEvent.empty()
++      ? now - m_videoFirstPresent >= m_videoStart
++      : m_videoSignal >= 2u;
++
++    if (m_videoState == VideoState::Waiting && m_videoWriter && start) {
+       m_videoState = VideoState::Recording;
+       m_videoBegin = now;
++
++      if (!m_videoEvent.empty()) {
++        Logger::info(str::format("Swap chain: video recording started on event ", m_videoEvent,
++          ", ", std::chrono::duration_cast<std::chrono::milliseconds>(now - m_videoFirstPresent).count(),
++          " ms after the first present"));
++      }
+     }
+ 
+     // Frames before recording starts go through the same passes without
+@@ -1718,9 +1768,18 @@
+     const Rc<DxvkImageView>&          srcView,
+           VkRect2D                    srcRect,
+           VkBool32                    composite) {
+-    if (m_videoState == VideoState::Waiting && !m_videoWriter
+-     && now - m_videoFirstPresent + std::chrono::seconds(1) >= m_videoStart)
++    bool prepare = m_videoEvent.empty()
++      ? now - m_videoFirstPresent + std::chrono::seconds(1) >= m_videoStart
++      : m_videoSignal >= 1u;
++
++    if (m_videoState == VideoState::Waiting && !m_videoWriter && prepare) {
++      if (m_videoSignal >= 2u) {
++        Logger::warn(str::format("Swap chain: video event ", m_videoEvent, " without ",
++          m_videoEvent, ".prepare, recording starts one frame late"));
++      }
++
+       startVideo(dstRect.extent);
++    }
+ 
+     if (!m_videoWriter)
+       return;
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -197,6 +197,27 @@
+     void setCursorPos(
+             VkRect2D            rect);
+ 
++    /**
++     * \brief Polls the video capture start event
++     *
++     * When DXVK_CAPTURE_VIDEO_START names an event, reads the process
++     * environment variable DXVK_CAPTURE_VIDEO_SIGNAL until it equals the
++     * event name. Call this on the application thread for every presented
++     * frame and pass the result to \ref setVideoSignal before the frame is
++     * presented, so that recording starts exactly with the first frame the
++     * application presents after it set the signal.
++     * \returns 0 while waiting, 1 after <event>.prepare, 2 after <event>
++     */
++    uint32_t pollVideoSignal();
++
++    /**
++     * \brief Sets the video capture start signal
++     *
++     * \param [in] level Value returned by \ref pollVideoSignal
++     */
++    void setVideoSignal(
++            uint32_t            level);
++
+   private:
+ 
+     struct SpecConstants {
+@@ -309,6 +330,9 @@
+     std::chrono::microseconds m_videoStart = std::chrono::seconds(5);
+     std::chrono::microseconds m_videoLength = std::chrono::seconds(10);
+     uint32_t            m_videoScale = 50u;
++    std::string         m_videoEvent;
++    uint32_t            m_videoSignalPolled = 0u;
++    uint32_t            m_videoSignal = 0u;
+     VideoState          m_videoState = VideoState::Disabled;
+     high_resolution_clock::time_point m_videoFirstPresent = { };
+     high_resolution_clock::time_point m_videoBegin = { };
