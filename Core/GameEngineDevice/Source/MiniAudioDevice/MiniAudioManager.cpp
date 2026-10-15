@@ -358,8 +358,10 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	File *file = TheFileSystem->openFile(fileToPlay.str());
 	if (!file) {
 		DEBUG_LOG(("MiniAudio: Failed to open file: %s\n", fileToPlay.str()));
-		// GeneralsX @bugfix Claude 15/10/2026 Report missing sound files in release builds.
-		AudioDiagnostics::noteFileFailure("file not found in the file system or .big archives", fileToPlay.str());
+		// GeneralsX @bugfix Claude 15/10/2026 Report missing sound files in release builds. Events without a
+		// sound file (an empty name) are expected and stay silent, as the original Miles code treated them.
+		if (!fileToPlay.isEmpty())
+			AudioDiagnostics::noteFileFailure("file not found in the file system or .big archives", fileToPlay.str());
 		releasePlayingAudio(audio);
 		return;
 	}
