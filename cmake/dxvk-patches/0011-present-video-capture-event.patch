@@ -1,7 +1,8 @@
 diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index bfbec50..5209f19 100644
 --- a/src/d3d9/d3d9_swapchain.cpp
 +++ b/src/d3d9/d3d9_swapchain.cpp
-@@ -868,6 +868,7 @@
+@@ -868,6 +868,7 @@ namespace dxvk {
          cDevice         = m_device,
          cPresenter      = m_wctx->presenter,
          cBlitter        = m_blitter,
@@ -9,7 +10,7 @@ diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
          cColorSpace     = m_colorspace,
          cSrcView        = swapImageView,
          cSrcRect        = srcRect,
-@@ -888,6 +889,7 @@
+@@ -888,6 +889,7 @@ namespace dxvk {
          // Blit back buffer onto Vulkan swap chain
          auto contextObjects = ctx->beginExternalRendering();
  
@@ -18,9 +19,10 @@ diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
            cDstView, cDstRect, cSrcView, cSrcRect);
  
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+index 354c4a9..d89303a 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -585,7 +585,12 @@
+@@ -589,7 +589,12 @@ namespace dxvk {
      // 50) of the presented size. The value is either raw:<path>, which writes
      // <path>.bgra and <path>.txt, or a command line that receives Matroska
      // raw BGRA video on its standard input. In the command, {w} and {h} are
@@ -34,7 +36,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      m_videoTarget = env::getEnvVar("DXVK_CAPTURE_VIDEO");
  
      if (!m_videoTarget.empty()) {
-@@ -596,7 +601,15 @@
+@@ -600,7 +605,15 @@ namespace dxvk {
                std::clamp(std::strtof(value.c_str(), nullptr), minValue, maxValue)));
        };
  
@@ -51,7 +53,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
        m_videoLength = getSeconds("DXVK_CAPTURE_VIDEO_SECONDS", 0.1f, 600.0f).value_or(m_videoLength);
  
        std::string scale = env::getEnvVar("DXVK_CAPTURE_VIDEO_SCALE");
-@@ -606,9 +619,15 @@
+@@ -610,9 +623,15 @@ namespace dxvk {
  
        m_videoState = VideoState::Waiting;
  
@@ -69,8 +71,8 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +      }
      }
  
-     this->createSampler();
-@@ -943,6 +962,27 @@
+     // DXVK_POST=1 adds bloom and a light colour grade to the final pass.
+@@ -1010,6 +1029,27 @@ namespace dxvk {
    }
  
  
@@ -98,7 +100,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
    void DxvkSwapchainBlitter::performDraw(
      const DxvkContextObjects& ctx,
      const Rc<DxvkImageView>&  dstView,
-@@ -1692,12 +1732,22 @@
+@@ -1840,12 +1880,22 @@ namespace dxvk {
      if (m_videoFirstPresent == high_resolution_clock::time_point())
        m_videoFirstPresent = now;
  
@@ -125,7 +127,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      }
  
      // Frames before recording starts go through the same passes without
-@@ -1718,9 +1768,18 @@
+@@ -1866,9 +1916,18 @@ namespace dxvk {
      const Rc<DxvkImageView>&          srcView,
            VkRect2D                    srcRect,
            VkBool32                    composite) {
@@ -147,9 +149,10 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      if (!m_videoWriter)
        return;
 diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+index c2fa67c..807d69e 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.h
 +++ b/src/dxvk/dxvk_swapchain_blitter.h
-@@ -197,6 +197,27 @@
+@@ -205,6 +205,27 @@ namespace dxvk {
      void setCursorPos(
              VkRect2D            rect);
  
@@ -177,7 +180,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter
    private:
  
      struct SpecConstants {
-@@ -309,6 +330,9 @@
+@@ -337,6 +358,9 @@ namespace dxvk {
      std::chrono::microseconds m_videoStart = std::chrono::seconds(5);
      std::chrono::microseconds m_videoLength = std::chrono::seconds(10);
      uint32_t            m_videoScale = 50u;
