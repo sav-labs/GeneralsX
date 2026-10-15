@@ -20,6 +20,14 @@
 // GeneralsX @feature Claude 15/10/2026 The flight also spawns a test convoy of the local player's side
 // and follows it, so recordings show moving units. Spawning changes the match (a replay recorded with
 // -camtest does not play back), so it only happens with -camtest.
+// GeneralsX @feature Claude 15/10/2026 The flight reports its start to the DXVK video capture
+// (DXVK_CAPTURE_VIDEO_START=camtest), so recordings of different runs begin on the same frame of the
+// flight however long the game took to load.
+// GeneralsX @feature Claude 15/10/2026 Close-up flight (-camclose or -camtest [seconds] close): the camera stays below
+// the minimum zoom height with a lower pitch, moves along the convoy and then glides past the local player's base
+// buildings, so unit and building textures and edge antialiasing fill the screen in A/B recordings. Its timeline is
+// counted in logic frames (plus the render phase inside the frame), so runs with the same -seed show the same views.
+// It only moves the camera; the convoy spawn is the one the regular flight already does.
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
@@ -40,6 +48,8 @@
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/TerrainLogic.h"
 #include "GameNetwork/GameInfo.h"
+
+#include "PlatformEnvironment.h"
 
 namespace
 {
@@ -70,6 +80,28 @@ constexpr const Real CameraTestColumnSpacing = 50.0f;				///< Distance between t
 constexpr const Real CameraTestSpawnSearchRadius = 60.0f;		///< Search radius for a clear spot around each slot
 constexpr const Real CameraTestMinTravel = 400.0f;					///< Minimum length of the move order
 constexpr const Real CameraTestFollowSeconds = 0.35f;				///< Time constant of the camera following the convoy
+
+// GeneralsX @feature Claude 15/10/2026 Close-up flight. Durations are for -camtest 8 and scale with the given seconds,
+// so the default close-up flight lasts 10 seconds: 5 along the convoy, then 2.5 for each of two buildings.
+constexpr const Real CameraTestCloseReferenceSeconds = 8.0f;		///< -camtest duration the close-up timings below are given for
+constexpr const Real CameraTestCloseConvoySeconds = 5.0f;			///< Time along the convoy
+constexpr const Real CameraTestCloseGlideSeconds = 1.25f;			///< Glide from the previous shot to a building
+constexpr const Real CameraTestCloseHoldSeconds = 1.25f;			///< Time circling a building
+constexpr const Int CameraTestCloseMaxTargets = 2;						///< Buildings visited after the convoy
+constexpr const Real CameraTestCloseHeightScale = 0.6f;				///< Camera height as a fraction of the minimum zoom height
+constexpr const Real CameraTestCloseMinHeight = 40.0f;				///< Lowest camera height above the ground
+constexpr const Real CameraTestCloseBuildingHeightScale = 1.1f;	///< Camera height over a building per unit of its bounding radius
+constexpr const Real CameraTestClosePitch = DEG_TO_RADF(24.0f);	///< Lower than the default 37.5, so the view looks across the units
+constexpr const Real CameraTestCloseOrbitSpeed = DEG_TO_RADF(9.0f);	///< Camera yaw change per second, the whole flight
+constexpr const Real CameraTestCloseSearchRadius = 450.0f;		///< Buildings are picked within this distance of the start position
+constexpr const Real CameraTestCloseMinRadius = 12.0f;				///< Skips fences and small props
+
+// GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
+// DXVK reads the process environment on every present while it waits: the prepare value starts the encoder when the
+// match starts, the event value starts recording with the first frame of the flight. It only affects rendering tools.
+constexpr const char *CameraTestCaptureSignal = "DXVK_CAPTURE_VIDEO_SIGNAL";
+constexpr const char *CameraTestCapturePrepare = "camtest.prepare";
+constexpr const char *CameraTestCaptureStart = "camtest";
 
 /// Templates of one side: a main battle tank, a fast vehicle and a helicopter (empty when there is none).
 struct CameraTestSideUnits
@@ -107,6 +139,14 @@ struct CameraTestState
 	Coord2D curCentroid;										///< Ground convoy center in the current logic frame
 	Bool hasFollowPivot;
 	Coord2D followPivot;										///< Camera pivot while following the convoy
+
+	// GeneralsX @feature Claude 15/10/2026 Close-up flight state
+	UnsignedInt flightFrame;								///< Logic frame the flight began on
+	Coord2D closeTarget[CameraTestCloseMaxTargets];		///< Buildings visited after the convoy
+	Real closeTargetHeight[CameraTestCloseMaxTargets];
+	AsciiString closeTargetName[CameraTestCloseMaxTargets];
+	Int closeTargetCount;
+	Int closeShot;													///< Last logged shot, -1 before the first
 };
 
 CameraTestState s_cameraTest;
@@ -329,7 +369,10 @@ Bool getCameraTestConvoyCenter(Coord2D *center)
 /// between the last two samples by the logic frame phase, so the camera glides at any render rate and
 /// never steps at the logic rate, whether SmoothMotion is on or off. A short exponential follow then
 /// absorbs the jump when a vehicle of the convoy is lost. False when there is nothing to follow.
-Bool getCameraTestFollowPivot(Real deltaSeconds, Coord2D *pivot)
+// GeneralsX @refactor Claude 15/10/2026 The sampled and interpolated convoy center is shared with the close-up flight.
+/// Convoy center sampled once per logic frame and blended between the last two samples by the logic frame
+/// phase. It only depends on the logic state and the phase, never on the render rate. False when there is no convoy.
+Bool getCameraTestConvoyPivot(Coord2D *pivot)
 {
 	CameraTestState &s = s_cameraTest;
 
@@ -339,7 +382,9 @@ Bool getCameraTestFollowPivot(Real deltaSeconds, Coord2D *pivot)
 		Coord2D center;
 		if (getCameraTestConvoyCenter(&center))
 		{
-			s.prevCentroid = s.hasCentroid ? s.curCentroid : center;
+			// After a skipped logic frame the previous sample is too old to blend from
+			const Bool consecutive = s.hasCentroid && frame == s.sampleFrame + 1;
+			s.prevCentroid = consecutive ? s.curCentroid : center;
 			s.curCentroid = center;
 			s.hasCentroid = TRUE;
 		}
@@ -354,9 +399,18 @@ Bool getCameraTestFollowPivot(Real deltaSeconds, Coord2D *pivot)
 		return FALSE;
 
 	const Real phase = clamp(0.0f, TheFramePacer->getLogicFramePhase(), 1.0f);
+	pivot->x = s.prevCentroid.x + (s.curCentroid.x - s.prevCentroid.x) * phase;
+	pivot->y = s.prevCentroid.y + (s.curCentroid.y - s.prevCentroid.y) * phase;
+	return TRUE;
+}
+
+Bool getCameraTestFollowPivot(Real deltaSeconds, Coord2D *pivot)
+{
+	CameraTestState &s = s_cameraTest;
+
 	Coord2D target;
-	target.x = s.prevCentroid.x + (s.curCentroid.x - s.prevCentroid.x) * phase;
-	target.y = s.prevCentroid.y + (s.curCentroid.y - s.prevCentroid.y) * phase;
+	if (!getCameraTestConvoyPivot(&target))
+		return FALSE;
 
 	if (!s.hasFollowPivot)
 	{
@@ -372,6 +426,98 @@ Bool getCameraTestFollowPivot(Real deltaSeconds, Coord2D *pivot)
 
 	*pivot = s.followPivot;
 	return TRUE;
+}
+
+/// GeneralsX @feature Claude 15/10/2026 Picks the buildings the close-up flight visits after the convoy: the local
+/// player's command center first, then the nearest other structures around the start position that the player owns
+/// or can see. Only reads the world; ties are broken by object ID so every run picks the same buildings.
+void chooseCameraTestCloseTargets()
+{
+	CameraTestState &s = s_cameraTest;
+	s.closeTargetCount = 0;
+
+	if (TheGameLogic == nullptr || ThePlayerList == nullptr)
+		return;
+
+	const Player *player = ThePlayerList->getLocalPlayer();
+	if (player == nullptr)
+		return;
+	const Int playerIndex = player->getPlayerIndex();
+
+	struct Candidate
+	{
+		const Object *obj;
+		Int rank;				///< 0 own command center, 1 own structure, 2 visible structure of another player
+		Real distSqr;
+	};
+	Candidate best[CameraTestCloseMaxTargets];
+	Int bestCount = 0;
+
+	const Real searchSqr = CameraTestCloseSearchRadius * CameraTestCloseSearchRadius;
+	for (Object *obj = TheGameLogic->getFirstObject(); obj != nullptr; obj = obj->getNextObject())
+	{
+		if (obj->isEffectivelyDead() || !obj->isKindOf(KINDOF_STRUCTURE)
+			|| obj->isKindOf(KINDOF_BRIDGE) || obj->isKindOf(KINDOF_BRIDGE_TOWER) || obj->isKindOf(KINDOF_WALK_ON_TOP_OF_WALL))
+			continue;
+		if (obj->getGeometryInfo().getBoundingCircleRadius() < CameraTestCloseMinRadius)
+			continue;
+
+		const Real dx = obj->getPosition()->x - s.startPos.x;
+		const Real dy = obj->getPosition()->y - s.startPos.y;
+		const Real distSqr = dx * dx + dy * dy;
+		if (distSqr > searchSqr)
+			continue;
+
+		Candidate c;
+		c.obj = obj;
+		c.distSqr = distSqr;
+		if (obj->getControllingPlayer() == player)
+		{
+			c.rank = obj->isKindOf(KINDOF_COMMANDCENTER) ? 0 : 1;
+		}
+		else
+		{
+			const ObjectShroudStatus shroud = obj->getShroudedStatus(playerIndex);
+			if (shroud != OBJECTSHROUD_CLEAR && shroud != OBJECTSHROUD_PARTIAL_CLEAR)
+				continue;
+			c.rank = 2;
+		}
+
+		// Insertion into the short sorted list of the best candidates
+		Int at = bestCount;
+		while (at > 0)
+		{
+			const Candidate &prev = best[at - 1];
+			const Bool before = c.rank != prev.rank ? c.rank < prev.rank
+				: c.distSqr != prev.distSqr ? c.distSqr < prev.distSqr
+				: c.obj->getID() < prev.obj->getID();
+			if (!before)
+				break;
+			--at;
+		}
+		if (at >= CameraTestCloseMaxTargets)
+			continue;
+		for (Int i = min(bestCount, CameraTestCloseMaxTargets - 1); i > at; --i)
+			best[i] = best[i - 1];
+		best[at] = c;
+		bestCount = min(bestCount + 1, CameraTestCloseMaxTargets);
+	}
+
+	const Real closeHeight = max(s.minHeight * CameraTestCloseHeightScale, CameraTestCloseMinHeight);
+	for (Int i = 0; i < bestCount; ++i)
+	{
+		const Object *obj = best[i].obj;
+		s.closeTarget[i].x = obj->getPosition()->x;
+		s.closeTarget[i].y = obj->getPosition()->y;
+		// Large buildings get a little more height, never above the minimum zoom height
+		const Real wanted = obj->getGeometryInfo().getBoundingCircleRadius() * CameraTestCloseBuildingHeightScale;
+		s.closeTargetHeight[i] = clamp(closeHeight, wanted, max(closeHeight, s.minHeight));
+		s.closeTargetName[i] = obj->getTemplate()->getName();
+		fprintf(stderr, "[CAMTEST] close target %d: %s at (%.1f, %.1f), height %.1f\n",
+			i, s.closeTargetName[i].str(), s.closeTarget[i].x, s.closeTarget[i].y, s.closeTargetHeight[i]);
+		fflush(stderr);
+	}
+	s.closeTargetCount = bestCount;
 }
 
 void beginCameraTestFlight()
@@ -412,6 +558,108 @@ void beginCameraTestFlight()
 	spawnCameraTestConvoy(distanceToCenter);
 	s.hasCentroid = FALSE;
 	s.hasFollowPivot = FALSE;
+
+	// GeneralsX @feature Claude 15/10/2026 The close-up flight picks its buildings when the flight begins
+	s.flightFrame = TheGameLogic->getFrame();
+	s.closeShot = -1;
+	s.closeTargetCount = 0;
+	if (TheGlobalData->m_cameraTestClose)
+	{
+		chooseCameraTestCloseTargets();
+		fprintf(stderr, "[CAMTEST] close start: logic frame %u, %.1f s along the convoy, %d building(s), height %.1f (min zoom %.1f), pitch %.1f\n",
+			s.flightFrame, CameraTestCloseConvoySeconds * TheGlobalData->m_cameraTestSeconds / CameraTestCloseReferenceSeconds,
+			s.closeTargetCount, max(s.minHeight * CameraTestCloseHeightScale, CameraTestCloseMinHeight), s.minHeight,
+			CameraTestClosePitch * 180.0f / PI);
+		fflush(stderr);
+	}
+}
+
+/// GeneralsX @feature Claude 15/10/2026 Length of the close-up flight in seconds.
+Real getCameraTestCloseTotalSeconds()
+{
+	const Real scale = TheGlobalData->m_cameraTestSeconds / CameraTestCloseReferenceSeconds;
+	// Without buildings the convoy shot takes the whole flight
+	const Int shots = s_cameraTest.closeTargetCount > 0 ? s_cameraTest.closeTargetCount : CameraTestCloseMaxTargets;
+	return scale * (CameraTestCloseConvoySeconds + shots * (CameraTestCloseGlideSeconds + CameraTestCloseHoldSeconds));
+}
+
+/// GeneralsX @feature Claude 15/10/2026 Smooth start and stop of a glide.
+Real getCameraTestSmoothStep(Real t)
+{
+	const Real x = clamp(0.0f, t, 1.0f);
+	return x * x * (3.0f - 2.0f * x);
+}
+
+/// GeneralsX @feature Claude 15/10/2026 Places the close-up camera for the given flight time, counted in logic frames.
+/// Shot 0 follows the convoy, then shots 1, 3, ... glide to a building and shots 2, 4, ... circle it. The camera never
+/// zooms out: it stays at the close-up height (below the minimum zoom height) with a low pitch while it keeps turning.
+void applyCameraTestClosePose(Real flightSeconds)
+{
+	CameraTestState &s = s_cameraTest;
+	const Real scale = TheGlobalData->m_cameraTestSeconds / CameraTestCloseReferenceSeconds;
+	const Real convoySeconds = s.closeTargetCount > 0 ? CameraTestCloseConvoySeconds * scale : getCameraTestCloseTotalSeconds();
+	const Real glideSeconds = CameraTestCloseGlideSeconds * scale;
+	const Real holdSeconds = CameraTestCloseHoldSeconds * scale;
+	const Real closeHeight = max(s.minHeight * CameraTestCloseHeightScale, CameraTestCloseMinHeight);
+
+	// The convoy pivot is sampled on every frame so its interpolation stays continuous into the first glide
+	Coord2D convoyPivot;
+	if (!getCameraTestConvoyPivot(&convoyPivot))
+	{
+		convoyPivot.x = s.startPos.x + s.panDir.x * CameraTestPanSpeed * flightSeconds;
+		convoyPivot.y = s.startPos.y + s.panDir.y * CameraTestPanSpeed * flightSeconds;
+	}
+
+	Int shot = 0;
+	Coord2D pivot2D = convoyPivot;
+	Real height = closeHeight;
+
+	if (flightSeconds >= convoySeconds && s.closeTargetCount > 0)
+	{
+		const Real buildingTime = flightSeconds - convoySeconds;
+		const Int target = min((Int)(buildingTime / (glideSeconds + holdSeconds)), s.closeTargetCount - 1);
+		const Real local = buildingTime - target * (glideSeconds + holdSeconds);
+
+		const Coord2D from = target == 0 ? convoyPivot : s.closeTarget[target - 1];
+		const Real fromHeight = target == 0 ? closeHeight : s.closeTargetHeight[target - 1];
+		const Real blend = getCameraTestSmoothStep(glideSeconds > 0.0f ? local / glideSeconds : 1.0f);
+
+		pivot2D.x = from.x + (s.closeTarget[target].x - from.x) * blend;
+		pivot2D.y = from.y + (s.closeTarget[target].y - from.y) * blend;
+		height = fromHeight + (s.closeTargetHeight[target] - fromHeight) * blend;
+		shot = 1 + target * 2 + (local >= glideSeconds ? 1 : 0);
+	}
+
+	if (shot != s.closeShot)
+	{
+		s.closeShot = shot;
+		const UnsignedInt frame = TheGameLogic->getFrame() - s.flightFrame;
+		if (shot == 0)
+		{
+			fprintf(stderr, "[CAMTEST] close phase: convoy at flight frame %u, pivot (%.1f, %.1f)\n", frame, pivot2D.x, pivot2D.y);
+		}
+		else
+		{
+			const Int target = (shot - 1) / 2;
+			fprintf(stderr, "[CAMTEST] close phase: %s %s at flight frame %u, pivot (%.1f, %.1f)\n",
+				(shot % 2) == 1 ? "glide to" : "circle", s.closeTargetName[target].str(), frame, pivot2D.x, pivot2D.y);
+		}
+		fflush(stderr);
+	}
+
+	Coord3D pivot;
+	pivot.x = pivot2D.x;
+	pivot.y = pivot2D.y;
+	pivot.z = TheTerrainLogic != nullptr ? TheTerrainLogic->getGroundHeight(pivot.x, pivot.y) : 0.0f;
+
+	TheTacticalView->lookAt(&pivot);
+	TheTacticalView->setAngle(s.startAngle + CameraTestCloseOrbitSpeed * flightSeconds);
+	TheTacticalView->setPitch(CameraTestClosePitch);
+	if (s.maxHeight > 0.0f)
+	{
+		// setZoom is not clamped to the minimum zoom height, so this temporary close-up height holds
+		TheTacticalView->setZoom(height / s.maxHeight);
+	}
 }
 
 /// Places the camera for the given flight time. Every value except the convoy follow is set directly
@@ -475,6 +723,7 @@ void UpdateCameraTest()
 		s.convoyCount = 0;
 		s.hasCentroid = FALSE;
 		s.hasFollowPivot = FALSE;
+		s.closeTargetCount = 0;
 		return;
 	}
 
@@ -487,6 +736,7 @@ void UpdateCameraTest()
 		s.elapsedSeconds = 0.0f;
 		fprintf(stderr, "[CAMTEST] match started, flight begins at logic frame %u\n", CameraTestSettleFrames);
 		fflush(stderr);
+		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCapturePrepare);
 		return;
 	}
 
@@ -503,6 +753,31 @@ void UpdateCameraTest()
 
 		beginCameraTestFlight();
 		s.phase = CAMERA_TEST_FLYING;
+
+		// The frame drawn right after this update shows the first pose of the flight
+		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCaptureStart);
+		fprintf(stderr, "[CAMTEST] capture signal: %s=%s\n", CameraTestCaptureSignal, CameraTestCaptureStart);
+		fflush(stderr);
+	}
+
+	// GeneralsX @feature Claude 15/10/2026 The close-up flight is timed in logic frames plus the render phase inside the
+	// current frame, so a given game moment always gets the same camera pose.
+	if (TheGlobalData->m_cameraTestClose)
+	{
+		const Real phase = clamp(0.0f, TheFramePacer->getLogicFramePhase(), 1.0f);
+		const Real closeSeconds = ((Real)(TheGameLogic->getFrame() - s.flightFrame) + phase) / (Real)LOGICFRAMES_PER_SECOND;
+		const Real closeTotal = getCameraTestCloseTotalSeconds();
+
+		applyCameraTestClosePose(min(closeSeconds, closeTotal));
+
+		if (closeSeconds >= closeTotal)
+		{
+			s.phase = CAMERA_TEST_DONE;
+			fprintf(stderr, "[CAMTEST] close stop: flight finished after %u logic frames (%.2f s)\n",
+				TheGameLogic->getFrame() - s.flightFrame, closeSeconds);
+			fflush(stderr);
+		}
+		return;
 	}
 
 	const Real flightSeconds = s.elapsedSeconds - CameraTestSettleSeconds;

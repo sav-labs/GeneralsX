@@ -27,4 +27,7 @@
 // (ground vehicles plus helicopters when the side has them) is spawned between the start position and the
 // map center and ordered to drive towards the center; the camera follows the convoy instead of a fixed pan.
 // This changes the match, so it only happens with -camtest; without it nothing is spawned or moved.
+// GeneralsX @feature Claude 15/10/2026 With -camclose (or -camtest [seconds] close) the flight is a close-up instead:
+// below the minimum zoom height, with a lower pitch and no zoom-out, along the convoy and then past the local
+// player's base buildings. It is timed in logic frames, about 10 seconds for -camtest 8.
 void UpdateCameraTest();

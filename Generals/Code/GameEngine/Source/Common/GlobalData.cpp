@@ -961,8 +961,9 @@ GlobalData::GlobalData()
 
 	m_antiAliasLevel = WW3D::MultiSampleModeEnum::MULTISAMPLE_MODE_NONE;
 	m_antiAliasLevelIsDefault = FALSE;
-	m_textureFilteringMode = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_BILINEAR;
-	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_2X;
+	// GeneralsX @tweak sav-labs 14/10/2026 Match the OptionPreferences defaults: anisotropic 16x.
+	m_textureFilteringMode = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_ANISOTROPIC;
+	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_16X;
 
 //	m_languageFilterPref = false;
 	m_languageFilterPref = true;
@@ -1023,6 +1024,8 @@ GlobalData::GlobalData()
 	m_initialSkirmishStartPos = 1;
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
 	m_cameraTestSeconds = 0.0f;
+	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose
+	m_cameraTestClose = FALSE;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
