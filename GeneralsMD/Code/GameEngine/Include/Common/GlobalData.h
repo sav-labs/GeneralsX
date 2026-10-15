@@ -383,6 +383,8 @@ public:
 	Int m_initialSkirmishStartPos;				///< 1-based start position of the local player, AI opponents take the next ones
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest [seconds]
 	Real m_cameraTestSeconds;				///< Duration of the -camtest pan in seconds, 0 when disabled
+	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose or -camtest [seconds] close
+	Bool m_cameraTestClose;					///< Fly the -camtest camera low and close along the convoy and the base buildings
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation

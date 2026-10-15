@@ -1024,6 +1024,8 @@ GlobalData::GlobalData()
 	m_initialSkirmishStartPos = 1;
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
 	m_cameraTestSeconds = 0.0f;
+	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose
+	m_cameraTestClose = FALSE;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
