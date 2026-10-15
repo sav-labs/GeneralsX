@@ -11,6 +11,8 @@
 
 Packs over 2 GB are split into `!HDTextures_01.big`, `!HDTextures_02.big`, ... because BIG archives use 32-bit offsets. Delete the `!HDTextures*.big` files to go back to the original textures.
 
+After each run `<out name>.report.json` lists textures written, reused from the cache and skipped, part sizes, time and the upscaler used. Textures already at `--max-size` are skipped, since upscaling them changes nothing.
+
 ## Requirements
 
 - Python 3.9+ and Pillow 11.2+ (`python -m pip install pillow`)
