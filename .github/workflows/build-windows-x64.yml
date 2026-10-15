@@ -29,7 +29,7 @@ jobs:
   # (scripts/qa/dxvk_video_to_mp4.py turns them into an mp4); any other value is a command that reads
   # Matroska raw BGRA video with present time stamps on stdin, e.g.
   # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 clip.mp4
-  # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0007) starts recording with the first frame
+  # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0011) starts recording with the first frame
   # of the -camtest flight instead of a fixed time, so A/B clips line up whatever the load time. The game sets the process
   # environment variable DXVK_CAPTURE_VIDEO_SIGNAL to camtest.prepare when the match starts and to camtest when the flight begins.
   dxvk-fsr:
