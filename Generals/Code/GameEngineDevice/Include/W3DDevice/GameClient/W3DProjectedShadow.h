@@ -68,6 +68,8 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 		void removeShadow (W3DProjectedShadow *shadow);
 		void removeAllShadows(); ///< Remove all shadows.
 		TextureClass *getRenderTarget()	{ return m_dynamicRenderTarget;}
+		// GeneralsX @feature Claude 15/10/2026 Edge length of the (square) shadow render target in texels.
+		Int getRenderTargetSize() const	{ return m_renderTargetSize;}
 		SpecialRenderInfoClass *getRenderContext()	{ return m_shadowContext;}
 		void updateRenderTargetTextures();	///<render into any textures that need updating.
 		void queueDecal(W3DProjectedShadow *shadow);	///<add shadow decal to render list - decal conforms to terrain.
@@ -77,12 +79,16 @@ class W3DProjectedShadowManager	: public ProjectedShadowManager
 	private:
 		Int renderProjectedTerrainShadow(W3DProjectedShadow *shadow, AABoxClass &box);	///<render shadow on map terrain.
 		void updateShadowNumbers(ShadowType shadowType, Int addNum);
+		void createRenderTarget();	///<create the shadow render target sized for the current static detail level.
 
 	private:
 		W3DProjectedShadow *m_shadowList;
 		W3DProjectedShadow *m_decalList;
 		TextureClass	*m_dynamicRenderTarget;	///<offscreen video memory texture used to render all shadow textures.
 		Bool m_renderTargetHasAlpha;					///<does render target have destination alpha support?
+		// GeneralsX @feature Claude 15/10/2026 Track actual and requested shadow render target size.
+		Int m_renderTargetSize;						///<actual edge length of m_dynamicRenderTarget (0 if none).
+		Int m_requestedRenderTargetSize;			///<size requested by the detail level when the target was created.
 		CameraClass		*m_shadowCamera;					///<camera used to render all shadow textures - configured by projector
 		LightEnvironmentClass m_shadowLightEnv;
 		SpecialRenderInfoClass *m_shadowContext;

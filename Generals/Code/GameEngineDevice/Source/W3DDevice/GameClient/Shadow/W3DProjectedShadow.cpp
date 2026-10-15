@@ -47,6 +47,7 @@
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "d3dx8math.h"
 #include "Common/GlobalData.h"
+#include "Common/GameLOD.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "WW3D2/statistics.h"
 #include "Common/Debug.h"
@@ -71,8 +72,28 @@ Instead of projecting onto arbitrary geometry, could allow for terrain only.
 Maybe project onto a deformed terrain patch that molds to trays/bibs.
 */
 
-#define DEFAULT_RENDER_TARGET_WIDTH			512
-#define DEFAULT_RENDER_TARGET_HEIGHT		512
+// GeneralsX @feature Claude 15/10/2026 Size the projected shadow render target by static detail level.
+// Low keeps the retail 512x512 target, Medium uses 1024x1024 and High or above use 2048x2048,
+// so projected shadow silhouettes get up to 4x the texels per axis. Rendering only, no logic impact.
+#define MIN_RENDER_TARGET_SIZE			512
+#define MEDIUM_RENDER_TARGET_SIZE		1024
+#define HIGH_RENDER_TARGET_SIZE			2048
+
+static Int getDesiredRenderTargetSize()
+{
+	if (TheGameLODManager == nullptr)
+		return HIGH_RENDER_TARGET_SIZE;
+
+	switch (TheGameLODManager->getStaticLODLevel())
+	{
+		case STATIC_GAME_LOD_LOW:
+			return MIN_RENDER_TARGET_SIZE;
+		case STATIC_GAME_LOD_MEDIUM:
+			return MEDIUM_RENDER_TARGET_SIZE;
+		default:
+			return HIGH_RENDER_TARGET_SIZE;
+	}
+}
 
 W3DProjectedShadowManager *TheW3DProjectedShadowManager=nullptr;	//global singleton
 ProjectedShadowManager	*TheProjectedShadowManager;				//global singleton with simpler interface.
@@ -202,6 +223,8 @@ public:
 W3DProjectedShadowManager::W3DProjectedShadowManager()
 {
 	m_shadowList = nullptr;
+	m_renderTargetSize = 0;
+	m_requestedRenderTargetSize = 0;
 	m_decalList = nullptr;
 	m_numDecalShadows = 0;
 	m_numProjectionShadows  = 0;
@@ -238,6 +261,38 @@ void W3DProjectedShadowManager::reset()
 
 	m_W3DShadowTextureManager->freeAllTextures();
 
+	// GeneralsX @feature Claude 15/10/2026 Apply a changed detail level on the next map. Every shadow texture
+	// was just freed, so the render target can be resized without leaving textures of another size behind.
+	if (m_dynamicRenderTarget != nullptr && getDesiredRenderTargetSize() != m_requestedRenderTargetSize)
+	{
+		REF_PTR_RELEASE(m_dynamicRenderTarget);
+		createRenderTarget();
+	}
+}
+
+// GeneralsX @feature Claude 15/10/2026 Create the largest render target the detail level asks for, halving
+// the size down to the retail 512x512 when the device refuses it (format, memory or max texture size).
+void W3DProjectedShadowManager::createRenderTarget()
+{
+	m_requestedRenderTargetSize = getDesiredRenderTargetSize();
+	m_renderTargetSize = 0;
+
+	for (Int size = m_requestedRenderTargetSize; size >= MIN_RENDER_TARGET_SIZE && m_dynamicRenderTarget == nullptr; size /= 2)
+	{
+		m_renderTargetHasAlpha=TRUE;
+		if ((m_dynamicRenderTarget=DX8Wrapper::Create_Render_Target (size, size, WW3D_FORMAT_A8R8G8B8)) == nullptr)
+		{
+			m_renderTargetHasAlpha=FALSE;
+
+			//failed to get a render target with alpha.
+			//try again without.
+			m_dynamicRenderTarget=DX8Wrapper::Create_Render_Target (size, size);
+		}
+	}
+
+	//Create_Render_Target clamps to the device's max texture size, so read back what we really got.
+	if (m_dynamicRenderTarget != nullptr)
+		m_renderTargetSize = m_dynamicRenderTarget->Get_Width();
 }
 
 Bool W3DProjectedShadowManager::init()
@@ -260,15 +315,8 @@ Bool W3DProjectedShadowManager::ReAcquireResources()
 
 	DEBUG_ASSERTCRASH(m_dynamicRenderTarget == nullptr, ("Acquire of existing shadow render target"));
 
-	m_renderTargetHasAlpha=TRUE;
-	if ((m_dynamicRenderTarget=DX8Wrapper::Create_Render_Target (DEFAULT_RENDER_TARGET_WIDTH, DEFAULT_RENDER_TARGET_HEIGHT, WW3D_FORMAT_A8R8G8B8)) == nullptr)
-	{
-			m_renderTargetHasAlpha=FALSE;
-
-			//failed to get a render target with alpha.
-			//try again without.
-			m_dynamicRenderTarget=DX8Wrapper::Create_Render_Target (DEFAULT_RENDER_TARGET_WIDTH, DEFAULT_RENDER_TARGET_HEIGHT);
-	}
+	// GeneralsX @feature Claude 15/10/2026 Render target size follows the static detail level (see createRenderTarget).
+	createRenderTarget();
 
 	LPDIRECT3DDEVICE8 m_pDev=DX8Wrapper::_Get_D3D_Device8();
 
@@ -2190,7 +2238,9 @@ void W3DProjectedShadow::updateTexture(Vector3 &lightPos)
 		SurfaceClass *newSurface=TheW3DProjectedShadowManager->getRenderTarget()->Get_Surface_Level();
 
 		//Copy shadow from temporary video-memory surface into a permanent texture
-		oldSurface->Copy(0,0,0,0,DEFAULT_RENDER_TARGET_WIDTH,DEFAULT_RENDER_TARGET_HEIGHT,newSurface);
+		// GeneralsX @feature Claude 15/10/2026 Copy the full render target, whose size now depends on detail level.
+		const Int renderTargetSize = TheW3DProjectedShadowManager->getRenderTargetSize();
+		oldSurface->Copy(0,0,0,0,renderTargetSize,renderTargetSize,newSurface);
 		REF_PTR_RELEASE(newSurface);
 		REF_PTR_RELEASE(oldSurface);
 		m_shadowTexture[0]->updateBounds(TheW3DShadowManager->getLightPosWorld(0),m_robj);	//update local shadow bounds
