@@ -4,6 +4,7 @@
 # GeneralsX @feature sav-labs 14/10/2026 Self-test for the HD texture pack builder.
 
 import io
+import json
 import struct
 import subprocess
 import sys
@@ -89,10 +90,19 @@ def main():
                                 "--upscaler", "lanczos", "--part-size", "100000"],
                                check=True, capture_output=True, text=True).stdout
         assert "2 textures reused" in rerun, rerun
+        report = json.loads(Path(tmp, "!HDTextures.report.json").read_text())
+        assert report["textures_written"] == 2 and report["reused_from_cache"] == 2, report
         parts = sorted(p.name for p in Path(tmp).glob("!HDTextures*.big"))
         assert parts == ["!HDTextures_01.big", "!HDTextures_02.big"], parts
         merged = {**hdpack.read_big(Path(tmp, parts[0])), **hdpack.read_big(Path(tmp, parts[1]))}
         assert sorted(merged) == ["art/textures/avhouse.dds", "art/textures/avtank.dds"], sorted(merged)
+
+        # Textures already at --max-size are left to the retail archive.
+        capped = Path(tmp, "!HDCapped.big")
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(capped),
+                        "--upscaler", "lanczos", "--max-size", "128"], check=True, capture_output=True)
+        report = json.loads(Path(tmp, "!HDCapped.report.json").read_text())
+        assert report["skipped_already_max_size"] == 1 and report["textures_written"] == 1, report
 
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")

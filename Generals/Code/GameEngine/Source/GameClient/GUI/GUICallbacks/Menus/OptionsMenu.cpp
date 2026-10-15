@@ -1218,7 +1218,6 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
  	}
 
 	// populate anti aliasing modes
-	AsciiString selectedAliasingMode = (*pref)["AntiAliasing"];
 	GadgetComboBoxReset(comboBoxAntiAliasing);
 	AsciiString temp;
 	Int i=0;
@@ -1228,11 +1227,10 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 		str = TheGameText->fetch( temp );
 		index = GadgetComboBoxAddEntry(comboBoxAntiAliasing, str, color);
 	}
-	Int val = atoi(selectedAliasingMode.str());
+	// GeneralsX @feature Claude 15/10/2026 Read the level through OptionPreferences, so that a missing
+	// AntiAliasing entry shows the 4x default instead of Off.
+	Int val = pref->getAntiAliasing();
 	Int pos = 0;
-
-	// TheSuperHackers @info We are converting from human readable value to comboBox entry position
-	val = highestBit(val);
 
 	if (val == WW3D::MULTISAMPLE_MODE_NONE)
 		pos = OptionPreferences::AntiAliasingMode_OFF;
