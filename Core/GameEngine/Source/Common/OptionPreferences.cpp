@@ -1019,6 +1019,22 @@ Int OptionPreferences::getRenderScale() const
 	return clamp((Int)RENDER_SCALE_MIN, scale, (Int)RENDER_SCALE_OFF);
 }
 
+// GeneralsX @feature Claude 15/10/2026 FSRSharpness is the RCAS sharpening pass after FSR 1.0 EASU, in stops:
+// 0 is the sharpest and every stop halves the sharpening (AMD's scale, 0 to 2). Missing or invalid keys give 0.2,
+// the DXVK default.
+Real OptionPreferences::getFSRSharpness() const
+{
+	OptionPreferences::const_iterator it = find("FSRSharpness");
+	if (it == end())
+		return 0.2f;
+
+	Real sharpness = (Real)atof(it->second.str());
+	if (!(sharpness >= 0.0f))
+		return 0.2f;
+
+	return clamp(0.0f, sharpness, 2.0f);
+}
+
 // GeneralsX @feature Claude 14/10/2026 Game resolution for a render scale: the display size scaled by
 // scale percent, rounded down to even numbers, keeping the display aspect ratio and at least 600 lines.
 Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres)

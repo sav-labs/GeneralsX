@@ -152,4 +152,6 @@ public:
 	// GeneralsX @feature Claude 14/10/2026 FSR render scale (Options.ini RenderScale, 100 = off)
 	Int getRenderScale() const;
 	static Bool getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres);
+	// GeneralsX @feature Claude 15/10/2026 FSR RCAS sharpening in stops (Options.ini FSRSharpness, 0 = sharpest)
+	Real getFSRSharpness() const;
 };
