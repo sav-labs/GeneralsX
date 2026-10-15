@@ -131,7 +131,9 @@ ALuint OpenALAudioFileCache::getBufferForFile(const OpenFileInfo &fileInfo)
 	File* file = TheFileSystem->openFile(strToFind.str());
 	if (!file) {
 		DEBUG_ASSERTLOG(strToFind.isEmpty(), ("Missing Audio File: '%s'\n", strToFind.str()));
-		AudioDiagnostics::noteFileFailure("file not found in the file system or .big archives", strToFind.str());
+		// GeneralsX @bugfix Claude 15/10/2026 An empty name is an event without a sound file, not a missing file.
+		if (!strToFind.isEmpty())
+			AudioDiagnostics::noteFileFailure("file not found in the file system or .big archives", strToFind.str());
 		return 0;
 	}
 
