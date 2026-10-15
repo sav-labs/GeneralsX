@@ -646,7 +646,10 @@ protected:
 	static void	Set_Texture_Bitdepth(int depth)	{ WWASSERT(depth==16 || depth==32); TextureBitDepth = depth; }
 	static int	Get_Texture_Bitdepth()			{ return TextureBitDepth; }
 
-	static void Set_MSAA_Mode(D3DMULTISAMPLE_TYPE mode) { MultiSampleAntiAliasing = mode; }
+	// GeneralsX @tweak Claude 15/10/2026 Set_MSAA_Mode stores the requested level; Set_Render_Device picks the
+	// level the device uses. is_default marks a level that did not come from Options.ini, which
+	// Set_Render_Device lowers to 2x on integrated GPUs.
+	static void Set_MSAA_Mode(D3DMULTISAMPLE_TYPE mode, bool is_default = false);
 	static D3DMULTISAMPLE_TYPE Get_MSAA_Mode() { return MultiSampleAntiAliasing; }
 
 	static void	Set_Swap_Interval(int swap);
@@ -740,6 +743,9 @@ protected:
 	static IDirect3DSurface8 *			SingleSampleDepthBuffer;
 	static IDirect3DSurface8 *			Get_Single_Sample_Depth_Buffer(IDirect3DSurface8* render_target, IDirect3DSurface8* depth_buffer);
 	static void								Release_Single_Sample_Depth_Buffer();
+
+	// GeneralsX @tweak Claude 15/10/2026 One stderr line per device creation or reset with the MSAA level and FSR state.
+	static void								Log_MSAA_State(const char *event);
 
 	static unsigned							DrawPolygonLowBoundLimit;
 

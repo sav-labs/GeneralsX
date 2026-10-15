@@ -71,6 +71,7 @@ WW3D::MultiSampleModeEnum OptionPreferences::getAntiAliasing() const
 {
 	OptionPreferences::const_iterator it = find("AntiAliasing");
 	// GeneralsX @feature Claude 15/10/2026 4x MSAA by default; the device falls back to a supported level.
+	// GeneralsX @tweak Claude 15/10/2026 The device lowers this default to 2x on integrated GPUs (DX8Wrapper::Set_Render_Device).
 	if (it == end())
 		return WW3D::MULTISAMPLE_MODE_4X;
 
@@ -79,6 +80,11 @@ WW3D::MultiSampleModeEnum OptionPreferences::getAntiAliasing() const
 	level = highestBit(level);
 
 	return level;
+}
+
+Bool OptionPreferences::hasAntiAliasing() const
+{
+	return find("AntiAliasing") != end();
 }
 
 TextureFilterClass::TextureFilterMode OptionPreferences::getTextureFilterMode() const

@@ -431,6 +431,8 @@ public:
 																			 smaller area within the rectangle to order the gather. */
 
 	UnsignedInt m_antiAliasLevel;          ///< value of selected antialias level in the game options
+	// GeneralsX @tweak Claude 15/10/2026 TRUE when Options.ini has no AntiAliasing entry; the device then picks 2x or 4x by GPU class
+	Bool m_antiAliasLevelIsDefault;
 	UnsignedInt m_textureFilteringMode;       ///< value related to TextureFilterClass::TextureFilterModeEnum
 	UnsignedInt m_textureAnisotropyLevel;     ///< value related to TextureFilterClass::AnisotropicFilterMode
 
