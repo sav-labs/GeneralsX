@@ -1793,7 +1793,9 @@ void DX8Wrapper::Log_MSAA_State(const char *event)
 	float density = 1.0f;
 	if (!GetWindowSize(windowW, windowH, density)) {
 		RECT rect = { 0 };
-		if (_Hwnd != nullptr && ::GetClientRect(_Hwnd, &rect)) {
+		// GeneralsX @tweak Claude 15/10/2026 The Linux/macOS CompatLib GetClientRect returns void, so its result is not tested.
+		if (_Hwnd != nullptr) {
+			::GetClientRect(_Hwnd, &rect);
 			windowW = rect.right - rect.left;
 			windowH = rect.bottom - rect.top;
 		}
