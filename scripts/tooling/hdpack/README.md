@@ -9,7 +9,7 @@
 3. Upscales colour with Real-ESRGAN x4plus (ONNX Runtime with DirectML on the GPU, or the CPU; `realesrgan-ncnn-vulkan` as an alternative) and alpha with Lanczos, capped at 2048 px.
 4. Writes mipmapped DXT1 (opaque) or DXT5 (alpha) `.dds` files into `!HDTextures.big`. The `!` prefix makes the game prefer this archive over retail ones, and the texture loader opens `name.dds` before `name.tga`.
 
-Delete `!HDTextures.big` to go back to the original textures.
+Packs over 2 GB are split into `!HDTextures_01.big`, `!HDTextures_02.big`, ... because BIG archives use 32-bit offsets. Delete the `!HDTextures*.big` files to go back to the original textures.
 
 ## Requirements
 
@@ -41,4 +41,6 @@ Useful options:
 - `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
 - `--scale 2`: 2x instead of 4x
 - `--esrgan-args "-g 0 -j 1:1:1"`: extra upscaler arguments (GPU id, thread counts)
+- `--cache-dir <dir>`: where upscaled `.dds` files are kept (default `<out name>.cache` next to the output). A rerun only upscales textures that are not cached yet, so an interrupted full run resumes instead of starting over.
+- `--max-size 1024`: cap the output size (default 2048) to keep the pack and video memory smaller
 - `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)
