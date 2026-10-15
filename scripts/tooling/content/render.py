@@ -16,7 +16,7 @@ def _bone_world(model, index):
 
 
 def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90, 230),
-           background=(0, 0, 0, 0), margin=0.08, light=(-0.4, 0.5, 0.75), supersample=2):
+           background=(0, 0, 0, 0), margin=0.08, light=(-0.4, 0.5, 0.75), supersample=2, hide=()):
     """Orthographic three-quarter view. textures maps texture file name -> PIL image."""
     w, h = size[0] * supersample, size[1] * supersample
     yaw_r, pitch_r = math.radians(yaw), math.radians(pitch)
@@ -30,7 +30,7 @@ def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90,
 
     tris = []
     for bone, mesh in model.meshes:
-        if mesh.attributes & 0x1000 or mesh.material.shader.dest_blend != 0:
+        if mesh.attributes & 0x1000 or mesh.material.shader.dest_blend != 0 or mesh.name in hide:
             continue  # hidden (muzzle flash) or blended (rotor blur): not part of a still picture
         offset = _bone_world(model, bone)
         pos = np.array(mesh.positions) + offset

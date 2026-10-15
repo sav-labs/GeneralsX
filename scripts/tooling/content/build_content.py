@@ -24,6 +24,8 @@ from PIL import Image  # noqa: E402
 from render import render  # noqa: E402
 import gx_apache  # noqa: E402
 import gx_dozer  # noqa: E402
+import gx_jltv  # noqa: E402
+import gx_mlrs  # noqa: E402
 import gx_mbt  # noqa: E402
 
 PACK_NAME = "GeneralsXContent.big"
@@ -78,6 +80,9 @@ def build_models(w3d_dir, tex):
         models["AVGXPAL" + suffix] = gx_mbt.build(
             "AVGXPAL" + suffix, f"gxpal_body{d}.tga", "gxmbt_tread.tga", "gxteam.tga", "gxflash.tga", variant="paladin")
         models["AVGXDOZ" + suffix] = gx_dozer.build("AVGXDOZ" + suffix, f"gxmbt_body{d}.tga", "gxteam.tga")
+        models["AVGXJLTV" + suffix] = gx_jltv.build(
+            "AVGXJLTV" + suffix, f"gxmbt_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga")
+        models["AVGXMLRS" + suffix] = gx_mlrs.build("AVGXMLRS" + suffix, f"gxpal_body{d}.tga", "gxmbt_tread.tga", "gxteam.tga")
         models["AVGXAPACHE" + suffix] = gx_apache.build(
             "AVGXAPACHE" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", "gxrotor.tga")
     for name, model in models.items():
@@ -92,7 +97,11 @@ CAMEOS = {
     "GXCameo_Paladin": "AVGXPAL",
     "GXCameo_Dozer": "AVGXDOZ",
     "GXCameo_Apache": "AVGXAPACHE",
+    "GXCameo_JLTV": "AVGXJLTV",
+    "GXCameo_MLRS": "AVGXMLRS",
 }
+# Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
+DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}
 CELL_W, CELL_H = 352, 184
 
 
@@ -119,8 +128,8 @@ def build_cameos(stage, tex_dir, models, tex):
     for i, (cameo, model_name) in enumerate(CAMEOS.items()):
         x, y = (i % 2) * (CELL_W + 8), (i // 2) * (CELL_H + 8)
         model = models[model_name]
-        button = textures.cameo_frame(fit(render(model, tex, size=(480, 480), yaw=35, pitch=24), (120, 96)), (120, 96))
-        portrait = textures.cameo_frame(fit(render(model, tex, size=(640, 640), yaw=30, pitch=20), (216, 178)), (216, 178))
+        button = textures.cameo_frame(fit(render(model, tex, size=(480, 480), yaw=35, pitch=24, hide=DEFAULT_HIDDEN), (120, 96)), (120, 96))
+        portrait = textures.cameo_frame(fit(render(model, tex, size=(640, 640), yaw=30, pitch=20, hide=DEFAULT_HIDDEN), (216, 178)), (216, 178))
         sheet.paste(button, (x, y))
         sheet.paste(portrait, (x + 128, y))
         mapped(cameo, x, y, x + 120, y + 96)
@@ -171,7 +180,7 @@ def main():
             if name.endswith("_D"):
                 continue
             for yaw in (35, 150):
-                render(model, tex, size=(960, 720), yaw=yaw, pitch=26, background=(70, 78, 70, 255)).save(
+                render(model, tex, size=(960, 720), yaw=yaw, pitch=26, background=(70, 78, 70, 255), hide=DEFAULT_HIDDEN).save(
                     os.path.join(args.preview, f"{name}_{yaw}.png"))
     print(f"wrote {os.path.join(args.out, PACK_NAME)}")
 
