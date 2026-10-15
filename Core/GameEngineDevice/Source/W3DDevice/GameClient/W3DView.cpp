@@ -190,6 +190,9 @@ W3DView::W3DView()
 	m_cameraAreaConstraints.zero();
 	m_recalcCamera = false;
 
+	m_cameraFittedTerrainDrawSize.x = 0;
+	m_cameraFittedTerrainDrawSize.y = 0;
+
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -216,6 +219,10 @@ void W3DView::setHeight(Int height)
  	vMax.Y=(Real)(m_originY+height)/(Real)TheDisplay->getHeight();
  	m_3DCamera->Set_Viewport(vMin,vMax);
 
+	// GeneralsX @feature Claude 15/10/2026 Changing the height changes the aspect ratio, so the
+	// Hor+ view plane must be rebuilt. Otherwise the horizontal FOV would stay fixed and the vertical FOV shrink.
+	setHorPlusViewPlane((Real)getWidth()/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f));
+
 	// TheSuperHackers @bugfix Now recalculates the camera constraints because
 	// showing or hiding the control bar will change the viewable area.
 	m_cameraAreaConstraintsValid = false;
@@ -239,7 +246,9 @@ void W3DView::setWidth(Int width)
 
 	//we want to maintain the same scale, so we'll need to adjust the fov.
 	//default W3D fov for full-screen is 50 degrees.
-	m_3DCamera->Set_View_Plane((Real)width/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f),-1);
+	// GeneralsX @feature Claude 15/10/2026 The 50 degrees are the retail horizontal FOV at 4:3. Wider
+	// screens now keep the retail vertical FOV and extend horizontally (Hor+) instead of cutting off vertically.
+	setHorPlusViewPlane((Real)width/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f));
 
 	m_cameraAreaConstraintsValid = false;
 	m_recalcCamera = true;
@@ -841,7 +850,8 @@ void W3DView::setCameraTransform(const Matrix3D &transform)
 	m_lastScreenToTerrainValid = false;
 
 #if defined(RTS_DEBUG)
-	m_3DCamera->Set_View_Plane( m_FOV, -1 );
+	// GeneralsX @feature Claude 15/10/2026 Keep the Hor+ view plane in debug builds too.
+	setHorPlusViewPlane( m_FOV );
 #endif
 
 	m_3DCamera->Set_Transform(transform);
@@ -2261,7 +2271,10 @@ void W3DView::setCameraHeightAboveGroundLimitsToDefault(Real heightScale)
 
 	if (currentAspectRatio > baseAspectRatio)
 	{
-		aspectRatioScale = fabs(( 1 + ( currentAspectRatio - baseAspectRatio) ));
+		// GeneralsX @feature Claude 15/10/2026 Wide screens are handled by the Hor+ view plane, which keeps
+		// the retail vertical framing. Raising the camera here as well would double the compensation and
+		// push the camera so high that the terrain no longer reaches the screen edges.
+		aspectRatioScale = 1.0f;
 	}
 	else
 	{
@@ -3779,6 +3792,7 @@ bool W3DView::getDesiredTerrainDrawSize(ICoord2D &dimensions) const
 
 	if (cameraPitch > ViewDefaultLowPitchRadians || !m_isUserControlled)
 	{
+		// GeneralsX @feature Claude 15/10/2026 updateTerrain() grows this size to the camera footprint when needed.
 		// TheSuperHackers @info The scripted camera always uses the regular draw sizes
 		// and uses terrain oversize if it needs to enlarge.
 		dimensions.x = WorldHeightMap::NORMAL_DRAW_WIDTH;
@@ -3801,6 +3815,13 @@ void W3DView::updateTerrain()
 
 	if (getDesiredTerrainDrawSize(drawSize))
 	{
+		// GeneralsX @feature Claude 15/10/2026 Make sure the drawn terrain reaches the screen edges on wide
+		// screens and at high zoom-out, so terrain and objects no longer pop in at the edges.
+		if (!TheGlobalData->m_drawEntireTerrain)
+		{
+			fitTerrainDrawSizeToCamera(drawSize);
+		}
+
 		const Real terrainScale = TheGlobalData->m_terrainDrawDistanceScale;
 		if (terrainScale != 1.0f)
 		{
@@ -3821,4 +3842,120 @@ void W3DView::updateTerrain()
 		W3DDisplay::m_3DScene->destroyLightsIterator(it);
 		it = nullptr;
 	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 15/10/2026 Hor+ view plane. The retail game used a fixed 50 degree
+// horizontal FOV, which made wider screens see less vertically (Vert-). Now the vertical FOV of the
+// retail 4:3 screen is kept and wider screens see more to the sides. Screens narrower than 4:3 keep
+// the retail horizontal FOV. This is client-side presentation only and does not feed into game logic.
+//-------------------------------------------------------------------------------------------------
+void W3DView::setHorPlusViewPlane(Real retailHorizontalFov)
+{
+	const Real retailAspectRatio = (Real)DEFAULT_DISPLAY_WIDTH / (Real)DEFAULT_DISPLAY_HEIGHT;
+	const Real aspectRatio = getHeight() > 0 ? (Real)getWidth() / (Real)getHeight() : retailAspectRatio;
+
+	Real halfWidth = tan(retailHorizontalFov * 0.5f);
+	Real halfHeight;
+
+	if (aspectRatio > retailAspectRatio)
+	{
+		halfHeight = halfWidth / retailAspectRatio;
+		halfWidth = halfHeight * aspectRatio;
+	}
+	else
+	{
+		halfHeight = halfWidth / aspectRatio;
+	}
+
+	m_3DCamera->Set_View_Plane(Vector2(-halfWidth, -halfHeight), Vector2(halfWidth, halfHeight));
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 15/10/2026 Grows the terrain draw size so that it covers the ground area
+// seen by the camera. The retail draw size (129x129 cells) was tuned for a 4:3 screen at the retail
+// max camera height, so wide screens or a higher MaxCameraHeight showed untextured gaps and objects
+// popping in at the screen edges. The footprint is measured on the lowest terrain height, rounded up to
+// whole vertex buffer tiles and only shrunk when it is two tiles smaller, to avoid reallocating the
+// terrain buffers while zooming. The retail draw size stays the minimum, so 4:3 screens are unaffected.
+//-------------------------------------------------------------------------------------------------
+void W3DView::fitTerrainDrawSizeToCamera(ICoord2D &dimensions)
+{
+	if (TheTerrainRenderObject == nullptr)
+		return;
+
+	// Only the regular camera pitch is handled. Low pitch uses the dedicated low angle draw size.
+	const Real cameraPitch = asin(fabs(m_3DCamera->Get_Forward_Dir().Z));
+	if (cameraPitch <= ViewDefaultLowPitchRadians)
+		return;
+
+	// Upper bound to keep the terrain buffers reasonable when a corner ray grazes the horizon.
+	const Int maxDrawSize = 1 + (WorldHeightMap::LOW_ANGLE_DRAW_WIDTH - 1) * 2;
+
+	const Vector3 cameraPos = m_3DCamera->Get_Position();
+	const Real groundZ = TheTerrainRenderObject->getMinHeight();
+
+	Real footprintX = (Real)maxDrawSize * MAP_XY_FACTOR;
+	Real footprintY = (Real)maxDrawSize * MAP_XY_FACTOR;
+
+	if (cameraPos.Z > groundZ)
+	{
+		static const Vector2 corners[4] = { Vector2(-1.0f, -1.0f), Vector2(1.0f, -1.0f), Vector2(-1.0f, 1.0f), Vector2(1.0f, 1.0f) };
+
+		Real minX = 1.0e+9f;
+		Real maxX = -1.0e+9f;
+		Real minY = 1.0e+9f;
+		Real maxY = -1.0e+9f;
+		Bool allCornersHitGround = TRUE;
+
+		for (Int i = 0; i < 4; ++i)
+		{
+			Vector3 viewPlanePoint;
+			m_3DCamera->Un_Project(viewPlanePoint, corners[i]);
+			const Vector3 rayDir = viewPlanePoint - cameraPos;
+
+			if (rayDir.Z >= -0.01f)
+			{
+				allCornersHitGround = FALSE;
+				break;
+			}
+
+			const Real t = (groundZ - cameraPos.Z) / rayDir.Z;
+			const Real x = cameraPos.X + rayDir.X * t;
+			const Real y = cameraPos.Y + rayDir.Y * t;
+			minX = std::min(minX, x);
+			maxX = std::max(maxX, x);
+			minY = std::min(minY, y);
+			maxY = std::max(maxY, y);
+		}
+
+		if (allCornersHitGround)
+		{
+			footprintX = maxX - minX;
+			footprintY = maxY - minY;
+		}
+	}
+
+	// One extra tile length of margin, comparable to the slack the retail size has on a 4:3 screen.
+	const Real requiredX = footprintX / MAP_XY_FACTOR + VERTEX_BUFFER_TILE_LENGTH;
+	const Real requiredY = footprintY / MAP_XY_FACTOR + VERTEX_BUFFER_TILE_LENGTH;
+
+	Int fittedX = dimensions.x;
+	Int fittedY = dimensions.y;
+	while (fittedX < requiredX && fittedX < maxDrawSize)
+		fittedX += VERTEX_BUFFER_TILE_LENGTH;
+	while (fittedY < requiredY && fittedY < maxDrawSize)
+		fittedY += VERTEX_BUFFER_TILE_LENGTH;
+
+	// Hysteresis: keep the previous size unless it is at least two tiles too large.
+	if (fittedX < m_cameraFittedTerrainDrawSize.x && fittedX + VERTEX_BUFFER_TILE_LENGTH >= m_cameraFittedTerrainDrawSize.x)
+		fittedX = m_cameraFittedTerrainDrawSize.x;
+	if (fittedY < m_cameraFittedTerrainDrawSize.y && fittedY + VERTEX_BUFFER_TILE_LENGTH >= m_cameraFittedTerrainDrawSize.y)
+		fittedY = m_cameraFittedTerrainDrawSize.y;
+
+	m_cameraFittedTerrainDrawSize.x = fittedX;
+	m_cameraFittedTerrainDrawSize.y = fittedY;
+
+	dimensions.x = fittedX;
+	dimensions.y = fittedY;
 }
