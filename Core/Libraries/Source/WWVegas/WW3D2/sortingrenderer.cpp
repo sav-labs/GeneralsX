@@ -163,9 +163,13 @@ public:
 	unsigned short polygon_count;			// Polygon count to process (3 indices = one polygon)
 	unsigned short min_vertex_index;		// First index used in the vb
 	unsigned short vertex_count;			// Number of vertices used in vb
+	unsigned soft_particle_state;			// GeneralsX @feature Claude 15/10/2026 Soft particle state, 0 for other triangles
 };
 
 typedef std::list<SortingNodeStruct*> SortingNodeStructList;
+unsigned SortingRendererClass::_SoftParticleState=0;
+bool SortingRendererClass::_SoftParticleInFlush=false;
+
 static SortingNodeStructList sorted_list;
 static SortingNodeStructList unsorted_list;
 static SortingNodeStructList clean_list;
@@ -238,6 +242,9 @@ void SortingRendererClass::Insert_Triangles(
 	state->start_index=start_index;
 	state->polygon_count=polygon_count;
 	state->min_vertex_index=min_vertex_index;
+	state->soft_particle_state=_SoftParticleState;
+	if (_SoftParticleState)
+		_SoftParticleInFlush=true;
 	state->vertex_count=vertex_count;
 
 	if (bounding_sphere.Is_Valid())
@@ -411,6 +418,17 @@ static void Apply_Render_State(RenderStateStruct& render_state)
 
 // ----------------------------------------------------------------------------
 
+// GeneralsX @feature Claude 15/10/2026 Pass the soft particle state of the next draw to DXVK.
+// Every draw in a flush that holds soft particles stays inside the pass, so the scene depth is
+// copied only once, before the first translucent draw.
+void SortingRendererClass::Apply_Soft_Particle_State(unsigned state)
+{
+	if (!_SoftParticleInFlush)
+		return;
+
+	DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)SOFT_PARTICLE_RENDER_STATE, SOFT_PARTICLE_PASS | state);
+}
+
 void SortingRendererClass::Flush_Sorting_Pool()
 {
 	if (!overlapping_node_count) return;
@@ -553,6 +571,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 			if (node_id!=tis[i].idx) {
 				SortingNodeStruct* state=overlapping_nodes[node_id];
 				Apply_Render_State(state->sorting_state);
+				Apply_Soft_Particle_State(state->soft_particle_state);
 
 				DX8Wrapper::Draw_Triangles(
 					start_index*3,
@@ -571,6 +590,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 		if (count_to_render) {
 			SortingNodeStruct* state=overlapping_nodes[node_id];
 			Apply_Render_State(state->sorting_state);
+			Apply_Soft_Particle_State(state->soft_particle_state);
 
 			DX8Wrapper::Draw_Triangles(
 				start_index*3,
@@ -624,6 +644,7 @@ void SortingRendererClass::Flush()
 		}
 		else {
 			DX8Wrapper::Set_Render_State(state->sorting_state);
+			Apply_Soft_Particle_State(state->soft_particle_state);
 			DX8Wrapper::Draw_Triangles(state->start_index,state->polygon_count,state->min_vertex_index,state->vertex_count);
 			DX8Wrapper::Release_Render_State();
 			Release_Refs(state);
@@ -635,6 +656,12 @@ void SortingRendererClass::Flush()
 	DX8Wrapper::_Enable_Triangle_Draw(_EnableTriangleDraw);
 	Flush_Sorting_Pool();
 	DX8Wrapper::_Enable_Triangle_Draw(old_enable);
+
+	// GeneralsX @feature Claude 15/10/2026 End the soft particle pass.
+	if (_SoftParticleInFlush) {
+		DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)SOFT_PARTICLE_RENDER_STATE, 0);
+		_SoftParticleInFlush=false;
+	}
 
 	DX8Wrapper::Set_Index_Buffer(nullptr,0);
 	DX8Wrapper::Set_Vertex_Buffer(nullptr);

@@ -52,4 +52,17 @@ public:
 
 	static void _Enable_Triangle_Draw(bool enable) { _EnableTriangleDraw=enable; }
 	static bool _Is_Triangle_Draw_Enabled() { return _EnableTriangleDraw; }
+
+	// GeneralsX @feature Claude 15/10/2026 Soft particles.
+	// Triangles inserted while a soft particle state is set carry it to the flush, where it
+	// is passed to DXVK through render state SOFT_PARTICLE_RENDER_STATE. DXVK copies the scene
+	// depth once per flush and fades those particles where they meet the geometry behind them.
+	// The state holds the blend mode in bits 0-1 and the fade distance in bits 8-23; 0 is off.
+	enum { SOFT_PARTICLE_RENDER_STATE = 254, SOFT_PARTICLE_PASS = 0x10 };
+	static void Set_Soft_Particle_State(unsigned state) { _SoftParticleState=state; }
+
+private:
+	static unsigned _SoftParticleState;
+	static bool _SoftParticleInFlush;
+	static void Apply_Soft_Particle_State(unsigned state);
 };

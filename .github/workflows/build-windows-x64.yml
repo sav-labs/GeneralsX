@@ -25,6 +25,8 @@ jobs:
   # DXVK_POST=1 adds bloom and a light colour grade (0006-present-post.patch); DXVK_BLOOM,
   # DXVK_BLOOM_THRESHOLD, DXVK_SATURATION and DXVK_CONTRAST tune it.
   # DXVK_FXAA=1 smooths edges of a single-sampled back buffer with FXAA (0007-present-fxaa.patch).
+  # Soft particles (0008-d3d9-soft-particles.patch): the game marks its particle draws with render state 254 and DXVK
+  # fades them where they meet the scene depth behind them. On by default, DXVK_SOFT_PARTICLES=0 turns it off.
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
   # DXVK_CAPTURE_VIDEO records every presented frame for DXVK_CAPTURE_VIDEO_SECONDS (default 10), starting
   # DXVK_CAPTURE_VIDEO_START seconds (default 5) after the first present, at DXVK_CAPTURE_VIDEO_SCALE percent

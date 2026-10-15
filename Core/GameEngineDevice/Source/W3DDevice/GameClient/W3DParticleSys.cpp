@@ -35,6 +35,7 @@
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
 #include "WW3D2/camera.h"
+#include "WW3D2/sortingrenderer.h"
 
 
 //------------------------------------------------------------------------------ Performance Timers
@@ -84,6 +85,29 @@ W3DParticleSystemManager::~W3DParticleSystemManager()
 	REF_PTR_RELEASE(m_RGBABuffer);
 	REF_PTR_RELEASE(m_sizeBuffer);
 	REF_PTR_RELEASE(m_angleBuffer);
+}
+
+// GeneralsX @feature Claude 15/10/2026 Soft particles.
+// Distance in world units over which a particle fades out in front of the geometry behind it.
+static const unsigned SOFT_PARTICLE_FADE_DISTANCE = 8;
+
+// Soft particle state for a particle shader, see SortingRendererClass::Set_Soft_Particle_State.
+// Alpha tested particles keep their hard edges.
+static unsigned getSoftParticleState(ParticleSystemInfo::ParticleShaderType shaderType)
+{
+	const unsigned fade = SOFT_PARTICLE_FADE_DISTANCE << 8;
+
+	switch (shaderType)
+	{
+		case ParticleSystemInfo::ALPHA:
+			return 1 | fade;
+		case ParticleSystemInfo::ADDITIVE:
+			return 2 | fade;
+		case ParticleSystemInfo::MULTIPLY:
+			return 3 | fade;
+		default:
+			return 0;
+	}
 }
 
 /**
@@ -373,7 +397,9 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			/// @todo lorenzen sez: unimplemented code wastes cpu cycles
 			m_pointGroup->Set_Point_Frame( 0 );
 
+			SortingRendererClass::Set_Soft_Particle_State(getSoftParticleState(sys->getShaderType()));
 			m_pointGroup->RenderVolumeParticle( rinfo, volumeParticleDepth);
+			SortingRendererClass::Set_Soft_Particle_State(0);
 			m_onScreenParticleCount += (pointCount - startCount);
 			pointCount = startCount;
 		}
@@ -461,7 +487,9 @@ void W3DParticleSystemManager::flushParticleBatch(RenderInfoClass& rinfo, Unsign
 		m_pointGroup->Set_Arrays(m_posBuffer, m_RGBABuffer, nullptr, m_sizeBuffer, m_angleBuffer, nullptr, pointCount);
 		m_pointGroup->Set_Billboard(m_batchParticleAlignment == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
 		m_pointGroup->Set_Point_Frame(0);
+		SortingRendererClass::Set_Soft_Particle_State(getSoftParticleState(m_batchShaderType));
 		m_pointGroup->Render(rinfo);
+		SortingRendererClass::Set_Soft_Particle_State(0);
 
 		pointCount = 0;
 	}
