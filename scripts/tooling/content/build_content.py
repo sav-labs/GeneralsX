@@ -26,6 +26,7 @@ import gx_apache  # noqa: E402
 import gx_buildings  # noqa: E402
 import gx_chinook  # noqa: E402
 import gx_dozer  # noqa: E402
+import gx_jets  # noqa: E402
 import gx_jltv  # noqa: E402
 import gx_mlrs  # noqa: E402
 import gx_mbt  # noqa: E402
@@ -53,6 +54,7 @@ def write_big(path, files):
 TAN = [(176, 160, 118), (128, 116, 82), (92, 86, 64)]
 WOODLAND = [(98, 104, 74), (70, 64, 46), (44, 46, 38)]
 HELI = [(92, 98, 88), (78, 84, 76), (64, 70, 64)]
+JET = [(150, 156, 162), (128, 134, 140), (108, 114, 120)]
 
 
 def build_textures(tex_dir):
@@ -60,7 +62,8 @@ def build_textures(tex_dir):
     out["gxmbt_body.tga"] = textures.camo_atlas(1024, seed=11, palette=TAN)
     out["gxpal_body.tga"] = textures.camo_atlas(1024, seed=21, palette=WOODLAND)
     out["gxheli_body.tga"] = textures.camo_atlas(1024, seed=31, palette=HELI)
-    for name in ("gxmbt_body", "gxpal_body", "gxheli_body"):
+    out["gxjet_body.tga"] = textures.camo_atlas(1024, seed=51, palette=JET)
+    for name in ("gxmbt_body", "gxpal_body", "gxheli_body", "gxjet_body"):
         out[name + "d.tga"] = textures.burnt(out[name + ".tga"], seed=12)
     out["gxmbt_tread.tga"] = textures.tread(256, 64, links=8, seed=13)
     out["gxteam.tga"] = textures.team_panel(128, seed=14)
@@ -91,6 +94,9 @@ def build_models(w3d_dir, tex):
             "AVGXCHINOOK" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxrotor.tga")
         models["AVGXAPACHE" + suffix] = gx_apache.build(
             "AVGXAPACHE" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", "gxrotor.tga")
+        for jet, variant in (("AVGXF35", "f35"), ("AVGXWING", "wing"), ("AVGXHYPER", "hyper")):
+            models[jet + suffix] = gx_jets.build(
+                jet + suffix, f"gxjet_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", variant=variant)
     for name, builder in gx_buildings.BUILDERS.items():
         for variant, texture in (("", "gxbld_wall.tga"), ("D", "gxbld_walld.tga"), ("E", "gxbld_walld.tga")):
             full = name + (f"_{variant}" if variant else "")
@@ -110,6 +116,9 @@ CAMEOS = {
     "GXCameo_JLTV": "AVGXJLTV",
     "GXCameo_MLRS": "AVGXMLRS",
     "GXCameo_Chinook": "AVGXCHINOOK",
+    "GXCameo_F35": "AVGXF35",
+    "GXCameo_Wing": "AVGXWING",
+    "GXCameo_Hyper": "AVGXHYPER",
     "GXCameo_PowerPlant": "ABGXPWR",
     "GXCameo_Barracks": "ABGXBARRACKS",
     "GXCameo_WarFactory": "ABGXWARFACT",
