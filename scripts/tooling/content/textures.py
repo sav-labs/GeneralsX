@@ -165,3 +165,49 @@ def rotor_disc(size):
     a *= np.clip((1.0 - r) / 0.04, 0, 1)
     rgb = np.full((size, size, 3), 40.0)
     return to_image(rgb), Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8), "L")
+
+
+def building_atlas(size, seed, wall=(168, 164, 150), roof=(78, 80, 78), metal=(70, 74, 72)):
+    """Atlas for structures. V from the bottom: 0-0.25 dark metal (doors, machinery, pipes),
+    0.25-0.5 roof membrane with vents, 0.5-1.0 precast wall panels with seams, window bands and stains."""
+    rng = np.random.default_rng(seed)
+    q = size // 4
+    detail = fbm(size, rng, octaves=6, base=16)
+    stain = np.clip((fbm(size, rng, base=6) - 0.5) * 2.2, 0, 1)
+    rgb = np.zeros((size, size, 3))
+
+    # Walls (image rows 0 .. 2q): concrete panels, rain streaks below seams.
+    w = rgb[: 2 * q]
+    w[:] = np.array(wall, float)
+    w *= (0.88 + 0.22 * detail[: 2 * q])[..., None]
+    streak = np.clip(fbm(size, rng, octaves=3, base=24)[: 2 * q] * np.linspace(0.2, 1.0, 2 * q)[:, None] - 0.45, 0, 1)
+    w *= (1 - 0.35 * streak)[..., None]
+    # Roof (rows 2q .. 3q): dark membrane, a little grain.
+    r = rgb[2 * q: 3 * q]
+    r[:] = np.array(roof, float)
+    r *= (0.85 + 0.3 * detail[2 * q: 3 * q])[..., None]
+    # Metal (rows 3q .. 4q): ribbed cladding.
+    m = rgb[3 * q:]
+    m[:] = np.array(metal, float)
+    ribs = 0.85 + 0.15 * np.cos(np.arange(size) / size * 2 * np.pi * 32)
+    m *= (ribs[None, :] * (0.9 + 0.2 * detail[3 * q:]))[..., None]
+    rgb = rgb * (1 - 0.25 * stain[..., None]) + np.array([60, 58, 50]) * 0.25 * stain[..., None]
+
+    img = to_image(rgb)
+    draw = ImageDraw.Draw(img)
+    step = size // 8
+    for k in range(0, size, step):
+        draw.line([(k, 0), (k, 2 * q)], fill=(110, 108, 100), width=2)
+    for k in range(0, 2 * q, q):
+        draw.line([(0, k), (size, k)], fill=(112, 110, 102), width=3)
+    # One band of dark window slots per storey-high wall course.
+    for row in range(0, 2 * q, q):
+        y0 = row + q * 3 // 10
+        for k in range(0, size, step // 2):
+            draw.rectangle([k + 8, y0, k + step // 2 - 8, y0 + q // 6], fill=(34, 42, 48))
+            draw.line([(k + 8, y0), (k + step // 2 - 8, y0)], fill=(90, 104, 112), width=2)
+    # Roof vents and hatches.
+    for k in range(step // 2, size, step):
+        draw.rectangle([k - 10, 2 * q + q // 3, k + 10, 2 * q + q // 3 + 18], fill=(52, 54, 52), outline=(100, 100, 96))
+    draw.line([(0, 2 * q), (size, 2 * q)], fill=(60, 60, 58), width=3)
+    return img

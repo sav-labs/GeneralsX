@@ -1,0 +1,417 @@
+"""Modern USA base structures that replace the art of the retail USA buildings.
+
+GeneralsX @feature Claude 16/10/2026 Power plant, barracks, war factory, supply center and command
+center in a present-day US military look: precast concrete and ribbed metal halls, HESCO barriers,
+solar panels, satellite dishes and team-colour bands. Each fits inside the retail footprint
+(GeometryMajorRadius along +X, the front where units leave, GeometryMinorRadius along Y) so selection,
+pathing and exits keep matching what is drawn.
+
+Every model carries the particle bones the retail Draw modules name (SMOKE01, FIRE01, SPARKS01 ...) so
+damage smoke, fire and sparks still appear. Logic bones (docks, exits) stay those of the retail model:
+ArtRemap only changes what is drawn. Variants: "" intact, "D" scorched paint, "E" rubble (the same
+building slumped to a fraction of its height, scorched, with debris around it).
+"""
+
+import math
+
+from geometry import Builder, Region, ShadeFn
+from w3d import Material, Mesh, Model
+
+WALL = Region(0.0, 0.5, 1.0, 1.0, world_size=20.0)
+ROOF = Region(0.0, 0.25, 1.0, 0.5, world_size=24.0)
+METAL = Region(0.0, 0.0, 1.0, 0.25, world_size=10.0)
+GLASS = Region(0, 0, 1, 1, world_size=8.0)
+TEAM = Region(0, 0, 1, 1, world_size=8.0)
+
+# Particle bones used by the retail USA building Draw modules (damage smoke, fire, sparks, steam).
+FX_BONES = (
+    [f"SMOKE{i:02d}" for i in range(1, 8)] + [f"FIRE{i:02d}" for i in range(1, 8)]
+    + [f"SPARKS{i:02d}" for i in range(1, 12)] + [f"SPARK{i:02d}" for i in range(1, 8)]
+    + [f"SMOKES{i:02d}" for i in range(1, 3)] + [f"SPARKSS{i:02d}" for i in range(1, 7)]
+    + ["SMOKEM01", "SPARKSM01", "SPARKSM02", "STEAM01", "STEAM02", "STEAMM01", "STEAMS01", "DUST01",
+       "FLAME01", "FLAME02", "PIT", "PIT01", "FXBONE01", "FXBONE02", "FXBONE03"]
+)
+
+
+class Kit:
+    """Builders for the materials of one structure, plus the spots particle bones are spread over."""
+
+    def __init__(self, name, wall_texture, team_texture, glass_texture, height):
+        self.model = Model(name)
+        shade = ShadeFn(ground=0.0, height=height, floor=0.72)
+        self.body = Mesh("BODY", Material("GXBuilding", wall_texture, specular=(40, 40, 40), shininess=8.0))
+        self.glass = Mesh("WINDOWS", Material("GXGlass", glass_texture, specular=(200, 200, 200), shininess=40.0))
+        self.team = Mesh("HOUSECOLOR01", Material("GXTeam", team_texture))
+        self.b = Builder(self.body, shade)
+        self.g = Builder(self.glass, ShadeFn(ground=0.0, height=height, floor=0.9))
+        self.t = Builder(self.team, ShadeFn(ground=0.0, height=height, floor=0.85))
+        self.fx_spots = []
+
+    # --- shapes -------------------------------------------------------------------------------
+    def block(self, x0, y0, x1, y1, z0, z1, storey=10.0, region=WALL, roof=ROOF):
+        """Walls in storey-high bands (each band restarts the wall texture, so tall walls keep their
+        panel scale) and a flat roof."""
+        c = ((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2)
+        bands = max(1, round((z1 - z0) / storey))
+        for k in range(bands):
+            za = z0 + (z1 - z0) * k / bands
+            zb = z0 + (z1 - z0) * (k + 1) / bands
+            for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+                self.b.polygon([(a[0], a[1], za), (b[0], b[1], za), (b[0], b[1], zb), (a[0], a[1], zb)], region, outward_from=c)
+        self.b.polygon([(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)], roof, outward_from=c)
+        self.fx_spots.append((x0, y0, x1, y1, z1))
+
+    def parapet(self, x0, y0, x1, y1, z, h=1.0, t=0.6):
+        for lo, hi in (((x0, y0, z), (x1, y0 + t, z + h)), ((x0, y1 - t, z), (x1, y1, z + h)),
+                       ((x0, y0 + t, z), (x0 + t, y1 - t, z + h)), ((x1 - t, y0 + t, z), (x1, y1 - t, z + h))):
+            self.b.box(lo, hi, WALL)
+
+    def pad(self, x0, y0, x1, y1, h=0.8):
+        self.b.box((x0, y0, 0.0), (x1, y1, h), ROOF)
+
+    def ac_unit(self, x, y, z):
+        self.b.box((x - 1.6, y - 1.2, z), (x + 1.6, y + 1.2, z + 1.6), METAL)
+        self.b.cylinder_z(x, y, z + 1.6, z + 1.8, 0.9, 0.9, sides=10, region=METAL)
+
+    def antenna(self, x, y, z, h, r=0.18):
+        self.b.cylinder_z(x, y, z, z + h, r * 1.6, r, sides=6, region=METAL)
+
+    def dish(self, x, y, z, r, facing=0.0, tilt=35.0):
+        """Satellite dish on a short post, opening towards `facing` degrees, tipped up by `tilt`."""
+        self.b.cylinder_z(x, y, z, z + r * 0.9, 0.3, 0.3, sides=6, region=METAL)
+        f, t = math.radians(facing), math.radians(tilt)
+        axis = (math.cos(f) * math.cos(t), math.sin(f) * math.cos(t), math.sin(t))
+        side = (-math.sin(f), math.cos(f), 0.0)
+        up = (axis[1] * side[2] - axis[2] * side[1], axis[2] * side[0] - axis[0] * side[2], axis[0] * side[1] - axis[1] * side[0])
+        cx, cy, cz = x, y, z + r * 0.9 + r * 0.4
+
+        def ring(depth, radius, n=12):
+            return [(cx + axis[0] * depth + (side[0] * math.cos(a) + up[0] * math.sin(a)) * radius,
+                     cy + axis[1] * depth + (side[1] * math.cos(a) + up[1] * math.sin(a)) * radius,
+                     cz + axis[2] * depth + (side[2] * math.cos(a) + up[2] * math.sin(a)) * radius)
+                    for a in (2 * math.pi * k / n for k in range(n))]
+        self.b.loft(ring(-r * 0.25, r * 0.35), ring(0.0, r), WALL, cap_bottom=True, cap_top=True)
+
+    def hesco(self, x0, y0, x1, y1, h=2.6, cell=2.6):
+        """A line of filled barrier cells from (x0, y0) to (x1, y1)."""
+        length = math.hypot(x1 - x0, y1 - y0)
+        n = max(1, round(length / cell))
+        for k in range(n):
+            cx = x0 + (x1 - x0) * (k + 0.5) / n
+            cy = y0 + (y1 - y0) * (k + 0.5) / n
+            s = cell * 0.48
+            self.b.box((cx - s, cy - s, 0.0), (cx + s, cy + s, h), METAL)
+
+    def solar_rows(self, x0, y0, x1, y1, z, rows, tilt_h=1.2):
+        depth = (x1 - x0) / rows
+        for k in range(rows):
+            xa = x0 + k * depth + depth * 0.15
+            xb = x0 + (k + 1) * depth - depth * 0.15
+            self.g.extrude_y([(xa, z + 0.4), (xb, z + 0.4 + tilt_h), (xb, z + 0.7 + tilt_h), (xa, z + 0.7)], y0, y1, GLASS)
+            self.b.box((xa + 0.2, y0 + 0.5, z), (xa + 0.6, y1 - 0.5, z + 0.5), METAL)
+
+    def window_band(self, x0, y0, x1, y1, z0, z1, inset=0.12):
+        """Glass on the outside of a wall plane (axis-aligned), slightly proud of it."""
+        if abs(x1 - x0) < 1e-6:
+            c = (x0 - (1 if x0 > 0 else -1), (y0 + y1) / 2, (z0 + z1) / 2)
+            x = x0 + (inset if x0 > 0 else -inset)
+            self.g.polygon([(x, y0, z0), (x, y1, z0), (x, y1, z1), (x, y0, z1)], GLASS, outward_from=c)
+        else:
+            c = ((x0 + x1) / 2, y0 - (1 if y0 > 0 else -1), (z0 + z1) / 2)
+            y = y0 + (inset if y0 > 0 else -inset)
+            self.g.polygon([(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)], GLASS, outward_from=c)
+
+    def team_band(self, x0, y0, x1, y1, z0, z1, proud=0.1):
+        """Team-colour stripe just outside a wall plane (axis-aligned)."""
+        if abs(x1 - x0) < 1e-6:
+            x = x0 + (proud if x0 > 0 else -proud)
+            self.t.box((min(x0, x), y0, z0), (max(x0, x), y1, z1), TEAM)
+        else:
+            y = y0 + (proud if y0 > 0 else -proud)
+            self.t.box((x0, min(y0, y), z0), (x1, max(y0, y), z1), TEAM)
+
+    def door(self, x, y0, y1, z1, depth=0.3):
+        """Dark roller door on a +X or -X wall."""
+        s = 1 if x > 0 else -1
+        self.b.box((min(x, x + s * depth), y0, 0.0), (max(x, x + s * depth), y1, z1), METAL)
+
+    # --- finishing ----------------------------------------------------------------------------
+    def finish(self, variant, steam=None, sparks=None, height=20.0):
+        if variant == "E":
+            debris = []
+            for mesh in (self.body, self.glass, self.team):
+                slump(mesh, height)
+            for k, (x0, y0, x1, y1, _z) in enumerate(self.fx_spots[:6]):
+                for j in range(5):
+                    u = 0.5 + 0.45 * math.sin(k * 7.1 + j * 3.3)
+                    v = 0.5 + 0.45 * math.cos(k * 5.3 + j * 2.1)
+                    debris.append((x0 + (x1 - x0) * u, y0 + (y1 - y0) * v, 1.0 + (j % 3)))
+            for x, y, s in debris:
+                self.b.box((x - s, y - s * 0.7, 0.0), (x + s, y + s * 0.7, s * 0.8), METAL)
+            # Smoke and fire rise from the heap, not from where the roofs were.
+            self.fx_spots = [(x0, y0, x1, y1, 1.5 + (z - 1.5) * 0.3) for x0, y0, x1, y1, z in self.fx_spots]
+            steam = steam and (steam[0], steam[1], 1.5 + (steam[2] - 1.5) * 0.3)
+            sparks = sparks and [(x, y, 1.5 + (z - 1.5) * 0.3) for x, y, z in sparks]
+        add_fx_bones(self.model, self.fx_spots, steam=steam, sparks=sparks)
+        for mesh in (self.body, self.glass, self.team):
+            if mesh.triangles:
+                self.model.attach("ROOTTRANSFORM", mesh)
+        return self.model
+
+
+def slump(mesh, height):
+    """Rubble: everything above the ground floor sinks to a broken fraction of its height. The factor
+    is a smooth function of position, so corners shared by faces stay together."""
+    out = []
+    for x, y, z in mesh.positions:
+        if z <= 1.5:
+            out.append((x, y, z))
+            continue
+        k = 0.22 + 0.16 * (math.sin(x * 0.31 + y * 0.17) * 0.5 + 0.5) + 0.08 * math.sin(y * 0.53 - x * 0.11)
+        out.append((x, y, 1.5 + (z - 1.5) * k))
+    mesh.positions = out
+
+
+def add_fx_bones(model, spots, steam=None, sparks=None):
+    """Spread the retail particle bones over the roofs. steam/sparks pin the bones the intact building
+    uses all the time (steam vents, arcing wires) to a fixed point."""
+    pinned = {}
+    if steam:
+        for name in ("SMOKE02", "STEAM01", "STEAMM01", "STEAMS01"):
+            pinned[name] = steam
+    if sparks:
+        for i, name in enumerate([f"SPARK{n:02d}" for n in range(1, 8)] + [f"SPARKS{n:02d}" for n in range(1, 12)]):
+            pinned[name] = sparks[i % len(sparks)]
+    for i, name in enumerate(FX_BONES):
+        if name in pinned:
+            pos = pinned[name]
+        else:
+            x0, y0, x1, y1, z = spots[i % len(spots)]
+            u = 0.5 + 0.38 * math.sin(i * 2.399)
+            v = 0.5 + 0.38 * math.cos(i * 1.711)
+            pos = (x0 + (x1 - x0) * u, y0 + (y1 - y0) * v, z + 0.5)
+        model.add_bone(name, "ROOTTRANSFORM", pos)
+
+
+# ------------------------------------------------------------------------------------------------
+def power_plant(name, wall, team, glass, variant=""):
+    """Compact gas-turbine plant: generator hall with solar roof, cooling tower, exhaust stack and a
+    transformer yard. Retail footprint 44 x 60, height 46."""
+    k = Kit(name, wall, team, glass, height=40.0)
+    k.pad(-21.5, -29.5, 21.5, 29.5)
+    # Generator hall along the back.
+    k.block(-20.0, -27.0, 4.0, 6.0, 0.8, 17.0)
+    k.parapet(-20.0, -27.0, 4.0, 6.0, 17.0)
+    k.solar_rows(-18.5, -25.5, 2.5, 4.5, 17.0, rows=4)
+    k.window_band(4.0, -24.0, 4.0, 3.0, 9.0, 12.0)
+    k.team_band(4.0, -26.0, 4.0, 5.0, 14.0, 15.4)
+    k.door(4.0, -9.0, -3.0, 8.0)
+    # Cooling tower: hyperboloid shell.
+    cx, cy = 8.0, 17.0
+    rings = [(0.8, 10.5), (10.0, 8.6), (20.0, 7.0), (28.0, 7.2), (34.0, 7.8)]
+    for (z0, r0), (z1, r1) in zip(rings, rings[1:]):
+        ring0 = [(cx + r0 * math.cos(a), cy + r0 * math.sin(a), z0) for a in (2 * math.pi * i / 20 for i in range(20))]
+        ring1 = [(cx + r1 * math.cos(a), cy + r1 * math.sin(a), z1) for a in (2 * math.pi * i / 20 for i in range(20))]
+        k.b.loft(ring0, ring1, WALL, cap_bottom=False, cap_top=(z1 == 34.0))
+    k.t.cylinder_z(cx, cy, 30.5, 32.0, 7.55, 7.7, sides=20, region=TEAM)
+    k.fx_spots.append((cx - 5, cy - 5, cx + 5, cy + 5, 34.0))
+    # Exhaust stack with a team band and a service ring.
+    k.b.cylinder_z(-14.0, 16.0, 0.8, 44.0, 2.6, 2.1, sides=14, region=METAL)
+    k.t.cylinder_z(-14.0, 16.0, 38.0, 40.0, 2.3, 2.25, sides=14, region=TEAM)
+    k.b.cylinder_z(-14.0, 16.0, 30.0, 30.6, 3.4, 3.4, sides=14, region=METAL)
+    # Pipes from the hall to the tower.
+    for z in (6.0, 9.0):
+        k.b.cylinder_x(4.0, cx - 8.0, 8.0 + (z - 6.0), z, 0.9, sides=10, region=METAL)
+    # Transformer yard at the front left with insulators and a fence line.
+    for y in (-24.0, -16.0):
+        k.b.box((9.0, y - 3.0, 0.8), (17.0, y + 3.0, 7.0), METAL)
+        for j in range(3):
+            k.b.cylinder_z(11.0 + j * 2.6, y, 7.0, 10.0, 0.35, 0.25, sides=6, region=WALL)
+        k.fx_spots.append((9.0, y - 3.0, 17.0, y + 3.0, 7.0))
+    for y in (-28.0, -4.0):
+        k.b.box((7.0, y - 0.15, 0.8), (21.0, y + 0.15, 4.0), METAL)
+    k.b.box((20.8, -28.0, 0.8), (21.1, -4.0, 4.0), METAL)
+    k.ac_unit(-6.0, 3.0, 17.0)
+    sparks = [(11.0, -24.0, 10.0), (16.2, -16.0, 10.0), (13.6, -24.0, 10.0)]
+    return k.finish(variant, steam=(cx, cy, 34.5), sparks=sparks, height=40.0)
+
+
+def barracks(name, wall, team, glass, variant=""):
+    """Two-storey troop building with an entrance canopy, HESCO line, roof plant and a mast.
+    Retail footprint 110 x 90, height 20; soldiers leave through the +X face at Y 0 and -25."""
+    k = Kit(name, wall, team, glass, height=20.0)
+    k.pad(-52.0, -42.0, 52.0, 42.0)
+    # Main wing across the back and a side wing towards the front.
+    k.block(-48.0, -38.0, 6.0, 38.0, 0.8, 17.0, storey=8.0)
+    k.parapet(-48.0, -38.0, 6.0, 38.0, 17.0)
+    k.block(6.0, 10.0, 34.0, 38.0, 0.8, 13.0, storey=6.5)
+    k.parapet(6.0, 10.0, 34.0, 38.0, 13.0)
+    # Front glass bands and the entrance canopy over the exits.
+    for z0, z1 in ((3.0, 6.0), (11.0, 14.0)):
+        k.window_band(6.0, -36.0, 6.0, 8.0, z0, z1)
+        k.window_band(-46.0, -38.0, 4.0, -38.0, z0, z1)
+        k.window_band(-46.0, 38.0, 4.0, 38.0, z0, z1)
+    k.window_band(34.0, 12.0, 34.0, 36.0, 4.0, 9.0)
+    k.b.box((6.0, -32.0, 7.0), (16.0, 4.0, 7.8), METAL)
+    for y in (-31.0, -14.0, 3.0):
+        k.b.cylinder_z(15.2, y, 0.8, 7.0, 0.35, 0.35, sides=8, region=METAL)
+    k.door(6.0, -29.0, -21.0, 6.0)
+    k.door(6.0, -4.0, 4.0, 6.0)
+    k.team_band(6.0, -37.0, 6.0, 9.0, 15.0, 16.2)
+    k.team_band(34.0, 11.0, 34.0, 37.0, 10.6, 11.6)
+    # Roof plant, mast and flag pole.
+    for x, y in ((-40.0, -28.0), (-40.0, -20.0), (-12.0, 24.0), (-4.0, 24.0)):
+        k.ac_unit(x, y, 17.0)
+    k.antenna(-30.0, 30.0, 17.0, 14.0)
+    k.dish(-20.0, -30.0, 17.0, 3.2, facing=200.0)
+    k.b.cylinder_z(44.0, 32.0, 0.8, 18.0, 0.2, 0.15, sides=6, region=METAL)
+    k.t.box((44.2, 32.0, 14.6), (44.3, 37.0, 17.6), TEAM)
+    # Barrier line along the front, leaving the exit lane open.
+    k.hesco(40.0, -41.0, 40.0, -36.0)
+    k.hesco(40.0, 10.0, 40.0, 30.0)
+    k.hesco(-50.0, -41.0, 30.0, -41.0)
+    return k.finish(variant, height=17.0)
+
+
+def war_factory(name, wall, team, glass, variant=""):
+    """Vehicle assembly hall with a barrel-vault roof, a wide roller door on the +X face where vehicles
+    leave (Y around -27), an office annex and a gantry crane. Retail footprint 106 x 120, height 40."""
+    k = Kit(name, wall, team, glass, height=34.0)
+    k.pad(-50.0, -57.0, 50.0, 57.0)
+    # Main hall: walls plus a vaulted roof lofted in segments.
+    x0, x1, y0, y1, wall_h, crown = -44.0, 34.0, -48.0, -4.0, 20.0, 31.0
+    k.block(x0, y0, x1, y1, 0.8, wall_h, storey=10.0)
+    segs = 8
+    yc, half = (y0 + y1) / 2, (y1 - y0) / 2
+    arc = [(yc + half * math.cos(math.pi * i / segs), wall_h + (crown - wall_h) * math.sin(math.pi * i / segs)) for i in range(segs + 1)]
+    for (ya, za), (yb, zb) in zip(arc, arc[1:]):
+        k.b.polygon([(x0, ya, za), (x1, ya, za), (x1, yb, zb), (x0, yb, zb)], ROOF, outward_from=(0.0, yc, wall_h))
+    for x in (x0, x1):
+        gable = [(x, y, z) for y, z in arc]
+        k.b.polygon(gable, WALL, outward_from=(0.0 if x == x1 else 10.0, yc, wall_h + 2))
+    k.fx_spots.append((x0, y0 + 8, x1, y1 - 8, crown - 1.0))
+    # Roller door where vehicles exit, with a team band above.
+    k.door(x1, -40.0, -14.0, 17.0, depth=0.4)
+    k.team_band(x1, -42.0, x1, -12.0, 18.0, 19.4, proud=0.5)
+    # Office annex and a second, lower bay along +Y.
+    k.block(-44.0, 2.0, 10.0, 52.0, 0.8, 14.0, storey=7.0)
+    k.parapet(-44.0, 2.0, 10.0, 52.0, 14.0)
+    k.window_band(10.0, 4.0, 10.0, 50.0, 8.0, 11.0)
+    k.window_band(-42.0, 52.0, 8.0, 52.0, 8.0, 11.0)
+    k.block(10.0, 14.0, 40.0, 52.0, 0.8, 11.0, storey=11.0)
+    k.door(40.0, 20.0, 46.0, 9.0)
+    k.team_band(40.0, 15.0, 40.0, 51.0, 9.6, 10.4)
+    k.solar_rows(-40.0, 6.0, 6.0, 48.0, 14.0, rows=5)
+    # Link between hall and annex.
+    k.block(-30.0, -4.0, -10.0, 2.0, 0.8, 12.0, storey=12.0)
+    # Gantry crane over the hall's front apron.
+    for y in (-50.0, -6.0):
+        k.b.box((38.0, y - 0.6, 0.8), (39.2, y + 0.6, 22.0), METAL)
+    k.b.box((37.6, -51.0, 22.0), (39.6, -5.0, 23.6), METAL)
+    k.b.box((38.0, -30.0, 18.0), (39.2, -27.0, 22.0), METAL)
+    # Roof vents along the vault.
+    for x in (-36.0, -22.0, -8.0, 6.0, 20.0):
+        k.b.box((x - 1.5, yc - 1.5, crown - 0.4), (x + 1.5, yc + 1.5, crown + 1.4), METAL)
+    k.hesco(46.0, -56.0, 46.0, -44.0)
+    k.hesco(46.0, 2.0, 46.0, 12.0)
+    return k.finish(variant, steam=(-22.0, yc, crown + 1.6), height=30.0)
+
+
+def supply_center(name, wall, team, glass, variant=""):
+    """Logistics depot: sawtooth-roof warehouse, loading docks, container stacks and a helipad on the
+    +X side where supply trucks and helicopters come in. Retail footprint 88 x 90, height 24."""
+    k = Kit(name, wall, team, glass, height=22.0)
+    k.pad(-42.0, -43.0, 42.0, 43.0)
+    # Warehouse with sawtooth roof lights.
+    x0, x1, y0, y1, h = -40.0, 6.0, -40.0, 8.0, 12.0
+    k.block(x0, y0, x1, y1, 0.8, h, storey=12.0)
+    teeth = 5
+    step = (x1 - x0) / teeth
+    for i in range(teeth):
+        xa, xb = x0 + i * step, x0 + (i + 1) * step
+        k.b.extrude_y([(xa, h), (xb, h), (xa + 0.3, h + 5.0)], y0, y1, ROOF)
+        k.g.polygon([(xa - 0.05, y0 + 0.5, h + 4.6), (xa - 0.05, y1 - 0.5, h + 4.6), (xa - 0.05, y1 - 0.5, h + 0.4), (xa - 0.05, y0 + 0.5, h + 0.4)],
+                    GLASS, outward_from=(xa + 3.0, (y0 + y1) / 2, h + 2.0))
+    k.fx_spots.append((x0, y0, x1, y1, h + 2.0))
+    # Loading docks on the front face.
+    for y in (-34.0, -24.0, -14.0, -4.0):
+        k.door(x1, y - 3.5, y + 3.5, 8.0)
+    k.b.box((x1, -39.0, 0.8), (x1 + 4.0, 7.0, 3.2), WALL)
+    k.team_band(x1, -39.0, x1, 7.0, 9.4, 10.6)
+    # Office with glazing at the back corner.
+    k.block(-40.0, 8.0, -16.0, 30.0, 0.8, 16.0, storey=8.0)
+    k.parapet(-40.0, 8.0, -16.0, 30.0, 16.0)
+    k.window_band(-16.0, 10.0, -16.0, 28.0, 10.0, 13.6)
+    k.window_band(-38.0, 30.0, -18.0, 30.0, 10.0, 13.6)
+    k.dish(-28.0, 20.0, 16.0, 3.0, facing=160.0)
+    k.antenna(-36.0, 26.0, 16.0, 10.0)
+    # Container stacks.
+    for i, (x, y, z) in enumerate([(-10.0, 18.0, 0.8), (-10.0, 24.0, 0.8), (-10.0, 18.0, 6.2), (2.0, 18.0, 0.8), (2.0, 24.0, 0.8), (2.0, 30.0, 0.8),
+                                   (-10.0, 36.0, 0.8), (2.0, 36.0, 0.8), (2.0, 24.0, 6.2)]):
+        k.b.box((x - 5.8, y - 2.6, z), (x + 5.8, y + 2.6, z + 5.4), METAL)
+        if i % 3 == 0:
+            k.t.box((x - 5.9, y - 2.7, z + 4.2), (x + 5.9, y + 2.7, z + 4.9), TEAM)
+        k.fx_spots.append((x - 5.0, y - 2.0, x + 5.0, y + 2.0, z + 5.4))
+    # Helipad with a team ring and a light mast.
+    hx, hy = 26.0, 22.0
+    k.b.cylinder_z(hx, hy, 0.8, 1.6, 13.0, 13.0, sides=24, region=ROOF)
+    k.t.cylinder_z(hx, hy, 1.6, 1.7, 9.0, 9.0, sides=24, region=TEAM)
+    k.b.cylinder_z(hx, hy, 1.7, 1.8, 7.8, 7.8, sides=24, region=ROOF)
+    k.b.cylinder_z(40.0, 40.0, 0.8, 14.0, 0.3, 0.2, sides=6, region=METAL)
+    k.hesco(40.0, -42.0, 40.0, -10.0)
+    return k.finish(variant, height=16.0)
+
+
+def command_center(name, wall, team, glass, variant=""):
+    """Headquarters: stepped command block with a glass operations floor, radar dome, antenna mast,
+    satellite dishes and a rooftop helipad; vehicle bay on the +X face. Retail footprint 120 x 140,
+    height 49."""
+    k = Kit(name, wall, team, glass, height=42.0)
+    k.pad(-57.0, -67.0, 57.0, 67.0)
+    # Podium.
+    k.block(-50.0, -60.0, 40.0, 60.0, 0.8, 12.0, storey=11.0)
+    k.parapet(-50.0, -60.0, 40.0, 60.0, 12.0)
+    k.window_band(40.0, -56.0, 40.0, -10.0, 5.0, 9.0)
+    k.window_band(40.0, 10.0, 40.0, 56.0, 5.0, 9.0)
+    k.door(40.0, -8.0, 8.0, 9.0)
+    k.team_band(40.0, -58.0, 40.0, 58.0, 10.0, 11.2)
+    # Command block with a glass operations floor.
+    k.block(-42.0, -40.0, 20.0, 40.0, 12.0, 26.0, storey=14.0)
+    k.window_band(20.0, -38.0, 20.0, 38.0, 18.0, 23.0)
+    k.window_band(-40.0, -40.0, 18.0, -40.0, 18.0, 23.0)
+    k.window_band(-40.0, 40.0, 18.0, 40.0, 18.0, 23.0)
+    k.block(-42.0, -40.0, 20.0, 40.0, 26.0, 30.0, storey=4.0, region=WALL)
+    k.parapet(-42.0, -40.0, 20.0, 40.0, 30.0)
+    k.team_band(20.0, -39.0, 20.0, 39.0, 27.0, 28.4)
+    # Top tower with the radar dome.
+    k.block(-34.0, -14.0, -6.0, 14.0, 30.0, 38.0, storey=8.0)
+    k.window_band(-6.0, -12.0, -6.0, 12.0, 33.0, 36.0)
+    dome = [(-20.0 + 8.0 * math.cos(a) * math.cos(e), 8.0 * math.sin(a) * math.cos(e), 38.0 + 8.0 * math.sin(e))
+            for e in (0.0, 0.5, 1.0, 1.35) for a in (2 * math.pi * i / 16 for i in range(16))]
+    for r in range(3):
+        k.b.loft(dome[r * 16:(r + 1) * 16], dome[(r + 1) * 16:(r + 2) * 16], WALL, cap_bottom=False, cap_top=(r == 2))
+    k.fx_spots.append((-34.0, -14.0, -6.0, 14.0, 38.0))
+    # Antenna mast, dishes, roof plant.
+    k.antenna(-40.0, 36.0, 30.0, 18.0, r=0.3)
+    k.antenna(-40.0, -36.0, 30.0, 12.0)
+    k.dish(8.0, -30.0, 30.0, 4.0, facing=300.0)
+    k.dish(8.0, 30.0, 30.0, 3.2, facing=60.0)
+    for x, y in ((-30.0, -30.0), (-22.0, -30.0), (-30.0, 30.0)):
+        k.ac_unit(x, y, 30.0)
+    # Helipad on the podium in front of the command block.
+    k.b.cylinder_z(30.0, 36.0, 12.0, 12.4, 8.0, 8.0, sides=20, region=ROOF)
+    k.t.cylinder_z(30.0, 36.0, 12.4, 12.5, 5.6, 5.6, sides=20, region=TEAM)
+    k.b.cylinder_z(30.0, 36.0, 12.5, 12.6, 4.8, 4.8, sides=20, region=ROOF)
+    # Perimeter barriers at the front corners.
+    k.hesco(52.0, -66.0, 52.0, -30.0)
+    k.hesco(52.0, 30.0, 52.0, 66.0)
+    return k.finish(variant, height=38.0)
+
+
+BUILDERS = {
+    "ABGXPWR": power_plant,
+    "ABGXBARRACKS": barracks,
+    "ABGXWARFACT": war_factory,
+    "ABGXSUPPLY": supply_center,
+    "ABGXCMDHQ": command_center,
+}
