@@ -15,7 +15,7 @@ building slumped to a fraction of its height, scorched, with debris around it).
 import math
 
 from geometry import Builder, Region, ShadeFn
-from w3d import Material, Mesh, Model
+from w3d import ADDITIVE, MESH_FLAG_HIDDEN, MESH_FLAG_TWO_SIDED, Material, Mesh, Model
 
 WALL = Region(0.0, 0.5, 1.0, 1.0, world_size=20.0)
 ROOF = Region(0.0, 0.25, 1.0, 0.5, world_size=24.0)
@@ -408,7 +408,122 @@ def command_center(name, wall, team, glass, variant=""):
     return k.finish(variant, height=38.0)
 
 
+def turret_mesh(k, bone, name):
+    """A body-material mesh that turns with a turret bone (authored in model space)."""
+    mesh = Mesh(name, k.body.material)
+    return mesh, Builder(mesh, ShadeFn(ground=0.0, height=14.0, floor=0.75))
+
+
+def patriot(name, wall, team, glass, variant=""):
+    """Modern air-defence launcher: four sealed missile canisters on a turntable over a concrete pad, with
+    a power unit and a fire-control cabin at the back. Retail footprint is a 12 radius cylinder, height
+    14; the turret is TURRET01 with the canisters on TURRETEL and the missiles leaving from WEAPONA."""
+    k = Kit(name, wall, team, glass, height=10.0)
+    k.model.add_bone("TURRET01", "ROOTTRANSFORM", (0.0, 0.0, 1.2))
+    k.model.add_bone("TURRETEL", "TURRET01", (0.0, 0.0, 4.2))
+    k.model.add_bone("WEAPONA", "TURRETEL", (5.2, 0.0, 4.8))
+    k.b.cylinder_z(0.0, 0.0, 0.0, 0.8, 11.0, 11.0, sides=16, region=ROOF)
+    k.block(-10.0, -7.0, -6.6, -1.0, 0.8, 4.4, storey=4.0)
+    k.block(-9.4, 1.0, -6.4, 6.0, 0.8, 3.2, storey=3.0, region=METAL)
+    k.antenna(-8.2, -4.0, 4.4, 6.0)
+    k.window_band(-6.6, -6.4, -6.6, -1.6, 2.4, 3.6)
+    k.team_band(-10.0, -7.0, -6.6, -7.0, 3.4, 4.0)
+    for a in range(0, 360, 90):
+        r = math.radians(a + 45)
+        k.hesco(10.0 * math.cos(r) - 2.0 * math.sin(r), 10.0 * math.sin(r) + 2.0 * math.cos(r),
+                10.0 * math.cos(r) + 2.0 * math.sin(r), 10.0 * math.sin(r) - 2.0 * math.cos(r), h=1.8, cell=2.0)
+    if variant != "E":
+        base, b = turret_mesh(k, "TURRET01", "TURRET01")
+        b.cylinder_z(0.0, 0.0, 0.8, 2.0, 3.4, 3.0, sides=14, region=METAL)
+        for y0, y1 in ((-2.6, -2.0), (2.0, 2.6)):
+            b.box((-1.2, y0, 2.0), (1.2, y1, 4.8), WALL)
+        k.model.attach("TURRET01", base)
+        pack, c = turret_mesh(k, "TURRETEL", "TURRETEL")
+        for y in (-0.95, 0.95):
+            for z in (3.4, 5.3):
+                c.box((-4.8, y - 0.9, z), (5.0, y + 0.9, z + 1.8), WALL)
+                c.box((5.0, y - 0.75, z + 0.15), (5.2, y + 0.75, z + 1.65), METAL)
+        c.box((-5.2, -2.0, 3.2), (-4.8, 2.0, 7.4), METAL)
+        k.model.attach("TURRETEL", pack)
+        stripe = Mesh("HOUSECOLOR02", k.team.material)
+        t = Builder(stripe, ShadeFn(ground=0.0, height=14.0, floor=0.85))
+        for y0, y1 in ((-1.92, -1.86), (1.86, 1.92)):
+            t.box((-3.0, y0, 5.1), (3.0, y1, 5.6), TEAM)
+        k.model.attach("TURRETEL", stripe)
+    return k.finish(variant, height=4.4)
+
+
+def fire_base(name, wall, team, glass, variant=""):
+    """Hardened fire base: a squat concrete bunker with firing slits for the garrison, ringed by HESCO,
+    with a 155 mm howitzer turret on the roof. Retail footprint 52 x 52, height 15; the gun is TURRET01 >
+    TURRETEL > BARREL (recoil) > MUZZLE01 and the MUZZLEFX flash; STATION01-04 are the garrison posts."""
+    k = Kit(name, wall, team, glass, height=12.0)
+    k.model.add_bone("TURRET01", "ROOTTRANSFORM", (0.0, 0.0, 7.2))
+    k.model.add_bone("TURRETEL", "TURRET01", (2.4, 0.0, 9.4))
+    k.model.add_bone("BARREL", "TURRETEL", (3.8, 0.0, 9.4))
+    k.model.add_bone("MUZZLE01", "BARREL", (21.0, 0.0, 9.4))
+    k.model.add_bone("MUZZLEFX", "BARREL", (21.0, 0.0, 9.4))
+    for i, (x, y) in enumerate(((16.0, 16.0), (16.0, -16.0), (-16.0, -16.0), (-16.0, 16.0)), 1):
+        k.model.add_bone(f"STATION{i:02d}", "ROOTTRANSFORM", (x, y, 7.6))
+    k.pad(-25.0, -25.0, 25.0, 25.0)
+    # Bunker with sloped earth-cover walls and a flat roof deck.
+    k.b.loft([(-20.0, -20.0, 0.8), (20.0, -20.0, 0.8), (20.0, 20.0, 0.8), (-20.0, 20.0, 0.8)],
+             [(-17.0, -17.0, 6.4), (17.0, -17.0, 6.4), (17.0, 17.0, 6.4), (-17.0, 17.0, 6.4)], WALL, cap_bottom=False)
+    k.fx_spots.append((-17.0, -17.0, 17.0, 17.0, 6.4))
+    k.parapet(-17.0, -17.0, 17.0, 17.0, 6.4, h=1.2, t=0.8)
+    # Firing slits, one pair per side, and an entrance on the back.
+    for a in range(4):
+        r = math.radians(a * 90)
+        ca, sa = round(math.cos(r)), round(math.sin(r))
+        for off in (-8.0, 8.0):
+            cx, cy = 18.4 * ca - off * sa, 18.4 * sa + off * ca
+            px, py = -sa * 2.4, ca * 2.4
+            k.g.polygon([(cx - px + ca * 0.05, cy - py + sa * 0.05, 3.6), (cx + px + ca * 0.05, cy + py + sa * 0.05, 3.6),
+                         (cx + px - ca * 0.4, cy + py - sa * 0.4, 4.6), (cx - px - ca * 0.4, cy - py - sa * 0.4, 4.6)],
+                        GLASS, outward_from=(0.0, 0.0, 3.0))
+    k.door(-20.6, -3.0, 3.0, 3.6, depth=0.6)
+    k.team_band(-17.0, -17.8, 17.0, -17.8, 7.0, 7.6, proud=0.0)
+    k.team_band(-17.0, 17.8, 17.0, 17.8, 7.0, 7.6, proud=0.0)
+    for x, y in ((-12.0, 12.0), (-12.0, -12.0)):
+        k.ac_unit(x, y, 6.4)
+    k.antenna(-14.0, 0.0, 6.4, 9.0)
+    k.hesco(-24.0, -24.0, 24.0, -24.0)
+    k.hesco(-24.0, 24.0, 24.0, 24.0)
+    k.hesco(24.0, -21.4, 24.0, 21.4)
+    k.hesco(-24.0, -21.4, -24.0, -6.0)
+    k.hesco(-24.0, 6.0, -24.0, 21.4)
+    if variant != "E":
+        house, h = turret_mesh(k, "TURRET01", "TURRET01")
+        h.cylinder_z(0.0, 0.0, 6.4, 7.4, 6.0, 6.0, sides=16, region=METAL)
+        h.loft([(-6.0, -4.4, 7.4), (3.6, -4.4, 7.4), (3.6, 4.4, 7.4), (-6.0, 4.4, 7.4)],
+               [(-5.6, -3.8, 11.2), (1.6, -3.8, 11.2), (1.6, 3.8, 11.2), (-5.6, 3.8, 11.2)], WALL)
+        h.box((-7.4, -3.4, 7.8), (-6.0, 3.4, 10.4), METAL)
+        k.model.attach("TURRET01", house)
+        cradle, c = turret_mesh(k, "TURRETEL", "TURRETEL")
+        c.box((1.6, -1.6, 8.2), (4.0, 1.6, 10.6), METAL)
+        k.model.attach("TURRETEL", cradle)
+        gun, g = turret_mesh(k, "BARREL", "BARREL")
+        g.cylinder_x(3.8, 9.0, 0.0, 9.4, 0.85, 0.75, sides=12, region=METAL)
+        g.cylinder_x(9.0, 20.0, 0.0, 9.4, 0.5, 0.42, sides=12, region=METAL, caps=False)
+        g.cylinder_x(20.0, 21.0, 0.0, 9.4, 0.75, 0.75, sides=12, region=METAL)
+        k.model.attach("BARREL", gun)
+        stripe = Mesh("HOUSECOLOR02", k.team.material)
+        t = Builder(stripe, ShadeFn(ground=0.0, height=14.0, floor=0.85))
+        for y0, y1 in ((-4.5, -4.42), (4.42, 4.5)):
+            t.box((-4.6, y0, 8.4), (2.4, y1, 9.2), TEAM)
+        k.model.attach("TURRET01", stripe)
+        flash = Mesh("MUZZLEFX", Material("GXFlash", "gxflash.tga", shader=ADDITIVE, emissive=(255, 255, 255)),
+                     attributes=MESH_FLAG_HIDDEN | MESH_FLAG_TWO_SIDED)
+        f = Builder(flash, shade=lambda q, n: (255, 255, 255, 255), uv_fn=lambda q: ((q[0] - 21.0) / 6.0, (q[1] + q[2] - 9.4 + 2.0) / 4.0))
+        f.polygon([(21.0, -2.0, 9.4), (27.0, -2.0, 9.4), (27.0, 2.0, 9.4), (21.0, 2.0, 9.4)])
+        f.polygon([(21.0, 0.0, 7.4), (27.0, 0.0, 7.4), (27.0, 0.0, 11.4), (21.0, 0.0, 11.4)])
+        k.model.attach("MUZZLEFX", flash)
+    return k.finish(variant, height=6.4)
+
+
 BUILDERS = {
+    "ABGXPATRIOT": patriot,
+    "ABGXFIREBASE": fire_base,
     "ABGXPWR": power_plant,
     "ABGXBARRACKS": barracks,
     "ABGXWARFACT": war_factory,
