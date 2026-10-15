@@ -54,6 +54,47 @@
 #include "WW3D2/dx8wrapper.h"
 #include "d3dx8tex.h"
 
+// GeneralsX @feature Claude 15/10/2026 Pick the terrain tile texture format.
+// Retail always used 16 bit A1R5G5B5 (5 bits per colour channel), which bands
+// HD terrain packs visibly. Use 32 bit A8R8G8B8 when the device supports it and
+// textures are not reduced (texture quality High, the full-resolution setting).
+// With texture reduction the player has asked to save texture memory, so keep
+// the retail 16 bit format there (an 8192x8192 atlas is 256 MB at 32 bit
+// against 128 MB at 16 bit, before mips).
+static WW3DFormat getTerrainTileTextureFormat()
+{
+	if (WW3D::Get_Texture_Reduction() == 0
+		&& DX8Wrapper::Get_Current_Caps()->Support_Texture_Format(WW3D_FORMAT_A8R8G8B8)) {
+		return WW3D_FORMAT_A8R8G8B8;
+	}
+	return WW3D_FORMAT_A1R5G5B5;
+}
+
+// GeneralsX @feature Claude 15/10/2026 Bytes per texel of a terrain tile surface,
+// or 0 when the surface format is not one the tile writers handle.
+static Int getTerrainTilePixelBytes(D3DFORMAT format)
+{
+	if (format == D3DFMT_A8R8G8B8) {
+		return 4;
+	}
+	if (format == D3DFMT_A1R5G5B5) {
+		return 2;
+	}
+	return 0;
+}
+
+// GeneralsX @feature Claude 15/10/2026 Write one BGR tile pixel as an opaque
+// texel. The 16 bit path is the retail conversion, unchanged; the 32 bit path
+// keeps all 8 bits per channel, so the only difference is precision.
+static inline void writeTerrainTilePixel(UnsignedByte *pDest, const UnsignedByte *pBGR, Int pixelBytes)
+{
+	if (pixelBytes == 4) {
+		*((UnsignedInt*)pDest) = 0xFF000000u + (((UnsignedInt)pBGR[2])<<16) + (((UnsignedInt)pBGR[1])<<8) + (UnsignedInt)pBGR[0];
+	} else {
+		*((Short*)pDest) = 0x8000 + ((pBGR[2]>>3)<<10) + ((pBGR[1]>>3)<<5) + (pBGR[0]>>3);
+	}
+}
+
 /******************************************************************************
 						TerrainTextureClass
 ******************************************************************************/
@@ -64,24 +105,24 @@
 //=============================================================================
 // TerrainTextureClass::TerrainTextureClass
 //=============================================================================
-/** Constructor. Calls parent constructor to create a 16 bit per pixel D3D
+/** Constructor. Calls parent constructor to create a 16 or 32 bit per pixel D3D
 texture of the desired height and mip level. */
 //=============================================================================
 TerrainTextureClass::TerrainTextureClass(int height) :
 	TextureClass(TEXTURE_WIDTH, height,
-		WW3D_FORMAT_A1R5G5B5, MIP_LEVELS_3 )
+		getTerrainTileTextureFormat(), MIP_LEVELS_3 )
 {
 }
 
 //=============================================================================
 // TerrainTextureClass::TerrainTextureClass
 //=============================================================================
-/** Constructor. Calls parent constructor to create a 16 bit per pixel D3D
+/** Constructor. Calls parent constructor to create a 16 or 32 bit per pixel D3D
 texture of the desired height and mip level. */
 //=============================================================================
 TerrainTextureClass::TerrainTextureClass(int height, int width) :
 	TextureClass(width, height,
-		WW3D_FORMAT_A1R5G5B5, MIP_LEVELS_ALL )
+		getTerrainTileTextureFormat(), MIP_LEVELS_ALL )
 {
 }
 
@@ -117,18 +158,10 @@ int TerrainTextureClass::update(WorldHeightMap *htMap)
 	//DEBUG_ASSERTCRASH(tilesPerRow*numRows >= htMap->m_numBitmapTiles, ("Too many tiles."));
 	DEBUG_ASSERTCRASH((Int)surface_desc.Width >= tilePixelExtent*tilesPerRow, ("Bitmap too small."));
 #endif
-	if (surface_desc.Format == D3DFMT_A1R5G5B5) {
-#if 0
-		UnsignedInt cellX, cellY;
-		for (cellX = 0; cellX < surface_desc.Width; cellX++) {
-			for (cellY = 0; cellY < surface_desc.Height; cellY++) {
-				UnsignedByte *pBGR = ((UnsignedByte *)locked_rect.pBits)+(cellY*surface_desc.Width+cellX)*2;
-				*((Short*)pBGR) = (((255-2*cellY)>>3)<<10) + ((4*cellX)>>4);
-			}
-		}
-#endif
+	// GeneralsX @feature Claude 15/10/2026 Fill a 32 bit atlas as well as the retail 16 bit one.
+	Int pixelBytes = getTerrainTilePixelBytes(surface_desc.Format);
+	if (pixelBytes != 0) {
 		Int tileNdx;
-		Int pixelBytes = 2;
 		for (tileNdx=0; tileNdx < htMap->m_numBitmapTiles; tileNdx++) {
 			TileData *pTile = htMap->getSourceTile(tileNdx);
 			if (!pTile) continue;
@@ -146,7 +179,7 @@ int TerrainTextureClass::update(WorldHeightMap *htMap)
 				Int column = position.x;
 				pBGRX += column*pixelBytes;
 				for (i=0; i<tilePixelExtent; i++) {
-					*((Short*)pBGRX) = 0x8000 + ((pBGR[2]>>3)<<10) + ((pBGR[1]>>3)<<5) + (pBGR[0]>>3);
+					writeTerrainTilePixel(pBGRX, pBGR, pixelBytes);
 					pBGRX +=pixelBytes;
 					pBGR +=TILE_BYTES_PER_PIXEL;
 				}
@@ -391,19 +424,11 @@ Bool TerrainTextureClass::updateFlat(WorldHeightMap *htMap, Int xCell, Int yCell
 	DX8_ErrorCode(surface_level->LockRect(&locked_rect, nullptr, 0));
 
 
-	if (surface_desc.Format == D3DFMT_A1R5G5B5) {
+	// GeneralsX @feature Claude 15/10/2026 Fill a 32 bit flat texture as well as the retail 16 bit one.
+	Int pixelBytes = getTerrainTilePixelBytes(surface_desc.Format);
+	if (pixelBytes != 0) {
 
-		Int pixelBytes = 2;
 		Int cellX, cellY;
-#if 0
-		UnsignedInt X, Y;
-		for (X = 0; X < surface_desc.Width; X++) {
-			for (Y = 0; Y < surface_desc.Height; Y++) {
-				UnsignedByte *pBGR = ((UnsignedByte *)locked_rect.pBits)+(Y*surface_desc.Width+X)*pixelBytes;
-				*((Short*)pBGR) = (((255-2*Y)>>3)<<10) + ((2*X)>>4);
-			}
-		}
-#endif
 		for (cellX = 0; cellX < cellWidth; cellX++) {
 			for (cellY = 0; cellY < cellWidth; cellY++) {
 				UnsignedByte *pBGRX_data = ((UnsignedByte*)locked_rect.pBits);
@@ -414,7 +439,7 @@ Bool TerrainTextureClass::updateFlat(WorldHeightMap *htMap, Int xCell, Int yCell
 					UnsignedByte *pBGRX = pBGRX_data + (pixelsPerCell*(cellWidth-cellY-1)+k)*surface_desc.Width*pixelBytes +
 						cellX*pixelsPerCell*pixelBytes;
 					for (l=0; l<pixelsPerCell; l++) {
-						*((Short*)pBGRX) = 0x8000 + ((pBGR[2]>>3)<<10) + ((pBGR[1]>>3)<<5) + (pBGR[0]>>3);
+						writeTerrainTilePixel(pBGRX, pBGR, pixelBytes);
 						pBGRX +=pixelBytes;
 						pBGR +=TILE_BYTES_PER_PIXEL;
 					}
@@ -485,9 +510,11 @@ then uses the base texture's D3D texture. This way the base tiles pass, drawn
 using TerrainTextureClass shares the same texture with the blended edges pass,
 saving lots of texture memory, and preventing seams between blended tiles. */
 //=============================================================================
+// GeneralsX @feature Claude 15/10/2026 The throw away texture takes the base
+// texture's format, so the format recorded here matches the shared D3D texture.
 AlphaTerrainTextureClass::AlphaTerrainTextureClass( TextureClass *pBaseTex ):
 	TextureClass(8, 8,
-		WW3D_FORMAT_A1R5G5B5, MIP_LEVELS_1 )
+		pBaseTex->Get_Texture_Format(), MIP_LEVELS_1 )
 {
 	// Attach the base texture's d3d texture.
 	IDirect3DTexture8 * d3d_tex = pBaseTex->Peek_D3D_Texture();
