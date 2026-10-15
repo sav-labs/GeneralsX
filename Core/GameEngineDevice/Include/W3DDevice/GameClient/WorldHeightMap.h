@@ -333,8 +333,11 @@ public: // Read tile utilities. jba [7/9/2003]
 	// INI-declared tile count can disambiguate legacy 64px-grid TGAs from native
 	// TILE_PIXEL_EXTENT (256px)-grid TGAs; isLegacyGrid must be forwarded from
 	// countTiles' result into readTiles so both use the same interpretation of the file.
-	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows, Bool isLegacyGrid=false);
-	static Int countTiles(InputStream *pStrm, Bool *halfTile=nullptr, Int expectedTileCount=0, Bool *pIsLegacyGrid=nullptr);
+	// GeneralsX @feature Claude 15/10/2026 isLegacyGrid becomes the source cell size in pixels
+	// (32..2048, power of two) so 2x/4x/8x upscaled sheets are sliced on their real grid.
+	// readTiles derives it from numRows when 0 is passed.
+	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows, Int srcCellExtent=0);
+	static Int countTiles(InputStream *pStrm, Bool *halfTile=nullptr, Int expectedTileCount=0, Int *pSrcCellExtent=nullptr);
 
 protected:
 	void setCliffState(Int xIndex, Int yIndex, Bool state);
