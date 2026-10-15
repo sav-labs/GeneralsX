@@ -1862,6 +1862,41 @@ const Coord3D *ParticleSystem::computeParticlePosition()
 }
 
 // ------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 15/10/2026 Scale the on-screen field particle cap with the static detail level.
+// Field particles are the ground-aligned AREA_EFFECT particles that paint toxin, radiation and fire fields.
+// The retail cap (MaxFieldParticleCount, 30) leaves those fields patchy as soon as a few are on screen.
+// Low and Medium keep the configured cap, High doubles it and Very High quadruples it. A custom detail
+// level follows the particle cap the player picked, compared against the High and Very High presets.
+// Particles are client-only (client random stream, no CRC or save impact), so gameplay is unaffected.
+// ------------------------------------------------------------------------------------------------
+static UnsignedInt getMaxFieldParticleCount()
+{
+	const Int baseCap = TheGlobalData->m_maxFieldParticleCount;
+	if (baseCap <= 0 || TheGameLODManager == nullptr)
+		return (UnsignedInt)baseCap;
+
+	StaticGameLODLevel level = TheGameLODManager->getStaticLODLevel();
+	if (level == STATIC_GAME_LOD_CUSTOM)
+	{
+		const Int particleCap = TheGlobalData->m_maxParticleCount;
+		if (particleCap >= TheGameLODManager->m_staticGameLODInfo[STATIC_GAME_LOD_VERY_HIGH].m_maxParticleCount)
+			level = STATIC_GAME_LOD_VERY_HIGH;
+		else if (particleCap >= TheGameLODManager->m_staticGameLODInfo[STATIC_GAME_LOD_HIGH].m_maxParticleCount)
+			level = STATIC_GAME_LOD_HIGH;
+	}
+
+	switch (level)
+	{
+		case STATIC_GAME_LOD_VERY_HIGH:
+			return (UnsignedInt)baseCap * 4;
+		case STATIC_GAME_LOD_HIGH:
+			return (UnsignedInt)baseCap * 2;
+		default:
+			return (UnsignedInt)baseCap;
+	}
+}
+
+// ------------------------------------------------------------------------------------------------
 /** Factory method for particles. */
 // ------------------------------------------------------------------------------------------------
 Particle *ParticleSystem::createParticle( const ParticleInfo *info,
@@ -1896,7 +1931,8 @@ Particle *ParticleSystem::createParticle( const ParticleInfo *info,
 				 TheGameLODManager->isParticleSkipped()) )
 			return nullptr;
 
-		if ( getParticleCount() > 0 && priority == AREA_EFFECT && isFieldParticle() && TheParticleSystemManager->getFieldParticleCount() > (UnsignedInt)TheGlobalData->m_maxFieldParticleCount )
+		// GeneralsX @feature Claude 15/10/2026 Use the detail-level scaled field particle cap.
+		if ( getParticleCount() > 0 && priority == AREA_EFFECT && isFieldParticle() && TheParticleSystemManager->getFieldParticleCount() > getMaxFieldParticleCount() )
 			return nullptr;
 
 		// ALWAYS_RENDER particles are exempt from all count limits, and are always created, regardless of LOD issues.

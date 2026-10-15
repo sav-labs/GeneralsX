@@ -97,6 +97,9 @@
 #include "DbgHelpGuard.h"
 
 #include "shdlib.h"
+// GeneralsX @tweak Claude 15/10/2026 tolower/isalpha and getenv for the MSAA GPU class default.
+#include <ctype.h>
+#include <stdlib.h>
 
 const int DEFAULT_RESOLUTION_WIDTH = 640;
 const int DEFAULT_RESOLUTION_HEIGHT = 480;
@@ -156,6 +159,158 @@ static bool Is_MSAA_Mode_Supported(
 			depthStencilFormat,
 			windowed,
 			mode));
+}
+
+// GeneralsX @tweak Claude 15/10/2026 Default MSAA level by GPU class. Without an AntiAliasing key in
+// Options.ini, integrated GPUs get 2x and discrete GPUs 4x: on a Radeon 780M with FSR at 67%
+// (2580x1080 -> 3440x1440), 4x ran at 45 FPS and no MSAA at 60 FPS. The class comes from the D3D8
+// adapter identifier; DXVK fills it from the Vulkan device name and vendor ID.
+static D3DMULTISAMPLE_TYPE MSAARequestedMode = D3DMULTISAMPLE_NONE;
+static D3DMULTISAMPLE_TYPE MSAAPolicyMode = D3DMULTISAMPLE_NONE;
+static bool MSAARequestIsDefault = false;
+static const char *MSAARule = "MSAA off";
+static char MSAAAdapterDescription[MAX_DEVICE_IDENTIFIER_STRING] = "";
+static unsigned MSAAAdapterVendorId = 0;
+static unsigned MSAAAdapterDeviceId = 0;
+static bool MSAAAdapterIsIntegrated = false;
+
+static void Lowercase_Copy(char *dst, size_t dstSize, const char *src)
+{
+	size_t i = 0;
+	for (; i + 1 < dstSize && src[i] != '\0'; ++i)
+		dst[i] = (char)tolower((unsigned char)src[i]);
+	dst[i] = '\0';
+}
+
+static bool Is_Digit(char c)
+{
+	return c >= '0' && c <= '9';
+}
+
+// Matches a standalone token of three digits followed by 'm' or four digits followed by 's',
+// such as "780m" or "8060s", the model numbers of AMD integrated Radeon GPUs.
+static bool Has_AMD_Integrated_Model_Token(const char *lowerDesc)
+{
+	for (const char *p = lowerDesc; *p != '\0'; ++p) {
+		if (!Is_Digit(*p) || (p > lowerDesc && (Is_Digit(p[-1]) || isalpha((unsigned char)p[-1]))))
+			continue;
+
+		size_t digits = 0;
+		while (Is_Digit(p[digits]))
+			++digits;
+
+		const char suffix = p[digits];
+		const char next = suffix != '\0' ? p[digits + 1] : '\0';
+		if (isalnum((unsigned char)next))
+			continue;
+		if ((digits == 3 && suffix == 'm') || (digits == 4 && suffix == 's'))
+			return true;
+	}
+	return false;
+}
+
+// Intel Arc A-series and B-series cards (e.g. "Arc(TM) A770", "Arc B580") are discrete;
+// "Intel(R) Arc(TM) Graphics" without a model number is the Meteor Lake / Lunar Lake iGPU.
+static bool Is_Intel_Discrete_Arc(const char *lowerDesc)
+{
+	const char *arc = strstr(lowerDesc, "arc");
+	if (arc == nullptr)
+		return false;
+
+	const char *p = arc + 3;
+	if (strncmp(p, "(tm)", 4) == 0)
+		p += 4;
+	while (*p == ' ')
+		++p;
+
+	return (p[0] == 'a' || p[0] == 'b') && Is_Digit(p[1]);
+}
+
+static bool Classify_Adapter_Is_Integrated(unsigned vendorId, const char *description, const char **rule)
+{
+	char lower[MAX_DEVICE_IDENTIFIER_STRING];
+	Lowercase_Copy(lower, sizeof(lower), description);
+
+	if (strstr(lower, "llvmpipe") != nullptr || strstr(lower, "swiftshader") != nullptr || strstr(lower, "software") != nullptr) {
+		*rule = "software rasterizer";
+		return true;
+	}
+
+	switch (vendorId) {
+	case 0x10DE:
+		*rule = "NVIDIA GPU, treated as discrete";
+		return false;
+
+	case 0x8086:
+		if (Is_Intel_Discrete_Arc(lower)) {
+			*rule = "Intel Arc discrete GPU";
+			return false;
+		}
+		*rule = "Intel integrated GPU";
+		return true;
+
+	case 0x1002:
+	case 0x1022:
+	{
+		if (strstr(lower, "radeon rx") != nullptr || strstr(lower, " rx ") != nullptr
+			|| strstr(lower, "radeon pro") != nullptr || strstr(lower, "firepro") != nullptr) {
+			*rule = "AMD Radeon RX/Pro discrete GPU";
+			return false;
+		}
+
+		// RADV appends the chip name, e.g. "AMD Radeon Graphics (RADV RAPHAEL_MENDOCINO)".
+		static const char *const apuNames[] = {
+			"radeon graphics", "radeon(tm) graphics", "vega 3", "vega 6", "vega 7", "vega 8", "vega 10", "vega 11",
+			"raven", "renoir", "cezanne", "lucienne", "barcelo", "rembrandt", "vangogh", "mendocino", "raphael",
+			"phoenix", "hawk", "strix", "krackan", "gfx90c", "gfx1103", "gfx1150", "gfx1151", "gfx1152",
+			"carrizo", "stoney", "kaveri", "kabini", "mullins", "custom gpu"
+		};
+		for (size_t i = 0; i < ARRAY_SIZE(apuNames); ++i) {
+			if (strstr(lower, apuNames[i]) != nullptr) {
+				*rule = "AMD integrated Radeon (APU name)";
+				return true;
+			}
+		}
+		if (Has_AMD_Integrated_Model_Token(lower)) {
+			*rule = "AMD integrated Radeon (model number)";
+			return true;
+		}
+		*rule = "AMD GPU, treated as discrete";
+		return false;
+	}
+
+	case 0x106B:
+		*rule = "Apple GPU (unified memory)";
+		return true;
+
+	default:
+		*rule = "unknown vendor, treated as integrated";
+		return true;
+	}
+}
+
+static const char *MSAA_Mode_Name(D3DMULTISAMPLE_TYPE mode)
+{
+	switch (mode) {
+	case D3DMULTISAMPLE_NONE: return "off";
+	case D3DMULTISAMPLE_2_SAMPLES: return "2x";
+	case D3DMULTISAMPLE_4_SAMPLES: return "4x";
+	case D3DMULTISAMPLE_8_SAMPLES: return "8x";
+	default: return "other";
+	}
+}
+
+static bool Is_DXVK_FSR_Requested()
+{
+#ifdef _WIN32
+	// WinMain sets DXVK_FSR with SetEnvironmentVariableA, which the CRT getenv does not see.
+	char value[8] = { 0 };
+	const DWORD length = GetEnvironmentVariableA("DXVK_FSR", value, sizeof(value));
+	return length == 1 && value[0] == '1';
+#else
+	const char *value = getenv("DXVK_FSR");
+	return value != nullptr && strcmp(value, "1") == 0;
+#endif
 }
 
 // --- Pillarbox: render game to offscreen RT, blit centered onto backbuffer ---
@@ -1513,6 +1668,43 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 	/*
 	** Check the devices support for the requested MSAA mode then setup the multi sample type
 	*/
+	// GeneralsX @tweak Claude 15/10/2026 Start from the requested level on every create or reset, and lower
+	// the Options.ini default (no AntiAliasing key) to 2x on integrated GPUs. An explicit value is kept.
+	{
+		D3DADAPTER_IDENTIFIER8 adapterId;
+		::ZeroMemory(&adapterId, sizeof(adapterId));
+		const char *classRule = "adapter identifier unavailable, treated as discrete";
+		MSAAAdapterIsIntegrated = false;
+		if (SUCCEEDED(D3DInterface->GetAdapterIdentifier(CurRenderDevice, D3DENUM_NO_WHQL_LEVEL, &adapterId))) {
+			adapterId.Description[MAX_DEVICE_IDENTIFIER_STRING - 1] = '\0';
+			MSAAAdapterIsIntegrated = Classify_Adapter_Is_Integrated(adapterId.VendorId, adapterId.Description, &classRule);
+		}
+		strlcpy(MSAAAdapterDescription, adapterId.Description, sizeof(MSAAAdapterDescription));
+		MSAAAdapterVendorId = adapterId.VendorId;
+		MSAAAdapterDeviceId = adapterId.DeviceId;
+
+		MultiSampleAntiAliasing = MSAARequestedMode;
+		if (!MSAARequestIsDefault) {
+			MSAARule = "Options.ini AntiAliasing";
+		} else if (MSAAAdapterIsIntegrated) {
+			MSAARule = "default 2x for integrated GPU";
+			if (MultiSampleAntiAliasing > D3DMULTISAMPLE_2_SAMPLES)
+				MultiSampleAntiAliasing = D3DMULTISAMPLE_2_SAMPLES;
+		} else {
+			MSAARule = "default 4x for discrete GPU";
+		}
+		MSAAPolicyMode = MultiSampleAntiAliasing;
+
+		fprintf(stderr, "[MSAA] adapter \"%s\" vendor 0x%04X device 0x%04X: %s (%s); rule: %s\n",
+			MSAAAdapterDescription,
+			MSAAAdapterVendorId,
+			MSAAAdapterDeviceId,
+			MSAAAdapterIsIntegrated ? "integrated" : "discrete",
+			classRule,
+			MSAARule);
+		fflush(stderr);
+	}
+
 	if (MultiSampleAntiAliasing > D3DMULTISAMPLE_NONE) {
 		const D3DMULTISAMPLE_TYPE requestedMode = MultiSampleAntiAliasing;
 		MultiSampleAntiAliasing = Normalize_MSAA_Mode(MultiSampleAntiAliasing);
@@ -1532,6 +1724,10 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 			WWDEBUG_SAY(("Requested MSAA mode %u is unsupported; using %u",
 				(unsigned)requestedMode,
 				(unsigned)MultiSampleAntiAliasing));
+			// GeneralsX @tweak Claude 15/10/2026 Name the CheckDeviceMultiSampleType fallback in the MSAA log line.
+			MSAARule = MSAARequestIsDefault
+				? (MSAAAdapterIsIntegrated ? "default 2x for integrated GPU, lowered by device support" : "default 4x for discrete GPU, lowered by device support")
+				: "Options.ini AntiAliasing, lowered by device support";
 		}
 	}
 
@@ -1564,9 +1760,66 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 	{
 		Render2DClass::Set_Screen_Resolution( RectClass( 0, 0, ResolutionWidth, ResolutionHeight ) );
 		Pillarbox_Setup(ResolutionWidth, ResolutionHeight);
+		Log_MSAA_State(reset_device ? "device reset" : "device created");
 	}
 
 	return ret;
+}
+
+void DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_TYPE mode, bool is_default)
+{
+	MSAARequestedMode = mode;
+	MSAARequestIsDefault = is_default;
+	MultiSampleAntiAliasing = mode;
+}
+
+// GeneralsX @tweak Claude 15/10/2026 Report the requested and actual MSAA level and whether the DXVK
+// swap chain upscales with FSR. The actual level is read back from the device's back buffer.
+void DX8Wrapper::Log_MSAA_State(const char *event)
+{
+	D3DMULTISAMPLE_TYPE actual = _PresentParameters.MultiSampleType;
+	IDirect3DSurface8 *backBuffer = nullptr;
+	if (D3DDevice != nullptr && SUCCEEDED(D3DDevice->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer != nullptr) {
+		D3DSURFACE_DESC desc;
+		::ZeroMemory(&desc, sizeof(desc));
+		if (SUCCEEDED(backBuffer->GetDesc(&desc)))
+			actual = desc.MultiSampleType;
+		backBuffer->Release();
+	}
+
+	// The FSR path is the -upscale / RenderScale window: a display-size window with a smaller back buffer.
+	int windowW = 0;
+	int windowH = 0;
+	float density = 1.0f;
+	if (!GetWindowSize(windowW, windowH, density)) {
+		RECT rect = { 0 };
+		// GeneralsX @tweak Claude 15/10/2026 The Linux/macOS CompatLib GetClientRect returns void, so its result is not tested.
+		if (_Hwnd != nullptr) {
+			::GetClientRect(_Hwnd, &rect);
+			windowW = rect.right - rect.left;
+			windowH = rect.bottom - rect.top;
+		}
+	}
+	const int backBufferW = (int)_PresentParameters.BackBufferWidth;
+	const int backBufferH = (int)_PresentParameters.BackBufferHeight;
+	const bool fsrRequested = Is_DXVK_FSR_Requested();
+	const bool fsrActive = fsrRequested && IsWindowed && s_upscaleToDisplay
+		&& windowW >= backBufferW && windowH >= backBufferH
+		&& (windowW > backBufferW || windowH > backBufferH);
+
+	fprintf(stderr, "[MSAA] %s: Options.ini %s%s, requested %s (%s), actual %s; back buffer %dx%d, window %dx%d, FSR %s\n",
+		event,
+		MSAA_Mode_Name(MSAARequestedMode),
+		MSAARequestIsDefault ? " (default, no AntiAliasing key)" : "",
+		MSAA_Mode_Name(MSAAPolicyMode),
+		MSAARule,
+		MSAA_Mode_Name(actual),
+		backBufferW,
+		backBufferH,
+		windowW,
+		windowH,
+		fsrActive ? "active" : (fsrRequested ? "requested but inactive (no upscale)" : "off"));
+	fflush(stderr);
 }
 
 bool DX8Wrapper::Set_Next_Render_Device()
@@ -1711,7 +1964,10 @@ bool DX8Wrapper::Set_Device_Resolution(int width,int height,int bits,int windowe
 #pragma message("TODO: support changing windowed status and changing the bit depth")
 		WWDEBUG_SAY(("DX8Wrapper::Set_Device_Resolution is resetting the device."));
 		bool ok = Reset_Device();
-		if (ok) Pillarbox_Setup(ResolutionWidth, ResolutionHeight);
+		if (ok) {
+			Pillarbox_Setup(ResolutionWidth, ResolutionHeight);
+			Log_MSAA_State("device reset for resolution change");
+		}
 		return ok;
 	} else {
 		return false;

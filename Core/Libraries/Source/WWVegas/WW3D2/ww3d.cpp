@@ -2043,25 +2043,26 @@ int WW3D::Get_Texture_Bitdepth()
 	return DX8Wrapper::Get_Texture_Bitdepth();
 }
 
-void WW3D::Set_MSAA_Mode(MultiSampleModeEnum mode)
+// GeneralsX @tweak Claude 15/10/2026 is_default: the level is the Options.ini default, not a player choice.
+void WW3D::Set_MSAA_Mode(MultiSampleModeEnum mode, bool is_default)
 {
 	switch (mode) {
 
 	default:
 	case MULTISAMPLE_MODE_NONE:
-		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_NONE);
+		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_NONE, is_default);
 		break;
 
 	case MULTISAMPLE_MODE_2X:
-		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_2_SAMPLES);
+		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_2_SAMPLES, is_default);
 		break;
 
 	case MULTISAMPLE_MODE_4X:
-		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_4_SAMPLES);
+		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_4_SAMPLES, is_default);
 		break;
 
 	case MULTISAMPLE_MODE_8X:
-		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_8_SAMPLES);
+		DX8Wrapper::Set_MSAA_Mode(D3DMULTISAMPLE_8_SAMPLES, is_default);
 		break;
 
 	}
