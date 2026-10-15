@@ -22,10 +22,12 @@ def turret_ring(points, z):
     return [(x + TURRET_X, y, z) for x, y in points]
 
 
-def build(name, body_texture, tread_texture, team_texture, flash_texture):
+def build(name, body_texture, tread_texture, team_texture, flash_texture, variant="mbt"):
+    """variant "mbt" replaces the Crusader; "paladin" adds reactive armour and a laser defence turret."""
+    turret_bone = "TURRET01" if variant == "paladin" else "TURRET"
     model = Model(name)
-    model.add_bone("TURRET", "ROOTTRANSFORM", (TURRET_X, 0, TURRET_Z))
-    model.add_bone("BARREL", "TURRET", (TURRET_X + 9.8, 0, GUN_Z))
+    model.add_bone(turret_bone, "ROOTTRANSFORM", (TURRET_X, 0, TURRET_Z))
+    model.add_bone("BARREL", turret_bone, (TURRET_X + 9.8, 0, GUN_Z))
     model.add_bone("TURRETMS", "BARREL", (TURRET_X + 30.4, 0, GUN_Z))
     model.add_bone("TURRETFX", "BARREL", (TURRET_X + 30.4, 0, GUN_Z))
 
@@ -109,7 +111,18 @@ def build(name, body_texture, tread_texture, team_texture, flash_texture):
     # Antennas.
     for y in (-4.6, 4.6):
         t.cylinder_z(tx - 9.5, y, 8.6, 13.0, 0.08, 0.04, sides=4, region=DARK)
-    model.attach("TURRET", turret)
+    if variant == "paladin":
+        # Reactive armour blocks on the cheeks and hull front, and the point-defence laser mount.
+        for side in (-1, 1):
+            for k in range(4):
+                x = tx + 6.2 - k * 2.6
+                y0, y1 = (6.7, 7.5) if side > 0 else (-7.5, -6.7)
+                t.box((x - 1.1, y0, 6.0), (x + 1.1, y1, 8.0), CAMO)
+        t.cylinder_z(tx - 7.0, 0.0, 8.6, 9.4, 1.6, 1.4, sides=12, region=DARK)
+        t.cylinder_z(tx - 7.0, 0.0, 9.4, 10.6, 1.1, 0.7, sides=12, region=CAMO)
+        t.box((tx - 7.3, -0.35, 10.0), (tx - 5.6, 0.35, 10.6), DARK)
+        model.add_bone("LASER", turret_bone, (tx - 5.5, 0, 10.3))
+    model.attach(turret_bone, turret)
 
     team_turret = Mesh("HOUSECOLOR01", team)
     tt = Builder(team_turret, ShadeFn(ground=2.0, height=7.0, floor=0.75))
@@ -117,7 +130,7 @@ def build(name, body_texture, tread_texture, team_texture, flash_texture):
     tt.box((tx - 9.6, -2.2, 8.6), (tx - 6.4, 2.2, 8.66), Region(0, 0, 1, 1, world_size=8.0))
     for y0, y1 in ((-4.85, -4.8), (4.4, 4.45)):
         tt.box((tx - 12.9, y0, 6.5), (tx - 11.2, y1, 7.0), Region(0, 0, 1, 1, world_size=8.0))
-    model.attach("TURRET", team_turret)
+    model.attach(turret_bone, team_turret)
 
     team_hull = Mesh("HOUSECOLOR02", team)
     th = Builder(team_hull, ShadeFn(height=7.0, floor=0.75))

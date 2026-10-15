@@ -50,7 +50,8 @@ def read_big(path):
 def check_w3d(name, data):
     chunks = w3d.read_chunks(data)
     ids = [c[0] for c in chunks]
-    assert ids[0] == w3d.HIERARCHY and ids[-1] == w3d.HLOD, f"{name}: unexpected top-level order {ids}"
+    assert ids[0] == w3d.HIERARCHY and w3d.HLOD in ids, f"{name}: unexpected top-level order {ids}"
+    npivots = struct.unpack_from("<I", chunks[0][2][0][1], 20)[0]
 
     def walk(nodes):
         for cid, payload, children in nodes:
@@ -73,7 +74,17 @@ def check_w3d(name, data):
             assert sizes[w3d.VERTICES] == nverts * 12 and sizes[w3d.VERTEX_NORMALS] == nverts * 12
             assert sizes[w3d.TRIANGLES] == ntris * 32
             meshes.add(f"{owner}.{mesh}")
-    hlod = chunks[-1][2]
+    for cid, payload, children in chunks:
+        if cid == w3d.ANIMATION:
+            header = children[0][1]
+            assert len(header) == 44, f"{name}: animation header is {len(header)} bytes"
+            assert header[4:20].split(b"\0")[0].decode() == container, f"{name}: animation name"
+            frames = struct.unpack_from("<I", header, 36)[0]
+            for ccid, chan, _ in children[1:]:
+                first, last, veclen, _, pivot, _ = struct.unpack_from("<6H", chan)
+                assert ccid == w3d.ANIMATION_CHANNEL and last < frames and pivot < npivots
+                assert len(chan) == 12 + 4 * veclen * (last - first + 1), f"{name}: channel size"
+    hlod = next(ch for c, _, ch in chunks if c == w3d.HLOD)
     lod = next(ch for c, _, ch in hlod if c == w3d.HLOD_LOD_ARRAY)
     for cid, payload, _ in lod:
         if cid == w3d.HLOD_SUB_OBJECT:

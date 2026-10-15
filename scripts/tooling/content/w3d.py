@@ -36,6 +36,10 @@ STAGE_TEXCOORDS = 0x0000004A
 HIERARCHY = 0x00000100
 HIERARCHY_HEADER = 0x00000101
 PIVOTS = 0x00000102
+ANIMATION = 0x00000200
+ANIMATION_HEADER = 0x00000201
+ANIMATION_CHANNEL = 0x00000202
+ANIM_CHANNEL_Q = 6
 HLOD = 0x00000700
 HLOD_HEADER = 0x00000701
 HLOD_LOD_ARRAY = 0x00000702
@@ -49,6 +53,7 @@ def make_version(major, minor):
 
 MESH_VERSION = make_version(4, 2)
 HTREE_VERSION = make_version(4, 1)
+HANIM_VERSION = make_version(4, 1)
 HLOD_VERSION = make_version(1, 0)
 
 MESH_FLAG_HIDDEN = 0x00001000
@@ -121,6 +126,7 @@ class Shader:
 
 OPAQUE = Shader()
 ADDITIVE = Shader(src_blend=1, dest_blend=1, depth_mask=0)
+ALPHA_BLEND = Shader(src_blend=2, dest_blend=5, depth_mask=0)
 
 
 class Material:
@@ -246,6 +252,14 @@ class Model:
         self.name = name.upper()
         self.bones = [Bone("ROOTTRANSFORM", None, (0, 0, 0))]
         self.meshes = []  # (bone index, Mesh)
+        self.spins = []  # (bone index, axis, revolutions per loop)
+        self.anim_frames = 0
+        self.anim_rate = 30
+
+    def add_spin(self, bone_name, axis, revolutions=1.0):
+        """Loop that turns a bone about its local axis (rotors); written as the model's own animation."""
+        self.spins.append((self.bone_index(bone_name), axis, revolutions))
+        self.anim_frames = max(self.anim_frames, 17)
 
     def bone_index(self, name):
         for i, bone in enumerate(self.bones):
@@ -300,7 +314,26 @@ class Model:
                 *sub_objects,
             ]),
         ])
-        return hierarchy + b"".join(meshes) + hlod
+        return hierarchy + b"".join(meshes) + hlod + self.pack_animation()
+
+    def pack_animation(self):
+        """Animation named MODEL.MODEL (what INI 'Animation = X.X' refers to), one Q channel per spin."""
+        if not self.spins:
+            return b""
+        frames = self.anim_frames
+        channels = []
+        for bone, axis, revolutions in self.spins:
+            data = b""
+            for f in range(frames):
+                # Last key equals the first turned a whole number of times, so the loop is seamless.
+                angle = 2 * math.pi * revolutions * f / (frames - 1)
+                half = angle / 2
+                q = [0.0, 0.0, 0.0, math.cos(half)]
+                q["xyz".index(axis)] = math.sin(half)
+                data += struct.pack("<4f", *q)
+            channels.append(chunk(ANIMATION_CHANNEL, struct.pack("<6H", 0, frames - 1, 4, ANIM_CHANNEL_Q, bone, 0) + data))
+        header = struct.pack("<I", HANIM_VERSION) + fixed_name(self.name) + fixed_name(self.name) + struct.pack("<II", frames, self.anim_rate)
+        return wrapper(ANIMATION, [chunk(ANIMATION_HEADER, header), *channels])
 
 
 def read_chunks(data, offset=0, end=None):

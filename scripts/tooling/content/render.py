@@ -30,8 +30,8 @@ def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90,
 
     tris = []
     for bone, mesh in model.meshes:
-        if mesh.attributes & 0x1000:  # hidden (muzzle flash)
-            continue
+        if mesh.attributes & 0x1000 or mesh.material.shader.dest_blend != 0:
+            continue  # hidden (muzzle flash) or blended (rotor blur): not part of a still picture
         offset = _bone_world(model, bone)
         pos = np.array(mesh.positions) + offset
         nrm = np.array(mesh.normals)

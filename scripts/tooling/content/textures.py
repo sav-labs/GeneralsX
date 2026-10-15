@@ -133,10 +133,6 @@ def burnt(img, seed):
     return to_image(out * 0.8)
 
 
-def cameo_sheet():
-    return Image.new("RGB", (512, 256), (20, 24, 28))
-
-
 def cameo_frame(render_img, size):
     """Command-bar style backdrop: dark blue-grey gradient with the vehicle on top."""
     w, h = size
@@ -148,3 +144,24 @@ def cameo_frame(render_img, size):
     base = to_image(bg).convert("RGBA")
     base.alpha_composite(render_img)
     return base.convert("RGB")
+
+
+def glass(size, seed):
+    """Tinted canopy glass with a soft reflection band."""
+    rng = np.random.default_rng(seed)
+    y = np.linspace(0, 1, size)[:, None] * np.ones((1, size))
+    band = np.exp(-((y - 0.3) ** 2) / 0.01)
+    noise = fbm(size, rng, octaves=3, base=4)
+    rgb = np.stack([30 + 60 * band + 10 * noise, 42 + 70 * band + 10 * noise, 52 + 80 * band + 12 * noise], -1)
+    return to_image(rgb)
+
+
+def rotor_disc(size):
+    """Blurred rotor: faint ring, transparent centre gaps. Returns (rgb, alpha)."""
+    y, x = np.mgrid[0:size, 0:size]
+    c = (size - 1) / 2
+    r = np.sqrt((x - c) ** 2 + (y - c) ** 2) / c
+    a = np.where(r <= 1.0, 0.22 + 0.10 * np.cos(r * 18) ** 2, 0.0) * np.clip((r - 0.08) / 0.1, 0, 1)
+    a *= np.clip((1.0 - r) / 0.04, 0, 1)
+    rgb = np.full((size, size, 3), 40.0)
+    return to_image(rgb), Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8), "L")
