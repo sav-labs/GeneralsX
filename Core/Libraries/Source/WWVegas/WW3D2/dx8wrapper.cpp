@@ -651,6 +651,8 @@ bool								DX8Wrapper::IsRenderToTexture							= false;
 
 unsigned							DX8Wrapper::_MainThreadID								= 0;
 bool								DX8Wrapper::CurrentDX8LightEnables[4];
+// GeneralsX @feature Claude 15/10/2026 Retail point light falloff unless the display enables the High detail one.
+bool								DX8Wrapper::EnhancedPointLightFalloff = false;
 bool								DX8Wrapper::IsDeviceLost;
 int								DX8Wrapper::ZBias;
 float								DX8Wrapper::ZNear;
@@ -3840,6 +3842,21 @@ void DX8Wrapper::Set_Light_Environment(LightEnvironmentClass* light_env)
 					light.Attenuation1=(float) 0.1/a;
 
 				light.Attenuation2=8.0f/(b*b);
+
+				// GeneralsX @feature Claude 15/10/2026 Softer point light falloff at High detail and above.
+				// Light pulses (explosions, muzzle flashes, fires) are created with an inner radius of 1, so the
+				// retail linear term 0.1/a halves the light 10 units from its center and leaves 5-15% across the
+				// rest of the radius: units and buildings next to an explosion barely change. Here the light
+				// fades with distance only (1 at the center, 0.4 at half radius, 0.14 at the radius) and reaches
+				// half a radius further, so the vertices of an object the light touches fade out instead of
+				// being cut at the radius. Fixed function lighting only, no logic or CRC impact.
+				if (EnhancedPointLightFalloff && b > 1e-5)
+				{
+					light.Attenuation0=1.0f;
+					light.Attenuation1=0.0f;
+					light.Attenuation2=(float)(6.0/(b*b));
+					light.Range=(float)(b*1.5);
+				}
 			}
 
 			Set_Light(l,&light);

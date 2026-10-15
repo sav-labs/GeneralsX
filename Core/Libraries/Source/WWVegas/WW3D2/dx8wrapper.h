@@ -353,6 +353,9 @@ public:
 	static void Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture);
 	static void Set_Light_Environment(LightEnvironmentClass* light_env);
 	static LightEnvironmentClass* Get_Light_Environment() { return Light_Environment; }
+	// GeneralsX @feature Claude 15/10/2026 Softer point light falloff for High detail and above (see Set_Light_Environment).
+	static void Set_Enhanced_Point_Light_Falloff(bool onoff) { EnhancedPointLightFalloff = onoff; }
+	static bool Get_Enhanced_Point_Light_Falloff() { return EnhancedPointLightFalloff; }
 	static void Set_Fog(bool enable, const Vector3 &color, float start, float end);
 
 	static WWINLINE const D3DLIGHT8& Peek_Light(unsigned index);
@@ -726,6 +729,8 @@ protected:
 
 	static DX8FrameStatistics			FrameStatistics;
 	static bool								CurrentDX8LightEnables[4];
+	// GeneralsX @feature Claude 15/10/2026 True when point lights use the softer High detail falloff.
+	static bool								EnhancedPointLightFalloff;
 
 	static unsigned long FrameCount;
 
