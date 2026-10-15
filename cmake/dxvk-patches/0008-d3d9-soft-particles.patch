@@ -1,0 +1,430 @@
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index 4313f6a..f0d0e43 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -70,6 +70,9 @@ namespace dxvk {
+     if (canSWVP)
+       Logger::info("D3D9DeviceEx: Using extended constant set for software vertex processing.");
+ 
++    // GeneralsX: soft particles are on unless DXVK_SOFT_PARTICLES=0.
++    m_softParticleEnabled = env::getEnvVar("DXVK_SOFT_PARTICLES") != "0";
++
+     if (m_dxvkDevice->debugFlags().test(DxvkDebugFlag::Markers))
+       m_annotation = new D3D9UserDefinedAnnotation(this);
+ 
+@@ -2241,6 +2244,12 @@ namespace dxvk {
+       return D3D_OK;
+     }
+ 
++    // GeneralsX: private soft particle state, never part of a state block.
++    if (unlikely(State == D3D9SoftParticleRenderState)) {
++      SetSoftParticleState(Value);
++      return D3D_OK;
++    }
++
+     if (unlikely(ShouldRecord()))
+       return m_recorder->SetRenderState(State, Value);
+ 
+@@ -7279,6 +7288,12 @@ namespace dxvk {
+     if (likely(usedDirtyTextures))
+       UndirtyTextures(usedDirtyTextures);
+ 
++    // GeneralsX: keep the depth copy on sampler 7 while soft particles draw.
++    if (unlikely(m_softParticleMode && !UseProgrammablePS())) {
++      if (!m_softParticleBound || (usedDirtyTextures & (1u << 7)))
++        BindSoftParticleDepth();
++    }
++
+     if (unlikely(m_flags.test(D3D9DeviceFlag::DirtyBlendState)))
+       BindBlendState();
+ 
+@@ -8028,6 +8043,7 @@ namespace dxvk {
+       }
+ 
+       stage0.GlobalSpecularEnable = m_state.renderStates[D3DRS_SPECULARENABLE];
++      stage0.SoftParticle = m_softParticleMode;
+ 
+       // The last stage *always* writes to current.
+       if (idx >= 1)
+@@ -8053,7 +8069,168 @@ namespace dxvk {
+ 
+       D3D9FixedFunctionPS* data = reinterpret_cast<D3D9FixedFunctionPS*>(mapPtr);
+       DecodeD3DCOLOR((D3DCOLOR)rs[D3DRS_TEXTUREFACTOR], data->textureFactor.data);
++
++      const Matrix4& proj = m_state.transforms[GetTransformIndex(D3DTS_PROJECTION)];
++      data->softParams = Vector4(proj[2][2], proj[3][2], m_softParticleInvFade, 0.0f);
++    }
++  }
++
++
++  // GeneralsX: soft particles. Value 0 ends the particle pass, any other
++  // value is inside it. Bits 0-1 hold the blend mode of the next draws
++  // (0 none, 1 alpha, 2 additive, 3 multiply) and bits 8-23 the fade
++  // distance in world units. The scene depth is copied
++  // once when the pass starts and sampled by the fixed function shader.
++  void D3D9DeviceEx::SetSoftParticleState(DWORD Value) {
++    if (!m_softParticleEnabled)
++      return;
++
++    const bool     pass = Value != 0u;
++    const uint32_t mode = Value & 0x3u;
++    const uint32_t fade = (Value >> 8) & 0xFFFFu;
++
++    if (pass && !m_softParticlePass) {
++      CopySoftParticleDepth();
++      m_softParticlePass = true;
++    }
++
++    if (!pass) {
++      m_softParticlePass = false;
++
++      if (m_softParticleBound) {
++        // Restore whatever the application has on stage 7.
++        m_dirtyTextures |= 1u << 7;
++        m_dirtySamplerStates |= 1u << 7;
++        m_softParticleBound = false;
++      }
++    }
++
++    const uint32_t newMode = (pass && fade && m_softDepthView != nullptr) ? mode : 0u;
++
++    if (newMode)
++      m_softParticleInvFade = 1.0f / float(fade);
++
++    if (newMode != m_softParticleMode)
++      m_flags.set(D3D9DeviceFlag::DirtyFFPixelShader);
++
++    m_softParticleMode = newMode;
++    m_flags.set(D3D9DeviceFlag::DirtyFFPixelData);
++  }
++
++
++  void D3D9DeviceEx::CopySoftParticleDepth() {
++    D3D9Surface* ds = m_state.depthStencil.ptr();
++
++    if (ds == nullptr) {
++      m_softDepthImage = nullptr;
++      m_softDepthView = nullptr;
++      return;
+     }
++
++    D3D9CommonTexture* dsTexture = ds->GetCommonTexture();
++    Rc<DxvkImage> srcImage = dsTexture->GetImage();
++    const DxvkImageCreateInfo& srcInfo = srcImage->info();
++    VkExtent3D extent = srcImage->mipLevelExtent(ds->GetMipLevel());
++
++    if (m_softDepthImage == nullptr
++     || m_softDepthImage->info().format != srcInfo.format
++     || m_softDepthImage->info().extent != extent) {
++      DxvkImageCreateInfo info = { };
++      info.type        = VK_IMAGE_TYPE_2D;
++      info.format      = srcInfo.format;
++      info.sampleCount = VK_SAMPLE_COUNT_1_BIT;
++      info.extent      = extent;
++      info.numLayers   = 1;
++      info.mipLevels   = 1;
++      info.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT
++                       | VK_IMAGE_USAGE_SAMPLED_BIT
++                       | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
++      info.stages      = VK_PIPELINE_STAGE_TRANSFER_BIT
++                       | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
++                       | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
++                       | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
++      info.access      = VK_ACCESS_TRANSFER_WRITE_BIT
++                       | VK_ACCESS_SHADER_READ_BIT
++                       | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
++                       | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
++      info.tiling      = VK_IMAGE_TILING_OPTIMAL;
++      info.layout      = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
++
++      m_softDepthImage = m_dxvkDevice->createImage(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++      DxvkImageViewKey viewKey = { };
++      viewKey.viewType   = VK_IMAGE_VIEW_TYPE_2D;
++      viewKey.format     = srcInfo.format;
++      viewKey.usage      = VK_IMAGE_USAGE_SAMPLED_BIT;
++      viewKey.aspects    = VK_IMAGE_ASPECT_DEPTH_BIT;
++      viewKey.mipIndex   = 0;
++      viewKey.mipCount   = 1;
++      viewKey.layerIndex = 0;
++      viewKey.layerCount = 1;
++
++      m_softDepthView = m_softDepthImage->createView(viewKey);
++
++      Logger::info(str::format("Soft particles: depth copy ", extent.width, "x", extent.height,
++        " (", srcInfo.sampleCount, " samples)"));
++    }
++
++    VkImageSubresourceLayers srcLayers = { };
++    srcLayers.aspectMask     = lookupFormatInfo(srcInfo.format)->aspectMask;
++    srcLayers.mipLevel       = ds->GetMipLevel();
++    srcLayers.baseArrayLayer = ds->GetFace();
++    srcLayers.layerCount     = 1;
++
++    VkImageSubresourceLayers dstLayers = srcLayers;
++    dstLayers.mipLevel       = 0;
++    dstLayers.baseArrayLayer = 0;
++
++    EmitCs([
++      cDstImage = m_softDepthImage,
++      cSrcImage = srcImage,
++      cSrcLayers = srcLayers,
++      cDstLayers = dstLayers,
++      cExtent    = extent
++    ] (DxvkContext* ctx) {
++      if (cSrcImage->info().sampleCount != VK_SAMPLE_COUNT_1_BIT) {
++        VkImageResolve region;
++        region.srcSubresource = cSrcLayers;
++        region.srcOffset      = VkOffset3D { 0, 0, 0 };
++        region.dstSubresource = cDstLayers;
++        region.dstOffset      = VkOffset3D { 0, 0, 0 };
++        region.extent         = cExtent;
++
++        ctx->resolveImage(cDstImage, cSrcImage, region, cSrcImage->info().format,
++          VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
++      } else {
++        ctx->copyImage(cDstImage, cDstLayers, VkOffset3D { 0, 0, 0 },
++          cSrcImage, cSrcLayers, VkOffset3D { 0, 0, 0 }, cExtent);
++      }
++    });
++
++    m_softParticleBound = false;
++  }
++
++
++  void D3D9DeviceEx::BindSoftParticleDepth() {
++    uint32_t slot = computeResourceSlotId(DxsoProgramType::PixelShader,
++      DxsoBindingType::Image, 7u);
++
++    DxvkSamplerKey key = { };
++    key.setFilter(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST);
++    key.setAddressModes(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
++
++    EmitCs([
++      cSlot    = slot,
++      cView    = m_softDepthView,
++      cSampler = m_dxvkDevice->createSampler(key)
++    ] (DxvkContext* ctx) mutable {
++      VkShaderStageFlags stage = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
++      ctx->bindResourceImageView(stage, cSlot, std::move(cView));
++      ctx->bindResourceSampler(stage, cSlot, std::move(cSampler));
++    });
++
++    m_softParticleBound = true;
+   }
+ 
+ 
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+index 1a020e6..02b74f7 100644
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -42,6 +42,10 @@
+ 
+ namespace dxvk {
+ 
++  // GeneralsX: private render state that marks the particle pass.
++  // D3D9 does not define render state 254.
++  constexpr D3DRENDERSTATETYPE D3D9SoftParticleRenderState = D3DRENDERSTATETYPE(254);
++
+   class D3D9InterfaceEx;
+   class D3D9SwapChainEx;
+   class D3D9CommonTexture;
+@@ -1369,6 +1373,13 @@ namespace dxvk {
+ 
+     void UpdateFixedFunctionPS();
+ 
++    // GeneralsX: soft particles
++    void SetSoftParticleState(DWORD Value);
++
++    void CopySoftParticleDepth();
++
++    void BindSoftParticleDepth();
++
+     void ApplyPrimitiveType(
+       DxvkContext*      pContext,
+       D3DPRIMITIVETYPE  PrimType);
+@@ -1569,6 +1580,16 @@ namespace dxvk {
+     bool                            m_amdATOC          = false;
+     bool                            m_nvATOC           = false;
+     bool                            m_ffZTest          = false;
++
++    // GeneralsX: soft particles. The game sets render state 254 around
++    // its particle pass; see SetSoftParticleState.
++    bool                            m_softParticleEnabled = false;
++    bool                            m_softParticlePass    = false;
++    uint32_t                        m_softParticleMode    = 0;
++    float                           m_softParticleInvFade = 0.0f;
++    bool                            m_softParticleBound   = false;
++    Rc<DxvkImage>                   m_softDepthImage;
++    Rc<DxvkImageView>               m_softDepthView;
+     
+     VkImageLayout                   m_hazardLayout = VK_IMAGE_LAYOUT_GENERAL;
+ 
+diff --git a/src/d3d9/d3d9_fixed_function.cpp b/src/d3d9/d3d9_fixed_function.cpp
+index 436843a..7e6b544 100644
+--- a/src/d3d9/d3d9_fixed_function.cpp
++++ b/src/d3d9/d3d9_fixed_function.cpp
+@@ -686,6 +686,7 @@ namespace dxvk {
+ 
+   enum D3D9FFPSMembers {
+     TextureFactor = 0,
++    SoftParams,
+ 
+     MemberCount
+   };
+@@ -696,6 +697,7 @@ namespace dxvk {
+ 
+     struct {
+       uint32_t textureFactor;
++      uint32_t softParams;
+     } constants;
+ 
+     struct {
+@@ -764,6 +766,8 @@ namespace dxvk {
+ 
+     void alphaTestPS();
+ 
++    uint32_t emitSoftParticleFade(uint32_t color);
++
+     uint32_t emitMatrixTimesVector(uint32_t rowCount, uint32_t colCount, uint32_t matrix, uint32_t vector);
+     uint32_t emitVectorTimesMatrix(uint32_t rowCount, uint32_t colCount, uint32_t vector, uint32_t matrix);
+ 
+@@ -2189,6 +2193,9 @@ namespace dxvk {
+     fogCtx.SpecUBO     = m_specUbo;
+     current = DoFixedFunctionFog(m_spec, m_module, fogCtx);
+ 
++    if (m_fsKey.Stages[0].Contents.SoftParticle)
++      current = emitSoftParticleFade(current);
++
+     m_module.opStore(m_ps.out.COLOR, current);
+ 
+     alphaTestPS();
+@@ -2226,7 +2233,8 @@ namespace dxvk {
+ 
+     // Constant Buffer for PS.
+     std::array<uint32_t, uint32_t(D3D9FFPSMembers::MemberCount)> members = {
+-      m_vec4Type // Texture Factor
++      m_vec4Type, // Texture Factor
++      m_vec4Type  // Soft particle parameters
+     };
+ 
+     const uint32_t structType =
+@@ -2242,6 +2250,7 @@ namespace dxvk {
+ 
+     m_module.setDebugName(structType, "D3D9FixedFunctionPS");
+     m_module.setDebugMemberName(structType, 0, "textureFactor");
++    m_module.setDebugMemberName(structType, 1, "softParams");
+ 
+     m_ps.constantBuffer = m_module.newVar(
+       m_module.defPointerType(structType, spv::StorageClassUniform),
+@@ -2273,6 +2282,7 @@ namespace dxvk {
+     };
+ 
+     m_ps.constants.textureFactor = LoadConstant(m_vec4Type, uint32_t(D3D9FFPSMembers::TextureFactor));
++    m_ps.constants.softParams    = LoadConstant(m_vec4Type, uint32_t(D3D9FFPSMembers::SoftParams));
+ 
+     // Samplers
+     for (uint32_t i = 0; i < caps::TextureStageCount; i++) {
+@@ -2434,6 +2444,72 @@ namespace dxvk {
+   }
+ 
+ 
++  // GeneralsX: soft particles. Sampler 7 holds a copy of the scene depth
++  // taken before the particle pass. Both depths are turned back into view
++  // space distance with the projection terms and the particle fades out
++  // where it gets close to the geometry behind it.
++  uint32_t D3D9FFShaderCompiler::emitSoftParticleFade(uint32_t color) {
++    const uint32_t mode = m_fsKey.Stages[0].Contents.SoftParticle;
++
++    uint32_t int32Type = m_module.defIntType(32, 1);
++    uint32_t ivec2Type = m_module.defVectorType(int32Type, 2);
++
++    const auto& sampler = m_ps.samplers[7];
++    uint32_t sampledImage = m_module.opLoad(sampler.typeId, sampler.varId);
++    uint32_t imageType = m_module.defImageType(m_floatType,
++      spv::Dim2D, 0, 0, 0, 1, spv::ImageFormatUnknown);
++    uint32_t image = m_module.opImage(imageType, sampledImage);
++
++    std::array<uint32_t, 2> xy = { 0, 1 };
++    uint32_t fragXy = m_module.opVectorShuffle(m_vec2Type, m_ps.in.POS, m_ps.in.POS, xy.size(), xy.data());
++    uint32_t coord = m_module.opConvertFtoS(ivec2Type, fragXy);
++
++    SpirvImageOperands operands;
++    operands.flags = spv::ImageOperandsLodMask;
++    operands.sLod = m_module.consti32(0);
++    uint32_t sceneTexel = m_module.opImageFetch(m_vec4Type, image, coord, operands);
++
++    uint32_t idx = 0;
++    uint32_t sceneDepth = m_module.opCompositeExtract(m_floatType, sceneTexel, 1, &idx);
++    idx = 2;
++    uint32_t fragDepth = m_module.opCompositeExtract(m_floatType, m_ps.in.POS, 1, &idx);
++
++    idx = 0;
++    uint32_t p33 = m_module.opCompositeExtract(m_floatType, m_ps.constants.softParams, 1, &idx);
++    idx = 1;
++    uint32_t p43 = m_module.opCompositeExtract(m_floatType, m_ps.constants.softParams, 1, &idx);
++    idx = 2;
++    uint32_t invFade = m_module.opCompositeExtract(m_floatType, m_ps.constants.softParams, 1, &idx);
++
++    // view z = _43 / (depth - _33)
++    uint32_t sceneZ = m_module.opFDiv(m_floatType, p43, m_module.opFSub(m_floatType, sceneDepth, p33));
++    uint32_t fragZ  = m_module.opFDiv(m_floatType, p43, m_module.opFSub(m_floatType, fragDepth, p33));
++
++    uint32_t fade = m_module.opFMul(m_floatType, m_module.opFSub(m_floatType, sceneZ, fragZ), invFade);
++    fade = m_module.opFClamp(m_floatType, fade, m_module.constf32(0.0f), m_module.constf32(1.0f));
++
++    // An empty depth copy (cleared to 1.0) means nothing behind the particle.
++    uint32_t farPlane = m_module.opFOrdGreaterThanEqual(m_module.defBoolType(), sceneDepth, m_module.constf32(1.0f));
++    fade = m_module.opSelect(m_floatType, farPlane, m_module.constf32(1.0f), fade);
++
++    if (mode == 1) {
++      idx = 3;
++      uint32_t alpha = m_module.opCompositeExtract(m_floatType, color, 1, &idx);
++      alpha = m_module.opFMul(m_floatType, alpha, fade);
++      return m_module.opCompositeInsert(m_vec4Type, alpha, color, 1, &idx);
++    }
++
++    uint32_t fadeVec = m_module.opCompositeConstruct(m_vec4Type, 4,
++      std::array<uint32_t, 4>{ fade, fade, fade, m_module.constf32(1.0f) }.data());
++
++    if (mode == 2)
++      return m_module.opFMul(m_vec4Type, color, fadeVec);
++
++    // Multiply blend: colour 1.0 leaves the destination untouched.
++    return m_module.opFMix(m_vec4Type, m_module.constvec4f32(1.0f, 1.0f, 1.0f, 1.0f), color, fadeVec);
++  }
++
++
+   void D3D9FFShaderCompiler::alphaTestPS() {
+     uint32_t uintPtr = m_module.defPointerType(m_uint32Type, spv::StorageClassPushConstant);
+ 
+diff --git a/src/d3d9/d3d9_fixed_function.h b/src/d3d9/d3d9_fixed_function.h
+index 85432ce..e4ac1ba 100644
+--- a/src/d3d9/d3d9_fixed_function.h
++++ b/src/d3d9/d3d9_fixed_function.h
+@@ -176,6 +176,11 @@ namespace dxvk {
+         // Included in here, read from Stage 0 for packing reasons
+         // Affects all stages.
+         uint32_t     GlobalSpecularEnable : 1;
++
++        // GeneralsX: soft particle mode, read from Stage 0.
++        // 0 = off, 1 = fade alpha, 2 = fade colour (additive),
++        // 3 = fade colour towards white (multiply).
++        uint32_t     SoftParticle : 2;
+       } Contents;
+ 
+       uint32_t Primitive[2];
+diff --git a/src/d3d9/d3d9_state.h b/src/d3d9/d3d9_state.h
+index 21cc593..a0395a2 100644
+--- a/src/d3d9/d3d9_state.h
++++ b/src/d3d9/d3d9_state.h
+@@ -143,6 +143,8 @@ namespace dxvk {
+ 
+   struct D3D9FixedFunctionPS {
+     Vector4 textureFactor;
++    // GeneralsX: projection _33, _43, 1 / fade distance, unused
++    Vector4 softParams;
+   };
+ 
+   enum D3D9SharedPSStages {
