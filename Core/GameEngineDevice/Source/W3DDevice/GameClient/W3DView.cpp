@@ -190,6 +190,9 @@ W3DView::W3DView()
 	m_cameraAreaConstraints.zero();
 	m_recalcCamera = false;
 
+	m_cameraFittedTerrainDrawSize.x = 0;
+	m_cameraFittedTerrainDrawSize.y = 0;
+
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -3779,6 +3782,7 @@ bool W3DView::getDesiredTerrainDrawSize(ICoord2D &dimensions) const
 
 	if (cameraPitch > ViewDefaultLowPitchRadians || !m_isUserControlled)
 	{
+		// GeneralsX @feature Claude 15/10/2026 updateTerrain() grows this size to the camera footprint when needed.
 		// TheSuperHackers @info The scripted camera always uses the regular draw sizes
 		// and uses terrain oversize if it needs to enlarge.
 		dimensions.x = WorldHeightMap::NORMAL_DRAW_WIDTH;
@@ -3801,6 +3805,13 @@ void W3DView::updateTerrain()
 
 	if (getDesiredTerrainDrawSize(drawSize))
 	{
+		// GeneralsX @feature Claude 15/10/2026 Make sure the drawn terrain reaches the screen edges on wide
+		// screens and at high zoom-out, so terrain and objects no longer pop in at the edges.
+		if (!TheGlobalData->m_drawEntireTerrain)
+		{
+			fitTerrainDrawSizeToCamera(drawSize);
+		}
+
 		const Real terrainScale = TheGlobalData->m_terrainDrawDistanceScale;
 		if (terrainScale != 1.0f)
 		{
@@ -3821,4 +3832,93 @@ void W3DView::updateTerrain()
 		W3DDisplay::m_3DScene->destroyLightsIterator(it);
 		it = nullptr;
 	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 15/10/2026 Grows the terrain draw size so that it covers the ground area
+// seen by the camera. The retail draw size (129x129 cells) was tuned for a 4:3 screen at the retail
+// max camera height, so wide screens or a higher MaxCameraHeight showed untextured gaps and objects
+// popping in at the screen edges. The footprint is measured on the lowest terrain height, rounded up to
+// whole vertex buffer tiles and only shrunk when it is two tiles smaller, to avoid reallocating the
+// terrain buffers while zooming. The retail draw size stays the minimum, so 4:3 screens are unaffected.
+//-------------------------------------------------------------------------------------------------
+void W3DView::fitTerrainDrawSizeToCamera(ICoord2D &dimensions)
+{
+	if (TheTerrainRenderObject == nullptr)
+		return;
+
+	// Only the regular camera pitch is handled. Low pitch uses the dedicated low angle draw size.
+	const Real cameraPitch = asin(fabs(m_3DCamera->Get_Forward_Dir().Z));
+	if (cameraPitch <= ViewDefaultLowPitchRadians)
+		return;
+
+	// Upper bound to keep the terrain buffers reasonable when a corner ray grazes the horizon.
+	const Int maxDrawSize = 1 + (WorldHeightMap::LOW_ANGLE_DRAW_WIDTH - 1) * 2;
+
+	const Vector3 cameraPos = m_3DCamera->Get_Position();
+	const Real groundZ = TheTerrainRenderObject->getMinHeight();
+
+	Real footprintX = (Real)maxDrawSize * MAP_XY_FACTOR;
+	Real footprintY = (Real)maxDrawSize * MAP_XY_FACTOR;
+
+	if (cameraPos.Z > groundZ)
+	{
+		static const Vector2 corners[4] = { Vector2(-1.0f, -1.0f), Vector2(1.0f, -1.0f), Vector2(-1.0f, 1.0f), Vector2(1.0f, 1.0f) };
+
+		Real minX = 1.0e+9f;
+		Real maxX = -1.0e+9f;
+		Real minY = 1.0e+9f;
+		Real maxY = -1.0e+9f;
+		Bool allCornersHitGround = TRUE;
+
+		for (Int i = 0; i < 4; ++i)
+		{
+			Vector3 viewPlanePoint;
+			m_3DCamera->Un_Project(viewPlanePoint, corners[i]);
+			const Vector3 rayDir = viewPlanePoint - cameraPos;
+
+			if (rayDir.Z >= -0.01f)
+			{
+				allCornersHitGround = FALSE;
+				break;
+			}
+
+			const Real t = (groundZ - cameraPos.Z) / rayDir.Z;
+			const Real x = cameraPos.X + rayDir.X * t;
+			const Real y = cameraPos.Y + rayDir.Y * t;
+			minX = std::min(minX, x);
+			maxX = std::max(maxX, x);
+			minY = std::min(minY, y);
+			maxY = std::max(maxY, y);
+		}
+
+		if (allCornersHitGround)
+		{
+			footprintX = maxX - minX;
+			footprintY = maxY - minY;
+		}
+	}
+
+	// One extra tile length of margin, comparable to the slack the retail size has on a 4:3 screen.
+	const Real requiredX = footprintX / MAP_XY_FACTOR + VERTEX_BUFFER_TILE_LENGTH;
+	const Real requiredY = footprintY / MAP_XY_FACTOR + VERTEX_BUFFER_TILE_LENGTH;
+
+	Int fittedX = dimensions.x;
+	Int fittedY = dimensions.y;
+	while (fittedX < requiredX && fittedX < maxDrawSize)
+		fittedX += VERTEX_BUFFER_TILE_LENGTH;
+	while (fittedY < requiredY && fittedY < maxDrawSize)
+		fittedY += VERTEX_BUFFER_TILE_LENGTH;
+
+	// Hysteresis: keep the previous size unless it is at least two tiles too large.
+	if (fittedX < m_cameraFittedTerrainDrawSize.x && fittedX + VERTEX_BUFFER_TILE_LENGTH >= m_cameraFittedTerrainDrawSize.x)
+		fittedX = m_cameraFittedTerrainDrawSize.x;
+	if (fittedY < m_cameraFittedTerrainDrawSize.y && fittedY + VERTEX_BUFFER_TILE_LENGTH >= m_cameraFittedTerrainDrawSize.y)
+		fittedY = m_cameraFittedTerrainDrawSize.y;
+
+	m_cameraFittedTerrainDrawSize.x = fittedX;
+	m_cameraFittedTerrainDrawSize.y = fittedY;
+
+	dimensions.x = fittedX;
+	dimensions.y = fittedY;
 }

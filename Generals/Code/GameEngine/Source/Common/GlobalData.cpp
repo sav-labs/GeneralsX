@@ -1260,6 +1260,12 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
 	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
 	TheWritableGlobalData->m_skirmishTickRate = optionPref.getSkirmishTickRate();
+	// GeneralsX @feature Claude 15/10/2026 Apply the camera settings saved in Options.ini at startup. They were
+	// only written, so they were lost on restart. Each getter returns the INI value when the key is absent,
+	// so the retail defaults stay untouched. These only drive the client camera and terrain drawing.
+	TheWritableGlobalData->m_maxCameraHeight = optionPref.getMaxCameraHeight();
+	TheWritableGlobalData->m_minCameraHeight = optionPref.getMinCameraHeight();
+	TheWritableGlobalData->m_terrainDrawDistanceScale = optionPref.getTerrainDrawDistanceScale();
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
 	TheWritableGlobalData->m_textureFilteringMode = optionPref.getTextureFilterMode();

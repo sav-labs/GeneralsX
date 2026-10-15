@@ -333,6 +333,9 @@ private:
 	void calcDeltaScroll(Coord2D &screenDelta);
 	bool getDesiredTerrainDrawSize(ICoord2D &dimensions) const;
 	void updateTerrain();
+	// GeneralsX @feature Claude 15/10/2026 Camera-fitted terrain draw size for wide screens.
+	void fitTerrainDrawSizeToCamera(ICoord2D &dimensions); ///< Grows the terrain draw size to cover the ground seen by the camera
+	ICoord2D m_cameraFittedTerrainDrawSize; ///< Last camera-fitted terrain draw size, used to avoid resize thrashing
 
 	// (gth) C&C3 animation controlled camera feature
 	Bool				m_isCameraSlaved;

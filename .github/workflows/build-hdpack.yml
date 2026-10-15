@@ -11,6 +11,7 @@ on:
   push:
     branches:
       - "claude/**"
+      - main
     paths:
       - "scripts/tooling/hdpack/**"
       - ".github/workflows/build-hdpack.yml"
