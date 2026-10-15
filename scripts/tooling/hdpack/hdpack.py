@@ -10,7 +10,13 @@ the .tga of the same name, so no retail file is changed or redistributed.
 Excluded on purpose:
 - textures used by MappedImage INI entries (UI, cameos, cursors): their INI
   coordinates are in pixels of the original texture size;
-- everything outside Art/Textures/ (terrain tiles, maps, INI, audio).
+- everything outside Art/Textures/ (maps, INI, audio); terrain tiles under
+  Art/Terrain/ only with `--terrain`.
+
+`--terrain` builds a separate pack (e.g. `!HDTerrain.big`) for the HD terrain
+loader: the same Art/Terrain/ names as RLE TGA (24-bit, or 32-bit with alpha),
+exactly 2x or 4x the original size, since the engine detects HD tiles by an
+integer ratio to the retail size.
 
 Upscalers:
 - `onnx`: Real-ESRGAN x4plus through ONNX Runtime, DirectML on any DirectX 12 GPU
@@ -43,6 +49,8 @@ from PIL import Image
 
 TEXTURE_DIR = "art/textures/"
 TEXTURE_EXTS = (".tga", ".dds")
+TERRAIN_DIR = "art/terrain/"
+TERRAIN_EXTS = (".tga",)
 MIN_SOURCE_SIZE = 32
 MAX_OUTPUT_SIZE = 2048
 
@@ -353,12 +361,17 @@ def main():
     ap.add_argument("--max-size", type=int, default=MAX_OUTPUT_SIZE, help="Largest output side in px")
     ap.add_argument("--cache-dir", help="Keep upscaled .dds here and reuse them on the next run "
                     "(default: <out name>.cache next to the output)")
+    ap.add_argument("--terrain", action="store_true",
+                    help="Upscale Art/Terrain/ tiles to TGA for the HD terrain loader instead of model textures")
     ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
     args = ap.parse_args()
     MAX_OUTPUT_SIZE = args.max_size
     cache_dir = Path(args.cache_dir) if args.cache_dir else Path(args.out).with_suffix(".cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
-    settings = f"{args.upscaler}|{args.model}|{args.scale}|{args.max_size}|v1".encode()
+    mode = "terrain" if args.terrain else "textures"
+    out_ext = ".tga" if args.terrain else ".dds"
+    source_dir, source_exts = (TERRAIN_DIR, TERRAIN_EXTS) if args.terrain else (TEXTURE_DIR, TEXTURE_EXTS)
+    settings = f"{args.upscaler}|{args.model}|{args.scale}|{args.max_size}|{mode}|v1".encode()
 
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)
@@ -369,7 +382,7 @@ def main():
     # One source per texture name; a .dds beats a .tga like in the texture loader.
     sources = {}
     for name, entry in archives.items():
-        if not name.startswith(TEXTURE_DIR) or not name.endswith(TEXTURE_EXTS):
+        if not name.startswith(source_dir) or not name.endswith(source_exts):
             continue
         stem = Path(name).stem
         if stem in excluded:
@@ -396,10 +409,10 @@ def main():
         batch = {}
         for stem in keys[start:start + args.batch]:
             original = sources[stem][3]
-            name = original[:original.rfind(".")] + ".dds"
+            name = original[:original.rfind(".")] + out_ext
             data = read_entry(sources[stem])
             # Cache key: source bytes plus every setting that changes the result.
-            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}.dds"
+            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}{out_ext}"
             if cache_file.is_file():
                 output.append((name, cache_file))
                 cached += 1
@@ -441,7 +454,11 @@ def main():
             result = colour.convert("RGBA")
             result.putalpha(alpha.resize(size, Image.Resampling.LANCZOS))
             partial = cache_file.with_suffix(".tmp")
-            partial.write_bytes(write_dds_mipmapped(result, has_alpha))
+            if args.terrain:
+                # The terrain loader reads plain TGA; drop alpha when the tile has none.
+                (result if has_alpha else result.convert("RGB")).save(partial, "TGA", compression="tga_rle")
+            else:
+                partial.write_bytes(write_dds_mipmapped(result, has_alpha))
             partial.replace(cache_file)  # only complete files count as cached
             output.append((name, cache_file))
             if args.preview_dir:

@@ -800,6 +800,43 @@ Int parseSkirmish(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup: -side <name|index> selects the local
+// player's faction by template name (FactionAmerica), side (America, AmericaAirForceGeneral), display name
+// or player template index. "Random" leaves it to the game random seed. Defaults to America.
+Int parseSkirmishSide(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_initialSkirmishSide = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 15/10/2026 -aiside <name|index> selects the faction of every -skirmish AI opponent.
+// When omitted, the AI side is random but drawn from the fixed game seed, so it is the same on every run.
+Int parseSkirmishAISide(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_initialSkirmishAISide = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 15/10/2026 -pos <n> selects the 1-based start position of the local player in a
+// -skirmish match. AI opponents take the following positions. Defaults to 1.
+Int parseSkirmishStartPos(char *args[], int num)
+{
+	if (num > 1 && args[1][0] >= '0' && args[1][0] <= '9')
+	{
+		TheWritableGlobalData->m_initialSkirmishStartPos = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
 // GeneralsX @feature Claude 14/10/2026 Drive the tactical camera on a fixed, input-free script once a match
 // has started: -camtest [seconds]. The optional duration of the pan defaults to 8 seconds.
 // Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
@@ -995,6 +1032,8 @@ Int parseRunAhead( char *args[], Int num )
 #endif
 
 
+// GeneralsX @feature Claude 15/10/2026 -seed is available in release builds: a -skirmish match uses it as
+// its game random seed (12345 when omitted), so recorded clips show the same match on every run.
 Int parseSeed(char *args[], int num)
 {
 	if (num > 1)
@@ -1308,6 +1347,12 @@ static CommandLineParam paramsForEngineInit[] =
 	// GeneralsX @feature Claude 14/10/2026 Start a skirmish match against AI from the command line.
 	{ "-skirmish", parseSkirmish },
 
+	// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup: faction, start position and game seed.
+	{ "-side", parseSkirmishSide },
+	{ "-aiside", parseSkirmishAISide },
+	{ "-pos", parseSkirmishStartPos },
+	{ "-seed", parseSeed },
+
 	// GeneralsX @feature Claude 14/10/2026 Fly the tactical camera on a fixed script without user input.
 	{ "-camtest", parseCameraTest },
 
@@ -1424,7 +1469,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-shellmap", parseShellMap },
 	{ "-winCursors", parseWinCursors },
 	{ "-constantDebug", parseConstantDebug },
-	{ "-seed", parseSeed },
 	{ "-noagpfix", parseIncrAGPBuf },
 	{ "-noFPSLimit", parseNoFPSLimit },
 	{ "-dumpAssetUsage", parseDumpAssetUsage },

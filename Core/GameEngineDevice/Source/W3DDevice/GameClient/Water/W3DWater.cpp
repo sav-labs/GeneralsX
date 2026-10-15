@@ -120,6 +120,60 @@ typedef VertexFormatXYZDUV2 MaterMeshVertexFormat;
 // Converts a FLOAT to a DWORD for use in SetRenderState() calls
 static inline DWORD F2DW( FLOAT f ) { return *((DWORD*)&f); }
 
+// GeneralsX @feature Claude 15/10/2026 Upper bound for the screen-scaled sea reflection texture at High+ detail.
+#define SEA_REFLECTION_SIZE_MAX 1024
+
+// GeneralsX @feature Claude 15/10/2026 Pick the sea reflection texture size. Low and Medium detail keep the
+// retail 256x256. High and Very High use the largest power of two that fits the depth buffer's short side
+// (capped at SEA_REFLECTION_SIZE_MAX to keep the reflection pass cheap on integrated GPUs), so the reflected
+// scene is no longer magnified 4-5x across the screen at 1440p. The bound also keeps the texture no larger
+// than the depth buffer it is drawn with.
+static Int getSeaReflectionTextureSize()
+{
+	if (TheGameLODManager == nullptr)
+		return SEA_REFLECTION_SIZE;
+
+	const StaticGameLODLevel lod = TheGameLODManager->getStaticLODLevel();
+	if (lod != STATIC_GAME_LOD_HIGH && lod != STATIC_GAME_LOD_VERY_HIGH)
+		return SEA_REFLECTION_SIZE;
+
+	IDirect3DDevice8 *device = DX8Wrapper::_Get_D3D_Device8();
+	if (device == nullptr)
+		return SEA_REFLECTION_SIZE;
+
+	IDirect3DSurface8 *depth = nullptr;
+	if (FAILED(device->GetDepthStencilSurface(&depth)) || depth == nullptr)
+		return SEA_REFLECTION_SIZE;
+
+	D3DSURFACE_DESC desc;
+	const HRESULT hr = depth->GetDesc(&desc);
+	depth->Release();
+	if (FAILED(hr))
+		return SEA_REFLECTION_SIZE;
+
+	const Int shortSide = (Int)(desc.Width < desc.Height ? desc.Width : desc.Height);
+	Int size = SEA_REFLECTION_SIZE;
+	while (size * 2 <= shortSide && size * 2 <= SEA_REFLECTION_SIZE_MAX)
+		size *= 2;
+	return size;
+}
+
+// GeneralsX @bugfix Claude 15/10/2026 Set the filters of the water's raw-bound texture stages through the
+// DX8Wrapper state cache. The original code wrote MIN/MAG=LINEAR straight to the device, which (a) overrode the
+// anisotropic BEST filter TextureFilterClass had just applied to the base water texture on stage 0, (b) left the
+// sparkle/noise/edge stages without a mip filter, so they shimmered at a distance, and (c) desynced the wrapper's
+// cache, so the next stage 0 texture with the same cached filter silently lost anisotropic filtering too.
+// Stage 0 keeps the filter of the TextureClass bound to it; stages 1..lastStage get trilinear filtering.
+static void applyWaterDetailStageFilters(Int lastStage)
+{
+	for (Int stage = 1; stage <= lastStage; ++stage)
+	{
+		DX8Wrapper::Set_DX8_Texture_Stage_State(stage, D3DTSS_MINFILTER, D3DTEXF_LINEAR);
+		DX8Wrapper::Set_DX8_Texture_Stage_State(stage, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
+		DX8Wrapper::Set_DX8_Texture_Stage_State(stage, D3DTSS_MIPFILTER, D3DTEXF_LINEAR);
+	}
+}
+
 #define DRAW_WATER_WAKES
 /// @todo: Fix clipping of objects that intersect the mirror surface
 //#define CLIP_GEOMETRY_TO_PLANE	// this enables clipping of objects that intersect the mirror surfaces
@@ -271,14 +325,8 @@ void WaterRenderObjClass::setupJbaWaterShader()
 		DX8Wrapper::_Set_DX8_Transform(D3DTS_TEXTURE2, destMatrix);
 
 	}
-	m_pDev->SetTextureStageState( 0, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 0, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 1, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 1, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 2, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 2, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 3, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 3, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
+	// GeneralsX @bugfix Claude 15/10/2026 Cache-coherent trilinear filtering on the detail stages (see helper)
+	applyWaterDetailStageFilters(3);
 	if (m_riverWaterPixelShader){
 		DX8Wrapper::_Get_D3D_Device8()->SetPixelShaderConstant(0,   D3DXVECTOR4(REFLECTION_FACTOR, REFLECTION_FACTOR, REFLECTION_FACTOR, 1.0f), 1);
 		DX8Wrapper::_Get_D3D_Device8()->SetPixelShader(m_riverWaterPixelShader);
@@ -918,7 +966,17 @@ void WaterRenderObjClass::ReAcquireResources()
 			return;
 
 		// Create reflection texture
-		m_pReflectionTexture = DX8Wrapper::Create_Render_Target (SEA_REFLECTION_SIZE, SEA_REFLECTION_SIZE);
+		// GeneralsX @feature Claude 15/10/2026 Screen-scaled reflection texture at High+ detail, with the retail
+		// 256x256 size as fallback when the larger render target cannot be created.
+		const Int reflectionSize = getSeaReflectionTextureSize();
+		m_pReflectionTexture = DX8Wrapper::Create_Render_Target (reflectionSize, reflectionSize);
+		if (m_pReflectionTexture == nullptr && reflectionSize != SEA_REFLECTION_SIZE)
+		{
+			fprintf(stderr, "WARNING: Water: %dx%d reflection texture failed, falling back to %dx%d\n",
+				reflectionSize, reflectionSize, SEA_REFLECTION_SIZE, SEA_REFLECTION_SIZE);
+			fflush(stderr);
+			m_pReflectionTexture = DX8Wrapper::Create_Render_Target (SEA_REFLECTION_SIZE, SEA_REFLECTION_SIZE);
+		}
 	}
 
 	if (m_waterTrackSystem)
@@ -1450,7 +1508,8 @@ void WaterRenderObjClass::loadSetting( Setting *setting, TimeOfDay timeOfDay )
 //-------------------------------------------------------------------------------------------------
 void WaterRenderObjClass::updateRenderTargetTextures(CameraClass *cam)
 {
-	if (m_waterType == WATER_TYPE_2_PVSHADER && getClippedWaterPlane(cam, nullptr) &&
+	// GeneralsX @bugfix Claude 15/10/2026 Skip the mirror pass when the reflection render target could not be created
+	if (m_waterType == WATER_TYPE_2_PVSHADER && m_pReflectionTexture != nullptr && getClippedWaterPlane(cam, nullptr) &&
 		TheTerrainRenderObject && TheTerrainRenderObject->getMap())
 		renderMirror(cam);	//generate texture containing reflected scene
 }
@@ -1494,6 +1553,9 @@ void WaterRenderObjClass::renderMirror(CameraClass *cam)
 	Matrix3D reflectedTransform(rRight,rUp,rN,rPos);
 
 
+	// GeneralsX @feature Claude 15/10/2026 Set_Render_Target_With_Z routes through
+	// DX8Wrapper::_Set_Render_Target_With_Matching_Depth, so with MSAA on, the single-sampled reflection
+	// texture is drawn with a matching single-sampled depth buffer.
 	DX8Wrapper::Set_Render_Target_With_Z((TextureClass*)m_pReflectionTexture);
 
 	// Clear the backbuffer
@@ -1925,7 +1987,12 @@ Matrix4x4 matProj, matView, matWW3D;
 	m_pDev->SetRenderState( D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA );
 
 	m_pDev->SetRenderState(D3DRS_ALPHABLENDENABLE , TRUE);
-	m_pDev->SetTexture( 1, m_pReflectionTexture->Peek_D3D_Texture());
+	// GeneralsX @bugfix Claude 15/10/2026 Tolerate a missing reflection render target, and filter the now larger
+	// reflection texture bilinearly instead of with whatever filter the previous draw left on stage 1.
+	m_pDev->SetTexture( 1, m_pReflectionTexture ? m_pReflectionTexture->Peek_D3D_Texture() : nullptr);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_MINFILTER, D3DTEXF_LINEAR);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_MIPFILTER, D3DTEXF_NONE);
 
 //	m_pDev->SetRenderState(D3DRS_FILLMODE,D3DFILL_WIREFRAME);//LORENZEN
 
@@ -3057,12 +3124,9 @@ void WaterRenderObjClass::setupFlatWaterShader()
 		DX8Wrapper::_Set_DX8_Transform(D3DTS_TEXTURE2, destMatrix);
 
 	}
-	m_pDev->SetTextureStageState( 0, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 0, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 1, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 1, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 2, D3DTSS_MINFILTER, D3DTEXF_LINEAR );
-	m_pDev->SetTextureStageState( 2, D3DTSS_MAGFILTER, D3DTEXF_LINEAR );
+	// GeneralsX @bugfix Claude 15/10/2026 Cache-coherent trilinear filtering on the detail stages (see helper).
+	// Stage 3 belongs to the shroud shader here and keeps its own filtering.
+	applyWaterDetailStageFilters(2);
 	if (m_trapezoidWaterPixelShader){
 		DX8Wrapper::_Get_D3D_Device8()->SetPixelShaderConstant(0,   D3DXVECTOR4(REFLECTION_FACTOR, REFLECTION_FACTOR, REFLECTION_FACTOR, 1.0f), 1);
 		DX8Wrapper::_Get_D3D_Device8()->SetPixelShader(m_trapezoidWaterPixelShader);

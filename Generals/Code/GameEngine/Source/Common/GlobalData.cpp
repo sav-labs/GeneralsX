@@ -960,6 +960,7 @@ GlobalData::GlobalData()
 	m_standardPublicBones.clear();
 
 	m_antiAliasLevel = WW3D::MultiSampleModeEnum::MULTISAMPLE_MODE_NONE;
+	m_antiAliasLevelIsDefault = FALSE;
 	// GeneralsX @tweak sav-labs 14/10/2026 Match the OptionPreferences defaults: anisotropic 16x.
 	m_textureFilteringMode = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_ANISOTROPIC;
 	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_16X;
@@ -1017,6 +1018,10 @@ GlobalData::GlobalData()
 	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish
 	m_initialSkirmishMap.clear();
 	m_initialSkirmishAICount = 1;
+	// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup defaults
+	m_initialSkirmishSide = "America";
+	m_initialSkirmishAISide.clear();
+	m_initialSkirmishStartPos = 1;
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
 	m_cameraTestSeconds = 0.0f;
 
@@ -1265,6 +1270,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_terrainDrawDistanceScale = optionPref.getTerrainDrawDistanceScale();
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
+	// GeneralsX @tweak Claude 15/10/2026 Remember whether the level is the default, so the device can pick it by GPU class.
+	TheWritableGlobalData->m_antiAliasLevelIsDefault = !optionPref.hasAntiAliasing();
 	TheWritableGlobalData->m_textureFilteringMode = optionPref.getTextureFilterMode();
 	TheWritableGlobalData->m_textureAnisotropyLevel = optionPref.getTextureAnisotropyLevel();
 

@@ -511,9 +511,82 @@ void reallyDoStart()
 	startSkirmishGame(maxFPS);
 }
 
+// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup. Every run of the same command line
+// gets the same factions, start positions and game seed, so recorded clips show the same match.
+static const Int DefaultQueuedSkirmishSeed = 12345;
+static const Int QueuedSkirmishTemplateNotFound = PLAYERTEMPLATE_MIN - 1;
+
+/// Player template index for a -side / -aiside value: a template index, a template name (FactionAmerica),
+/// a side (America, AmericaAirForceGeneral, USA) or a display name. PLAYERTEMPLATE_RANDOM for "Random".
+static Int findQueuedSkirmishPlayerTemplate(const AsciiString &requested)
+{
+	if (requested.isEmpty() || requested.compareNoCase("Random") == 0)
+		return PLAYERTEMPLATE_RANDOM;
+
+	const Int count = ThePlayerTemplateStore->getPlayerTemplateCount();
+	if (requested.getCharAt(0) >= '0' && requested.getCharAt(0) <= '9')
+	{
+		const Int index = atoi(requested.str());
+		const PlayerTemplate *pt = (index < count) ? ThePlayerTemplateStore->getNthPlayerTemplate(index) : nullptr;
+		if (pt != nullptr && pt->isPlayableSide() && pt->getStartingBuilding().isNotEmpty())
+			return index;
+		return QueuedSkirmishTemplateNotFound;
+	}
+
+	const AsciiString side = (requested.compareNoCase("USA") == 0) ? AsciiString("America") : requested;
+	AsciiString templateName;
+	templateName.format("Faction%s", side.str());
+
+	for (Int i = 0; i < count; ++i)
+	{
+		const PlayerTemplate *pt = ThePlayerTemplateStore->getNthPlayerTemplate(i);
+		if (pt == nullptr || !pt->isPlayableSide() || pt->getStartingBuilding().isEmpty())
+			continue;
+
+		AsciiString displayName;
+		displayName.translate(pt->getDisplayName());
+		if (pt->getName().compareNoCase(side) == 0
+			|| pt->getName().compareNoCase(templateName) == 0
+			|| pt->getSide().compareNoCase(side) == 0
+			|| displayName.compareNoCase(side) == 0)
+		{
+			return i;
+		}
+	}
+	return QueuedSkirmishTemplateNotFound;
+}
+
+/// Resolves a -side / -aiside value, falling back to fallback (and listing the valid choices) when it is unknown.
+static Int resolveQueuedSkirmishPlayerTemplate(const char *flag, const AsciiString &requested, Int fallback)
+{
+	const Int index = findQueuedSkirmishPlayerTemplate(requested);
+	if (index != QueuedSkirmishTemplateNotFound)
+		return index;
+
+	fprintf(stderr, "[SKIRMISH] %s: unknown side '%s', valid sides are:\n", flag, requested.str());
+	for (Int i = 0; i < ThePlayerTemplateStore->getPlayerTemplateCount(); ++i)
+	{
+		const PlayerTemplate *pt = ThePlayerTemplateStore->getNthPlayerTemplate(i);
+		if (pt == nullptr || !pt->isPlayableSide() || pt->getStartingBuilding().isEmpty())
+			continue;
+		fprintf(stderr, "[SKIRMISH]   %d: %s (side %s)\n", i, pt->getName().str(), pt->getSide().str());
+	}
+	fflush(stderr);
+	return fallback != QueuedSkirmishTemplateNotFound ? fallback : PLAYERTEMPLATE_RANDOM;
+}
+
+/// Name of a resolved player template for the [SKIRMISH] log.
+static const char *getQueuedSkirmishTemplateName(Int index)
+{
+	if (index == PLAYERTEMPLATE_RANDOM)
+		return "random (from the game seed)";
+	const PlayerTemplate *pt = ThePlayerTemplateStore->getNthPlayerTemplate(index);
+	return pt != nullptr ? pt->getName().str() : "unknown";
+}
+
 // GeneralsX @feature Claude 14/10/2026 Start a skirmish match requested with -skirmish <map> [aiCount].
 // Builds TheSkirmishGameInfo like SkirmishGameOptionsMenuInit does (local player from the skirmish
-// preferences, AI opponents with random faction, color and start position resolved by GameLogic)
+// command line flags, AI opponents in the following start positions, colors resolved by GameLogic)
 // and launches it through the same path as the Start button, so the match gets the standard
 // skirmish setup (command center and dozer). Used by automated tests to skip the menus.
 Bool StartQueuedSkirmishGame()
@@ -534,7 +607,8 @@ Bool StartQueuedSkirmishGame()
 		return FALSE;
 	}
 
-	Int maxAICount = min(md->m_numPlayers, (Int)MAX_SLOTS) - 1;
+	const Int numStartPositions = min(md->m_numPlayers, (Int)MAX_SLOTS);
+	Int maxAICount = numStartPositions - 1;
 	if (maxAICount < 1)
 	{
 		fprintf(stderr, "[SKIRMISH] -skirmish: map '%s' has only %d start position(s)\n", md->m_fileName.str(), md->m_numPlayers);
@@ -553,13 +627,33 @@ Bool StartQueuedSkirmishGame()
 	}
 	resetSkirmishGameInfo();
 
+	// GeneralsX @feature Claude 15/10/2026 Fixed factions, start positions and seed (-side, -aiside, -pos, -seed)
+	const Int playerTemplate = resolveQueuedSkirmishPlayerTemplate("-side", TheGlobalData->m_initialSkirmishSide,
+		findQueuedSkirmishPlayerTemplate("America"));
+	const Int aiTemplate = resolveQueuedSkirmishPlayerTemplate("-aiside", TheGlobalData->m_initialSkirmishAISide,
+		PLAYERTEMPLATE_RANDOM);
+
+	Int startPos = TheGlobalData->m_initialSkirmishStartPos;
+	if (startPos < 1 || startPos > numStartPositions)
+	{
+		fprintf(stderr, "[SKIRMISH] -pos: start position %d is not on the map (1 to %d), using 1\n", startPos, numStartPositions);
+		fflush(stderr);
+		startPos = 1;
+	}
+
+	const Int seed = TheGlobalData->m_fixedSeed >= 0 ? TheGlobalData->m_fixedSeed : DefaultQueuedSkirmishSeed;
+
 	SkirmishPreferences prefs;
 	GameSlot playerSlot;
 	playerSlot.setName(prefs.getUserName());
 	playerSlot.setState(SLOT_PLAYER, prefs.getUserName());
 	playerSlot.setColor(prefs.getPreferredColor());
-	playerSlot.setPlayerTemplate(prefs.getPreferredFaction());
+	playerSlot.setPlayerTemplate(playerTemplate);
+	playerSlot.setStartPos(startPos - 1);
 	TheSkirmishGameInfo->setSlot(0, playerSlot);
+
+	fprintf(stderr, "[SKIRMISH] player: side %s, position %d, seed %d\n", getQueuedSkirmishTemplateName(playerTemplate), startPos, seed);
+	fflush(stderr);
 
 	// Test runs want a predictable opponent: never go above Normal, whatever the battle honors say
 	SlotState aiState = getDefaultSkirmishAIState();
@@ -567,12 +661,19 @@ Bool StartQueuedSkirmishGame()
 		aiState = SLOT_MED_AI;
 	for (Int i = 1; i <= aiCount; ++i)
 	{
+		// AI opponents take the start positions that follow the player's
+		const Int aiStartPos = (startPos - 1 + i) % numStartPositions;
 		GameSlot aiSlot;
 		aiSlot.setState(aiState);
+		aiSlot.setPlayerTemplate(aiTemplate);
+		aiSlot.setStartPos(aiStartPos);
 		TheSkirmishGameInfo->setSlot(i, aiSlot);
+
+		fprintf(stderr, "[SKIRMISH] AI %d: side %s, position %d\n", i, getQueuedSkirmishTemplateName(aiTemplate), aiStartPos + 1);
+		fflush(stderr);
 	}
 
-	TheSkirmishGameInfo->setSeed(GetTickCount());
+	TheSkirmishGameInfo->setSeed(seed);
 	TheSkirmishGameInfo->setMap(md->m_fileName);
 	TheSkirmishGameInfo->setMapCRC(md->m_CRC);
 	TheSkirmishGameInfo->setMapSize(md->m_filesize);

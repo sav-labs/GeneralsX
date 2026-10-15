@@ -1081,7 +1081,9 @@ void W3DDisplay::init()
 			}
 
 			// TheSuperHackers @feature Mauller 13/03/2026 Add native MSAA support, must be set before creating render device
-			WW3D::Set_MSAA_Mode((WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel);
+			// GeneralsX @tweak Claude 15/10/2026 Without an Options.ini AntiAliasing key the device picks 2x or 4x by GPU class.
+			WW3D::Set_MSAA_Mode((WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel,
+				TheGlobalData->m_antiAliasLevelIsDefault);
 
 			renderDeviceError = WW3D::Set_Render_Device(
 				0,

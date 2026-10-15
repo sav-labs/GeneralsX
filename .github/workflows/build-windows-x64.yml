@@ -21,6 +21,7 @@ jobs:
   # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
   # DXVK_FSR_SHARPNESS sets RCAS sharpening in stops (0 = sharpest, default 0.2).
   # A multisampled back buffer (Options.ini AntiAliasing) is resolved before the FSR EASU pass.
+  # d3d9.log reports each back buffer's MultiSampleType and, on every change, whether FSR is active.
   # DXVK_POST=1 adds bloom and a light colour grade (0006-present-post.patch); DXVK_BLOOM,
   # DXVK_BLOOM_THRESHOLD, DXVK_SATURATION and DXVK_CONTRAST tune it.
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
