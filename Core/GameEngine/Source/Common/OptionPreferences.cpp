@@ -1051,6 +1051,26 @@ Real OptionPreferences::getFSRSharpness() const
 	return clamp(0.0f, sharpness, 2.0f);
 }
 
+// GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
+// overrides the default, D:\GeneralsX\bugs on Windows. Elsewhere there is no default and the capture code
+// uses a bugs folder in the user data folder.
+AsciiString OptionPreferences::getCapturePath() const
+{
+	OptionPreferences::const_iterator it = find("CapturePath");
+	if (it != end())
+	{
+		AsciiString path = it->second;
+		path.trim();
+		if (!path.isEmpty())
+			return path;
+	}
+#ifdef _WIN32
+	return AsciiString("D:\\GeneralsX\\bugs");
+#else
+	return AsciiString::TheEmptyString;
+#endif
+}
+
 // GeneralsX @feature Claude 14/10/2026 Game resolution for a render scale: the display size scaled by
 // scale percent, rounded down to even numbers, keeping the display aspect ratio and at least 600 lines.
 Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres)

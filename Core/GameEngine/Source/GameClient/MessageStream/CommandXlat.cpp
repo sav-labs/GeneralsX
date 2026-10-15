@@ -4664,9 +4664,22 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 		}
 
 		case GameMessage::MSG_META_TAKE_SCREENSHOT_PNG:
+		// GeneralsX @feature Claude 15/10/2026 Alternative PNG screenshot key (Ctrl+Shift+S by default).
+		case GameMessage::MSG_META_TAKE_SCREENSHOT_PNG_ALT:
 		{
 			if (TheDisplay)
 				TheDisplay->takeScreenShot(SCREENSHOT_PNG);
+			disp = DESTROY_MESSAGE;
+			break;
+		}
+
+		// GeneralsX @feature Claude 15/10/2026 Start or stop a video clip for bug reports (F11 or Ctrl+Shift+R).
+		// Client side only: the message is destroyed here and never reaches the network or replays.
+		case GameMessage::MSG_META_TOGGLE_VIDEO_CAPTURE:
+		case GameMessage::MSG_META_TOGGLE_VIDEO_CAPTURE_ALT:
+		{
+			if (TheDisplay)
+				TheDisplay->toggleVideoCapture();
 			disp = DESTROY_MESSAGE;
 			break;
 		}

@@ -37,6 +37,9 @@ jobs:
   # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0011) starts recording with the first frame
   # of the -camtest flight instead of a fixed time, so A/B clips line up whatever the load time. The game sets the process
   # environment variable DXVK_CAPTURE_VIDEO_SIGNAL to camtest.prepare when the match starts and to camtest when the flight begins.
+  # GeneralsX @feature Claude 15/10/2026 Without DXVK_CAPTURE_VIDEO, the game starts and stops clips at run time through
+  # DXVK_CAPTURE_VIDEO_CONTROL (patch 0012): F11 or Ctrl+Shift+R records a bug report video into Options.ini CapturePath
+  # (default D:\GeneralsX\bugs), encoded to mp4 by a helper copy of GeneralsXZH.exe with the FFmpeg DLLs it ships.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -209,6 +212,10 @@ jobs:
           (DXVK_CAPTURE_VIDEO_SECONDS then counts from there), so clips of different runs line up whatever the load time.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
           ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
+          Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
+          starts and stops a video (mp4, at most 1080 lines). Files are named by date and time and go to D:\GeneralsX\bugs,
+          or to CapturePath in Options.ini (for example CapturePath = E:\Captures); when that folder cannot be created,
+          they go to the bugs folder in the game's user data folder. Video recording needs the d3d8.dll and d3d9.dll above.
           Pick the game resolution in Options; use the same aspect ratio as the display.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.

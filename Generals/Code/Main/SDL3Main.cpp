@@ -48,6 +48,9 @@
 #include "Common/Debug.h"
 #include "Common/version.h"  // GeneralsX @bugfix BenderAI 14/02/2026 Version class + TheVersion extern
 #include "SDL3GameEngine.h"
+#ifdef RTS_HAS_FFMPEG
+#include "VideoDevice/FFmpeg/FFmpegCaptureEncoder.h"
+#endif
 
 // DXVK WSI
 #define DXVK_WSI_SDL3 1
@@ -256,6 +259,16 @@ int main(int argc, char* argv[])
 
 		// Initialize memory manager early (required by NEW operator)
 		initMemoryManager();
+
+#ifdef RTS_HAS_FFMPEG
+		// GeneralsX @feature Claude 15/10/2026 Started by DXVK as the encoder of a bug report video clip:
+		// encode standard input to the file named on the command line and exit before any game initialization.
+		{
+			int encoderExitCode = 0;
+			if (FFmpegCaptureEncoder_RunFromCommandLine(argc, argv, encoderExitCode))
+				return encoderExitCode;
+		}
+#endif
 
 		// GeneralsX @bugfix BenderAI 14/02/2026 Initialize Version singleton
 		// GameEngine::init() calls updateWindowTitle() which uses TheVersion

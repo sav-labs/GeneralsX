@@ -172,6 +172,10 @@ static const LookupListRec GameMessageMetaTypeNames[] =
 
 	{ "TAKE_SCREENSHOT",													GameMessage::MSG_META_TAKE_SCREENSHOT },
 	{ "TAKE_SCREENSHOT_PNG",											GameMessage::MSG_META_TAKE_SCREENSHOT_PNG },
+	// GeneralsX @feature Claude 15/10/2026 Second PNG screenshot key and video recording keys for bug reports.
+	{ "TAKE_SCREENSHOT_PNG_ALT",									GameMessage::MSG_META_TAKE_SCREENSHOT_PNG_ALT },
+	{ "TOGGLE_VIDEO_CAPTURE",											GameMessage::MSG_META_TOGGLE_VIDEO_CAPTURE },
+	{ "TOGGLE_VIDEO_CAPTURE_ALT",									GameMessage::MSG_META_TOGGLE_VIDEO_CAPTURE_ALT },
 	{ "ALL_CHEER",																GameMessage::MSG_META_ALL_CHEER },
 
 	{ "BEGIN_CAMERA_ROTATE_LEFT",									GameMessage::MSG_META_BEGIN_CAMERA_ROTATE_LEFT },
@@ -905,6 +909,39 @@ void MetaMap::generateMetaMap()
 			map->m_key = MK_F12;
 			map->m_transition = DOWN;
 			map->m_modState = CTRL;
+			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;
+		}
+	}
+	// GeneralsX @feature Claude 15/10/2026 Capture keys for bug reports. Keyboards without a function row
+	// (or with it behind an Fn key) get Ctrl+Shift+S for a PNG screenshot and Ctrl+Shift+R next to F11 to
+	// start and stop a video clip. Original game data does not bind these, so the defaults always apply.
+	{
+		MetaMapRec *map = TheMetaMap->getMetaMapRec(GameMessage::MSG_META_TAKE_SCREENSHOT_PNG_ALT);
+		if (map->m_key == MK_NONE)
+		{
+			map->m_key = MK_S;
+			map->m_transition = DOWN;
+			map->m_modState = SHIFT_CTRL;
+			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;
+		}
+	}
+	{
+		MetaMapRec *map = TheMetaMap->getMetaMapRec(GameMessage::MSG_META_TOGGLE_VIDEO_CAPTURE);
+		if (map->m_key == MK_NONE)
+		{
+			map->m_key = MK_F11;
+			map->m_transition = DOWN;
+			map->m_modState = NONE;
+			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;
+		}
+	}
+	{
+		MetaMapRec *map = TheMetaMap->getMetaMapRec(GameMessage::MSG_META_TOGGLE_VIDEO_CAPTURE_ALT);
+		if (map->m_key == MK_NONE)
+		{
+			map->m_key = MK_R;
+			map->m_transition = DOWN;
+			map->m_modState = SHIFT_CTRL;
 			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;
 		}
 	}

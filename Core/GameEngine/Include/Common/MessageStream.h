@@ -258,6 +258,10 @@ public:
 
 		MSG_META_TAKE_SCREENSHOT,										///< take JPEG screenshot
 		MSG_META_TAKE_SCREENSHOT_PNG,							///< TheSuperHackers @feature Take lossless PNG screenshot
+		// GeneralsX @feature Claude 15/10/2026 Second PNG screenshot key and video recording keys for bug reports.
+		MSG_META_TAKE_SCREENSHOT_PNG_ALT,						///< take lossless PNG screenshot, alternative key
+		MSG_META_TOGGLE_VIDEO_CAPTURE,							///< start or stop recording a video clip
+		MSG_META_TOGGLE_VIDEO_CAPTURE_ALT,					///< start or stop recording a video clip, alternative key
 		MSG_META_ALL_CHEER,													///< Yay! :)
 		MSG_META_TOGGLE_ATTACKMOVE,									///< enter attack-move mode
 

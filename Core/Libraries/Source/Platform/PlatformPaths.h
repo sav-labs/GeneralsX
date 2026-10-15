@@ -37,6 +37,8 @@
 #else
 #include <unistd.h>
 #include <limits.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
 #if defined(__APPLE__)
@@ -367,5 +369,83 @@ inline bool FindLocalFontFileW(const wchar_t *const *candidates, int candidateCo
 	return false;
 }
 #endif
+
+// GeneralsX @feature Claude 15/10/2026 Full path of the running executable, for starting a helper copy of it.
+inline bool GetExecutablePath(char *outPath, size_t outPathSize)
+{
+	if ( !outPath || outPathSize == 0 ) {
+		return false;
+	}
+	outPath[0] = '\0';
+#if defined(_WIN32)
+	const DWORD length = GetModuleFileNameA( nullptr, outPath, (DWORD)outPathSize );
+	if ( length == 0 || length >= outPathSize ) {
+		outPath[0] = '\0';
+		return false;
+	}
+	return true;
+#elif defined(__APPLE__)
+	uint32_t size = (uint32_t)outPathSize;
+	if ( _NSGetExecutablePath( outPath, &size ) != 0 ) {
+		outPath[0] = '\0';
+		return false;
+	}
+	return true;
+#else
+	const ssize_t length = readlink( "/proc/self/exe", outPath, outPathSize - 1 );
+	if ( length <= 0 ) {
+		outPath[0] = '\0';
+		return false;
+	}
+	outPath[length] = '\0';
+	return true;
+#endif
+}
+
+// GeneralsX @feature Claude 15/10/2026 Creates a directory and any missing parents. Both separators are accepted.
+// Returns true when the directory exists afterwards.
+inline bool CreateDirectoryTree(const char *path)
+{
+	if ( !path || path[0] == '\0' ) {
+		return false;
+	}
+	char buffer[1024];
+	const size_t length = strlen( path );
+	if ( length >= sizeof(buffer) ) {
+		return false;
+	}
+	memcpy( buffer, path, length + 1 );
+
+	for ( size_t i = 1; i <= length; ++i ) {
+		const char c = buffer[i];
+		if ( c != '\\' && c != '/' && c != '\0' ) {
+			continue;
+		}
+		// Skip the drive root ("D:\") and empty components.
+		if ( buffer[i - 1] == ':' || buffer[i - 1] == '\\' || buffer[i - 1] == '/' ) {
+			continue;
+		}
+		buffer[i] = '\0';
+#if defined(_WIN32)
+		CreateDirectoryA( buffer, nullptr );
+#else
+		mkdir( buffer, 0755 );
+#endif
+		buffer[i] = c;
+	}
+
+	// Strip a trailing separator before checking the result.
+	size_t end = length;
+	while ( end > 1 && ( buffer[end - 1] == '\\' || buffer[end - 1] == '/' ) && buffer[end - 2] != ':' ) {
+		buffer[--end] = '\0';
+	}
+#if defined(_WIN32)
+	const DWORD attributes = GetFileAttributesA( buffer );
+	return attributes != INVALID_FILE_ATTRIBUTES && ( attributes & FILE_ATTRIBUTE_DIRECTORY ) != 0;
+#else
+	struct stat info;
+	return stat( buffer, &info ) == 0 && S_ISDIR( info.st_mode );
+#endif
+}
 
 } // namespace Platform

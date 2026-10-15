@@ -184,6 +184,8 @@ public:
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence
+	// GeneralsX @feature Claude 15/10/2026 Start or stop a video clip of the presented frames for bug reports.
+	virtual void toggleVideoCapture() = 0;
 	virtual void toggleLetterBox() = 0;										///< enabled letter-boxed display
 	virtual void enableLetterBox(Bool enable) = 0;						///< forces letter-boxed display on/off
 	virtual Bool isLetterBoxFading() { return FALSE; }	///< returns true while letterbox fades in/out

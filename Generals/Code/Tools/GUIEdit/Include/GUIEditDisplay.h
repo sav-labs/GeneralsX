@@ -103,6 +103,7 @@ public:
 																Int endX, Int endY ) override { }
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality) override { }
 	virtual void toggleMovieCapture() override {}
+	virtual void toggleVideoCapture() override {}
 
 	// methods that we need to stub
 	virtual void setTimeOfDay( TimeOfDay tod ) override {}
