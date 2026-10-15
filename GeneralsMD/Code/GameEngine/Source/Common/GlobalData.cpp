@@ -1030,6 +1030,10 @@ GlobalData::GlobalData()
 	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish
 	m_initialSkirmishMap.clear();
 	m_initialSkirmishAICount = 1;
+	// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup defaults
+	m_initialSkirmishSide = "America";
+	m_initialSkirmishAISide.clear();
+	m_initialSkirmishStartPos = 1;
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
 	m_cameraTestSeconds = 0.0f;
 
