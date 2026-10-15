@@ -1,9 +1,11 @@
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -12,10 +12,499 @@
+@@ -11,11 +11,535 @@
+ #include <dxvk_present_frag_ms_blit.h>
  #include <dxvk_present_vert.h>
  
++#include <algorithm>
  #include <array>
 +#include <atomic>
  #include <cstdio>
@@ -25,14 +27,20 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +   *
 +   * Writes captured BGRA frames on a dedicated thread, so that a slow
 +   * encoder or disk does not stall presentation until the bounded frame
-+   * queue is full. A target of the form raw:<path> writes the frames to
-+   * <path>.bgra and their present time stamps to <path>.txt. Any other
-+   * target is a command line that receives the frames on its standard
-+   * input as Matroska raw BGRA video with present time stamps, so that
-+   * the encoder sees the exact frame timing even when it falls behind.
++   * queue is full. The queue holds QueueBytes of frames (at least
++   * MinQueueFrames), enough to ride out the one-time stall of an encoder
++   * that starts up or a file that is first written to, and its buffers
++   * are allocated by the writer thread before recording starts. A target
++   * of the form raw:<path> writes the frames to <path>.bgra and their
++   * present time stamps to <path>.txt. Any other target is a command line
++   * that receives the frames on its standard input as Matroska raw BGRA
++   * video with present time stamps, so that the encoder sees the exact
++   * frame timing even when it falls behind.
 +   */
 +  class DxvkVideoWriter {
-+    constexpr static size_t QueueSize = 16u;
++    constexpr static size_t QueueBytes = (sizeof(void*) >= 8u ? 512u : 128u) << 20;
++    constexpr static size_t MinQueueFrames = 16u;
++    constexpr static size_t MaxQueueFrames = 1024u;
 +  public:
 +
 +    DxvkVideoWriter(
@@ -40,7 +48,8 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +            uint32_t      width,
 +            uint32_t      height)
 +    : m_width(width), m_height(height),
-+      m_frameSize(size_t(width) * height * 4u) {
++      m_frameSize(size_t(width) * height * 4u),
++      m_queueFrames(std::clamp(QueueBytes / m_frameSize, MinQueueFrames, MaxQueueFrames)) {
 +      if (target.compare(0, 4, "raw:") == 0)
 +        m_rawPath = target.substr(4);
 +      else
@@ -83,7 +92,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +          break;
 +        }
 +
-+        if (m_allocated < QueueSize) {
++        if (m_allocated < m_queueFrames) {
 +          pixels.resize(m_frameSize);
 +          m_allocated += 1u;
 +          break;
@@ -109,6 +118,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +
 +        m_blockedFrames += 1u;
 +        m_blockedUs += blocked.count();
++        m_blockedMaxUs = std::max(m_blockedMaxUs, uint64_t(blocked.count()));
 +      }
 +
 +      lock.unlock();
@@ -142,6 +152,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +    uint32_t                m_width;
 +    uint32_t                m_height;
 +    size_t                  m_frameSize;
++    size_t                  m_queueFrames;
 +
 +    std::string             m_rawPath;
 +    std::string             m_command;
@@ -157,6 +168,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +    uint32_t                m_dropped = 0u;
 +    uint32_t                m_blockedFrames = 0u;
 +    uint64_t                m_blockedUs = 0u;
++    uint64_t                m_blockedMaxUs = 0u;
 +
 +    std::ofstream           m_file;
 +#ifdef _WIN32
@@ -199,7 +211,12 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +        ? openPipe() && writeHeader()
 +        : openFile();
 +
-+      if (!ok)
++      // The writer starts about a second before recording does. Allocate
++      // and touch the whole queue now, while the encoder starts up, so
++      // that presentation never has to.
++      if (ok)
++        allocateQueue();
++      else
 +        m_failed = true;
 +
 +      std::vector<uint64_t> timestamps;
@@ -235,6 +252,24 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +      }
 +
 +      close(timestamps);
++    }
++
++    void allocateQueue() {
++      std::unique_lock lock(m_mutex);
++
++      while (m_allocated < m_queueFrames && !m_stopping) {
++        m_allocated += 1u;
++        lock.unlock();
++
++        std::vector<uint8_t> pixels(m_frameSize);
++
++        lock.lock();
++        m_free.push_back(std::move(pixels));
++        m_cond.notify_all();
++      }
++
++      Logger::info(str::format("Swap chain: video writer queue holds ", m_allocated,
++        " frames (", (m_allocated * m_frameSize) >> 20, " MB)"));
 +    }
 +
 +    bool openFile() {
@@ -494,14 +529,15 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +
 +      Logger::info(str::format("Swap chain: video capture finished, ", timestamps.size(),
 +        " frames in ", seconds, " s, average ", fps, " fps, ", m_dropped, " dropped, ",
-+        m_blockedFrames, " frames waited ", m_blockedUs / 1000u, " ms for the writer; ", result));
++        m_blockedFrames, " frames waited ", m_blockedUs / 1000u, " ms for the writer (longest ",
++        m_blockedMaxUs / 1000u, " ms); ", result));
 +    }
 +
 +  };
    
    DxvkSwapchainBlitter::DxvkSwapchainBlitter(
      const Rc<DxvkDevice>& device,
-@@ -55,12 +544,47 @@
+@@ -55,12 +579,47 @@
          " every ", m_captureInterval.count(), " ms"));
      }
  
@@ -549,7 +585,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      auto vk = m_device->vkd();
  
      for (const auto& p : m_pipelines)
-@@ -121,8 +645,15 @@
+@@ -121,8 +680,15 @@
      if (m_cursorBuffer)
        uploadCursorImage(ctx);
  
@@ -567,7 +603,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
  
      if (m_hud && composite)
        renderHudImage(ctx, dstView->mipLevelExtent(0));
-@@ -237,6 +768,10 @@
+@@ -237,6 +803,10 @@
          m_captureNext = now + m_captureInterval;
        }
      }
@@ -578,7 +614,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
    }
  
  
-@@ -945,6 +1480,373 @@
+@@ -945,6 +1515,373 @@
    }
  
  
