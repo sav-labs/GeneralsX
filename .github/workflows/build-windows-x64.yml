@@ -29,6 +29,9 @@ jobs:
   # (scripts/qa/dxvk_video_to_mp4.py turns them into an mp4); any other value is a command that reads
   # Matroska raw BGRA video with present time stamps on stdin, e.g.
   # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 clip.mp4
+  # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0007) starts recording with the first frame
+  # of the -camtest flight instead of a fixed time, so A/B clips line up whatever the load time. The game sets the process
+  # environment variable DXVK_CAPTURE_VIDEO_SIGNAL to camtest.prepare when the match starts and to camtest when the flight begins.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -192,6 +195,8 @@ jobs:
           For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
           into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and
           DXVK_CAPTURE_VIDEO_SCALE change the window and size; set DXVK_HUD=fps,frametimes to include the HUD in the video.
+          With -camtest, set DXVK_CAPTURE_VIDEO_START=camtest to start recording with the first frame of the camera flight
+          (DXVK_CAPTURE_VIDEO_SECONDS then counts from there), so clips of different runs line up whatever the load time.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
           ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
           Pick the game resolution in Options; use the same aspect ratio as the display.
