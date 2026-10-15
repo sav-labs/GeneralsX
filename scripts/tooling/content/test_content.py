@@ -108,8 +108,17 @@ def main():
         if not path.endswith(".ini"):
             continue
         text = data.decode("ascii")
-        for model in re.findall(r"^\s*Model\s*=\s*(\S+)", text, re.M):
-            assert f"art\\w3d\\{model.lower()}.w3d" in files, f"{path}: model {model} is not in the pack"
+        # ArtRemap lines name a retail model (or animation) and the pack's replacement.
+        for model in re.findall(r"^\s*Model\s*=\s*\S+\s+(\S+)", text, re.M):
+            if model.upper() != "NONE":
+                assert f"art\\w3d\\{model.lower()}.w3d" in files, f"{path}: model {model} is not in the pack"
+        for anim in re.findall(r"^\s*Animation\s*=\s*\S+\s+(\S+)", text, re.M):
+            if anim.upper() != "NONE":
+                owner = anim.split(".")[0].lower()
+                data = files.get(f"art\\w3d\\{owner}.w3d")
+                assert data is not None, f"{path}: animation {anim} has no model {owner} in the pack"
+                has_anim = any(cid == w3d.ANIMATION for cid, _, _ in w3d.read_chunks(data))
+                assert anim.lower() == f"{owner}.{owner}" and has_anim, f"{path}: {owner}.w3d has no animation {anim}"
         for tex in re.findall(r"^\s*Texture\s*=\s*(\S+)", text, re.M):
             assert f"art\\textures\\{tex.lower()}" in files, f"{path}: texture {tex} is not in the pack"
     assert "data\\generalsx.str" in files

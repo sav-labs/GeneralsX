@@ -127,7 +127,8 @@ def build(name, body_texture, team_texture, glass_texture, flash_texture, disc_t
     model.attach("ROOTTRANSFORM", stripes)
 
     # Main rotor: four blades plus a faint blur disc, all turning with PROPELLER01.
-    blades = Mesh("BLADES", body)
+    # Named like the retail rotor sub-object, so the retail death state hides it (and the blur on its bone).
+    blades = Mesh("AVCOMANCHE_PROP", body)
     r = Builder(blades, ShadeFn(ground=2.0, height=9.0, floor=0.85))
     hx, hy, hz = ROTOR_HUB
     for k in range(4):
