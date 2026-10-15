@@ -42,6 +42,8 @@
 #include "OpenALAudioDevice/OpenALAudioManager.h"
 #include "OpenALAudioDevice/OpenALAudioStream.h"
 #include "OpenALAudioCache.h"
+// GeneralsX @bugfix Claude 15/10/2026 Release-build audio diagnostics (parity with MiniAudio).
+#include "AudioDevice/AudioDiagnostics.h"
 
 #include "Common/AudioAffect.h"
 #include "Common/AudioHandleSpecialValues.h"
@@ -1525,7 +1527,13 @@ Bool OpenALAudioManager::hasMusicTrackCompleted(const AsciiString& trackName, In
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::openDevice(void)
 {
+	// GeneralsX @bugfix Claude 15/10/2026 Report the device setup in release builds (parity with MiniAudio).
+	AudioDiagnostics::print("Audio backend: OpenAL");
+	AudioDiagnostics::print("GlobalData: audioOn=%d musicOn=%d soundsOn=%d sounds3DOn=%d speechOn=%d headless=%d",
+		(Int)TheGlobalData->m_audioOn, (Int)TheGlobalData->m_musicOn, (Int)TheGlobalData->m_soundsOn,
+		(Int)TheGlobalData->m_sounds3DOn, (Int)TheGlobalData->m_speechOn, (Int)TheGlobalData->m_headless);
 	if (!TheGlobalData->m_audioOn) {
+		AudioDiagnostics::print("Audio is off in GlobalData (AudioOn = no or -noaudio); no device opened");
 		return;
 	}
 
@@ -1538,6 +1546,7 @@ void OpenALAudioManager::openDevice(void)
 	m_alcDevice = alcOpenDevice(NULL);
 	if (m_alcDevice == nullptr) {
 		DEBUG_LOG(("Failed to open ALC device"));
+		AudioDiagnostics::print("alcOpenDevice(default) failed: ALC error 0x%x; audio disabled", (UnsignedInt)alcGetError(nullptr));
 		// if we couldn't initialize any devices, turn sound off (fail silently)
 		setOn(false, AudioAffect_All);
 		return;
@@ -1547,12 +1556,14 @@ void OpenALAudioManager::openDevice(void)
 	m_alcContext = alcCreateContext(m_alcDevice, attributes);
 	if (m_alcContext == nullptr) {
 		DEBUG_LOG(("Failed to create ALC context"));
+		AudioDiagnostics::print("alcCreateContext failed: ALC error 0x%x; audio disabled", (UnsignedInt)alcGetError(m_alcDevice));
 		setOn(false, AudioAffect_All);
 		return;
 	}
 
 	if (!alcMakeContextCurrent(m_alcContext)) {
 		DEBUG_LOG(("Failed to make ALC context current"));
+		AudioDiagnostics::print("alcMakeContextCurrent failed: ALC error 0x%x; audio disabled", (UnsignedInt)alcGetError(m_alcDevice));
 		setOn(false, AudioAffect_All);
 		return;
 	}
@@ -1571,6 +1582,19 @@ void OpenALAudioManager::openDevice(void)
 	// Now that we're all done, update the cached variables so that everything is in sync.
 	TheAudio->refreshCachedVariables();
 
+	{
+		ALCint sampleRate = 0;
+		alcGetIntegerv(m_alcDevice, ALC_FREQUENCY, 1, &sampleRate);
+		const ALCchar *deviceName = alcGetString(m_alcDevice, ALC_DEVICE_SPECIFIER);
+		AudioDiagnostics::print("Output opened: device '%s', %d Hz", deviceName ? deviceName : "unknown", (Int)sampleRate);
+		ALfloat masterVolume = 1.0f;
+		alGetListenerf(AL_GAIN, &masterVolume);
+		AudioDiagnostics::print("Volumes: master %.2f, music %.2f, sound %.2f, 3D sound %.2f, speech %.2f",
+			masterVolume, m_musicVolume, m_soundVolume, m_sound3DVolume, m_speechVolume);
+		AudioDiagnostics::print("Enabled: music %d, sound %d, 3D sound %d, speech %d",
+			(Int)isOn(AudioAffect_Music), (Int)isOn(AudioAffect_Sound), (Int)isOn(AudioAffect_Sound3D), (Int)isOn(AudioAffect_Speech));
+	}
+
 	if (!isValidProvider()) {
 		return;
 	}
@@ -1583,6 +1607,9 @@ void OpenALAudioManager::closeDevice(void)
 {
 	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
 	ScopedFPUGuard fpuGuard;
+	if (m_alcDevice) {
+		AudioDiagnostics::logSummary("shutdown");
+	}
 	unselectProvider();
 	alcMakeContextCurrent(nullptr);
 
