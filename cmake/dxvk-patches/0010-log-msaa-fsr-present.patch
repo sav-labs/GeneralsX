@@ -1,7 +1,8 @@
 diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index e51357f..bfbec50 100644
 --- a/src/d3d9/d3d9_swapchain.cpp
 +++ b/src/d3d9/d3d9_swapchain.cpp
-@@ -1042,6 +1042,13 @@
+@@ -1042,6 +1042,13 @@ namespace dxvk {
        m_backBuffers.emplace_back(surface);
      }
  
@@ -16,9 +17,10 @@ diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
      // to black prevents garbled output for the first frame.
      small_vector<Rc<DxvkImage>, 4> images;
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+index 6779d71..61bbdef 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -673,6 +673,30 @@
+@@ -737,6 +737,30 @@ namespace dxvk {
        && dstRect.extent.width >= srcRect.extent.width
        && dstRect.extent.height >= srcRect.extent.height;
  
@@ -46,13 +48,14 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +               : (m_fsrEnabled ? ", FSR 1.0 enabled but inactive (no upscale)" : ", FSR 1.0 off")));
 +    }
 +
-     Rc<DxvkImageView> blitView = srcView;
-     VkRect2D blitRect = srcRect;
- 
+     // EASU and the post-processing passes read single-sampled texels, so a
+     // multisampled back buffer (D3D MultiSampleType) is resolved into an
+     // intermediate image first.
 diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+index 4ef191d..a9fb9a1 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.h
 +++ b/src/dxvk/dxvk_swapchain_blitter.h
-@@ -250,6 +250,11 @@
+@@ -263,6 +263,11 @@ namespace dxvk {
      bool                m_fsrEnabled = false;
      float               m_fsrSharpness = 0.2f;
  
@@ -61,6 +64,6 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter
 +    VkExtent2D            m_presentLogSrc = { };
 +    VkExtent2D            m_presentLogDst = { };
 +
-     ShaderModule        m_shaderVsCursor;
-     ShaderModule        m_shaderFsCursor;
- 
+     bool                m_postEnabled = false;
+     bool                m_postActive = false;
+     float               m_bloomStrength = 0.25f;

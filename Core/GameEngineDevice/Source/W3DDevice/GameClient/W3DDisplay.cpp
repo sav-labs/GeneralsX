@@ -2084,6 +2084,13 @@ void W3DDisplay::draw()
 	{
 		calculateTerrainLOD();
 	}
+
+	// GeneralsX @feature Claude 15/10/2026 Low and Medium keep the retail point light falloff, High and above
+	// let explosion, fire and muzzle flash lights reach further over units and buildings.
+	{
+		const StaticGameLODLevel staticLOD = TheGameLODManager->getStaticLODLevel();
+		DX8Wrapper::Set_Enhanced_Point_Light_Falloff(staticLOD != STATIC_GAME_LOD_LOW && staticLOD != STATIC_GAME_LOD_MEDIUM);
+	}
 #ifdef EXTENDED_STATS
 AGAIN:
 #endif
