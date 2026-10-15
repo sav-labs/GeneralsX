@@ -23,6 +23,7 @@ import textures  # noqa: E402
 from PIL import Image  # noqa: E402
 from render import render  # noqa: E402
 import gx_apache  # noqa: E402
+import gx_chinook  # noqa: E402
 import gx_dozer  # noqa: E402
 import gx_jltv  # noqa: E402
 import gx_mlrs  # noqa: E402
@@ -83,6 +84,8 @@ def build_models(w3d_dir, tex):
         models["AVGXJLTV" + suffix] = gx_jltv.build(
             "AVGXJLTV" + suffix, f"gxmbt_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga")
         models["AVGXMLRS" + suffix] = gx_mlrs.build("AVGXMLRS" + suffix, f"gxpal_body{d}.tga", "gxmbt_tread.tga", "gxteam.tga")
+        models["AVGXCHINOOK" + suffix] = gx_chinook.build(
+            "AVGXCHINOOK" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxrotor.tga")
         models["AVGXAPACHE" + suffix] = gx_apache.build(
             "AVGXAPACHE" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", "gxrotor.tga")
     for name, model in models.items():
@@ -99,6 +102,7 @@ CAMEOS = {
     "GXCameo_Apache": "AVGXAPACHE",
     "GXCameo_JLTV": "AVGXJLTV",
     "GXCameo_MLRS": "AVGXMLRS",
+    "GXCameo_Chinook": "AVGXCHINOOK",
 }
 # Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
 DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}
