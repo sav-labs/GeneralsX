@@ -132,6 +132,28 @@ CAMEOS = {
     "GXCameo_Supply": "ABGXSUPPLY",
     "GXCameo_CommandCenter": "ABGXCMDHQ",
 }
+# Retail command bar images redrawn with our cameos. The retail MappedImages load from TextureSize_*
+# before HandCreated, so redefining them here swaps the picture on every button and portrait that uses
+# them, the generals' variants included, without overriding any Object or CommandButton.
+RETAIL_CAMEOS = {
+    "GXCameo_MBT": ["SACLeopard"],
+    "GXCameo_Paladin": ["SAPaladin"],
+    "GXCameo_Dozer": ["SACDozer"],
+    "GXCameo_Apache": ["SACCommanche"],
+    "GXCameo_JLTV": ["SAHummer"],
+    "GXCameo_MLRS": ["SACTomahawk"],
+    "GXCameo_Chinook": ["SAChinook", "SAComChinok"],
+    "GXCameo_Microwave": ["SAThunderBolt"],
+    "GXCameo_Medic": ["SAAmbulance"],
+    "GXCameo_F35": ["SACRaptor", "SAKingRap"],
+    "GXCameo_Wing": ["SAStealth"],
+    "GXCameo_Hyper": ["SAAurora", "SAFulArAurora"],
+    "GXCameo_PowerPlant": ["SAPowerPlant"],
+    "GXCameo_Barracks": ["SABarracks"],
+    "GXCameo_WarFactory": ["SACWeaponsfact"],
+    "GXCameo_Supply": ["SASupplyCntr"],
+    "GXCameo_CommandCenter": ["SAComCentr"],
+}
 # Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
 DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}
 CELL_W, CELL_H = 352, 184
@@ -173,8 +195,9 @@ def build_cameos(stage, tex_dir, models, tex):
         portrait = textures.cameo_frame(fit(render(model, tex, size=(640, 640), yaw=30, pitch=20, hide=DEFAULT_HIDDEN), (216, 178)), (216, 178))
         sheet.paste(button, (x, y))
         sheet.paste(portrait, (x + 128, y))
-        mapped(cameo, texture, x, y, x + 120, y + 96)
-        mapped(cameo + "_L", texture, x + 128, y, x + 344, y + 178)
+        for name in [cameo] + RETAIL_CAMEOS.get(cameo, []):
+            mapped(name, texture, x, y, x + 120, y + 96)
+            mapped(name + "_L", texture, x + 128, y, x + 344, y + 178)
     for page, sheet in enumerate(sheets):
         textures.save_tga(sheet, os.path.join(tex_dir, "gxcameos.tga" if page == 0 else f"gxcameos{page + 1}.tga"))
     ini_dir = os.path.join(stage, "Data", "INI", "MappedImages", "HandCreated")
