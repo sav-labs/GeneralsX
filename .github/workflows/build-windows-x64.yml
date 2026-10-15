@@ -24,6 +24,7 @@ jobs:
   # d3d9.log reports each back buffer's MultiSampleType and, on every change, whether FSR is active.
   # DXVK_POST=1 adds bloom and a light colour grade (0006-present-post.patch); DXVK_BLOOM,
   # DXVK_BLOOM_THRESHOLD, DXVK_SATURATION and DXVK_CONTRAST tune it.
+  # DXVK_FXAA=1 smooths edges of a single-sampled back buffer with FXAA (0007-present-fxaa.patch).
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
   # DXVK_CAPTURE_VIDEO records every presented frame for DXVK_CAPTURE_VIDEO_SECONDS (default 10), starting
   # DXVK_CAPTURE_VIDEO_START seconds (default 5) after the first present, at DXVK_CAPTURE_VIDEO_SCALE percent
@@ -185,6 +186,7 @@ jobs:
           rem Borderless window at display size; the game renders at its own resolution and FSR 1.0 upscales it.
           set DXVK_FSR=1
           set DXVK_POST=1
+          set DXVK_FXAA=1
           start "" "%~dp0GeneralsXZH.exe" -upscale %*
           "@ | Set-Content artifacts/Play-FSR.cmd -Encoding ascii
           @"
@@ -196,6 +198,7 @@ jobs:
           To soften the FSR sharpening, edit Play-FSR.cmd and add: set DXVK_FSR_SHARPNESS=1 (0 is sharpest, default 0.2).
           Play-FSR.cmd also adds bloom and a light colour grade (DXVK_POST=1). Tune it in Play-FSR.cmd with
           set DXVK_BLOOM=0.25, set DXVK_SATURATION=1.1, set DXVK_CONTRAST=1.05 (1 = unchanged), or set DXVK_POST=0 to turn it off.
+          With anti-aliasing off in the game options, Play-FSR.cmd smooths edges with FXAA instead (DXVK_FXAA=1, set DXVK_FXAA=0 to turn it off).
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
           into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and

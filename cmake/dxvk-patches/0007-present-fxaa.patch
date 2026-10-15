@@ -1,0 +1,258 @@
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+index 6779d71..82e0327 100644
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -7,6 +7,7 @@
+ #include <dxvk_present_frag_bloom_blur_h.h>
+ #include <dxvk_present_frag_bloom_blur_v.h>
+ #include <dxvk_present_frag_bloom_down.h>
++#include <dxvk_present_frag_fxaa.h>
+ #include <dxvk_present_frag_fsr.h>
+ #include <dxvk_present_frag_fsr_easu.h>
+ #include <dxvk_present_frag_ms.h>
+@@ -620,6 +621,12 @@ namespace dxvk {
+     // scale around neutral (1 keeps the image unchanged).
+     m_postEnabled = env::getEnvVar("DXVK_POST") == "1";
+ 
++    // DXVK_FXAA=1 smooths jagged edges of the game image before scaling
++    m_fxaaEnabled = env::getEnvVar("DXVK_FXAA") == "1";
++
++    if (m_fxaaEnabled)
++      Logger::info("Swap chain: FXAA enabled");
++
+     auto readFloat = [] (const char* name, float& value, float lo, float hi) {
+       std::string str = env::getEnvVar(name);
+ 
+@@ -664,6 +671,7 @@ namespace dxvk {
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsBloomDown.stageInfo.module, nullptr);
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsBloomBlurH.stageInfo.module, nullptr);
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsBloomBlurV.stageInfo.module, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_shaderFsFxaa.stageInfo.module, nullptr);
+ 
+     vk->vkDestroyShaderModule(vk->device(), m_shaderVsCursor.stageInfo.module, nullptr);
+     vk->vkDestroyShaderModule(vk->device(), m_shaderFsCursor.stageInfo.module, nullptr);
+@@ -680,10 +688,12 @@ namespace dxvk {
+     const DxvkContextObjects& ctx,
+     const Rc<DxvkImageView>&  dstView,
+           VkRect2D            dstRect,
+-    const Rc<DxvkImageView>&  srcView,
++    const Rc<DxvkImageView>&  gameView,
+           VkRect2D            srcRect) {
+     std::unique_lock lock(m_mutex);
+ 
++    Rc<DxvkImageView> srcView = gameView;
++
+     // Update HUD, if we have one
+     if (m_hud)
+       m_hud->update();
+@@ -724,6 +734,21 @@ namespace dxvk {
+     else
+       destroyHudImage();
+ 
++    // FXAA runs first, at the size of the game image, so that FSR and
++    // post-processing work on the smoothed image. It replaces MSAA when the
++    // game renders without it, so a multisampled image is left as is.
++    if (m_fxaaEnabled
++     && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
++     && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++      renderFxaa(ctx, srcView, srcRect);
++
++      srcView = m_fxaaView;
++      srcRect.offset = { 0, 0 };
++    } else {
++      m_fxaaImage = nullptr;
++      m_fxaaView = nullptr;
++    }
++
+     // With FSR, keep the aspect ratio of the back buffer and center it in
+     // the window. The area outside is cleared to black. GeneralsX maps
+     // mouse input with the same rounding, see Win32Mouse.cpp.
+@@ -1409,6 +1434,20 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkSwapchainBlitter::renderFxaa(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          srcView,
++          VkRect2D                    srcRect) {
++    if (!m_fxaaImage || m_fxaaImage->info().extent != VkExtent3D { srcRect.extent.width, srcRect.extent.height, 1u }) {
++      createIntermediateImage(srcRect.extent, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
++        "FXAA output", m_fxaaImage, m_fxaaView);
++    }
++
++    renderPostPass(ctx, m_fxaaImage, m_fxaaView, srcRect.extent,
++      srcView, srcRect, DxvkFsrPass::Fxaa, "FXAA");
++  }
++
++
+   void DxvkSwapchainBlitter::renderBloom(
+     const DxvkContextObjects&         ctx,
+     const Rc<DxvkImageView>&          srcView,
+@@ -2410,6 +2449,8 @@ namespace dxvk {
+       sizeof(dxvk_present_frag_bloom_blur_h), dxvk_present_frag_bloom_blur_h);
+     createShaderModule(m_shaderFsBloomBlurV, VK_SHADER_STAGE_FRAGMENT_BIT,
+       sizeof(dxvk_present_frag_bloom_blur_v), dxvk_present_frag_bloom_blur_v);
++    createShaderModule(m_shaderFsFxaa, VK_SHADER_STAGE_FRAGMENT_BIT,
++      sizeof(dxvk_present_frag_fxaa), dxvk_present_frag_fxaa);
+     createShaderModule(m_shaderFsCopy, VK_SHADER_STAGE_FRAGMENT_BIT,
+       sizeof(dxvk_present_frag), dxvk_present_frag);
+     createShaderModule(m_shaderFsMsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
+@@ -2601,6 +2642,8 @@ namespace dxvk {
+       blitStages[1] = m_shaderFsBloomBlurH.stageInfo;
+     else if (key.fsrPass == DxvkFsrPass::BloomBlurV)
+       blitStages[1] = m_shaderFsBloomBlurV.stageInfo;
++    else if (key.fsrPass == DxvkFsrPass::Fxaa)
++      blitStages[1] = m_shaderFsFxaa.stageInfo;
+     else if (key.srcSamples == VK_SAMPLE_COUNT_1_BIT)
+       blitStages[1] = key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo;
+     else
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+index 4ef191d..de4b3b7 100644
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -40,6 +40,8 @@ namespace dxvk {
+     BloomBlurH = 4,
+     /// Vertical bloom blur
+     BloomBlurV = 5,
++    /// FXAA anti-aliasing of the source image at its own size
++    Fxaa = 6,
+   };
+ 
+ 
+@@ -259,6 +261,7 @@ namespace dxvk {
+     ShaderModule        m_shaderFsBloomDown;
+     ShaderModule        m_shaderFsBloomBlurH;
+     ShaderModule        m_shaderFsBloomBlurV;
++    ShaderModule        m_shaderFsFxaa;
+ 
+     bool                m_fsrEnabled = false;
+     float               m_fsrSharpness = 0.2f;
+@@ -270,6 +273,8 @@ namespace dxvk {
+     float               m_saturation = 1.1f;
+     float               m_contrast = 1.05f;
+ 
++    bool                m_fxaaEnabled = false;
++
+     ShaderModule        m_shaderVsCursor;
+     ShaderModule        m_shaderFsCursor;
+ 
+@@ -298,6 +303,9 @@ namespace dxvk {
+     Rc<DxvkImage>       m_fsrResolveImage;
+     Rc<DxvkImageView>   m_fsrResolveView;
+ 
++    Rc<DxvkImage>       m_fxaaImage;
++    Rc<DxvkImageView>   m_fxaaView;
++
+     std::string         m_capturePath;
+     std::chrono::milliseconds m_captureInterval = std::chrono::milliseconds(10000);
+     high_resolution_clock::time_point m_captureNext = { };
+@@ -426,6 +434,11 @@ namespace dxvk {
+             VkExtent2D                  extent,
+             VkColorSpaceKHR             colorSpace);
+ 
++    void renderFxaa(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          srcView,
++            VkRect2D                    srcRect);
++
+     void renderBloom(
+       const DxvkContextObjects&         ctx,
+       const Rc<DxvkImageView>&          srcView,
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+index ef22c27..7e4a687 100644
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -45,6 +45,7 @@ dxvk_shaders = files([
+   'shaders/dxvk_present_frag_bloom_blur_h.frag',
+   'shaders/dxvk_present_frag_bloom_blur_v.frag',
+   'shaders/dxvk_present_frag_bloom_down.frag',
++  'shaders/dxvk_present_frag_fxaa.frag',
+   'shaders/dxvk_present_frag_fsr.frag',
+   'shaders/dxvk_present_frag_fsr_easu.frag',
+   'shaders/dxvk_present_frag_ms.frag',
+diff --git a/src/dxvk/shaders/dxvk_present_frag_fxaa.frag b/src/dxvk/shaders/dxvk_present_frag_fxaa.frag
+new file mode 100644
+index 0000000..3e30007
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_present_frag_fxaa.frag
+@@ -0,0 +1,80 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "dxvk_present_common.glsl"
++
++// FXAA anti-aliasing of the game image at its own size. Finds the local
++// edge direction from luma and blends along it. Output is gamma-encoded.
++layout(location = 0) in  vec2 i_coord;
++layout(location = 0) out vec4 o_color;
++
++const float FXAA_REDUCE_MIN = 1.0f / 128.0f;
++const float FXAA_REDUCE_MUL = 1.0f / 8.0f;
++const float FXAA_SPAN_MAX   = 8.0f;
++const float FXAA_EDGE_MIN   = 1.0f / 24.0f;
++const float FXAA_EDGE_REL   = 1.0f / 8.0f;
++
++vec3 fetch_gamma(ivec2 pos) {
++  ivec2 lo = src_offset;
++  ivec2 hi = src_offset + src_extent - 1;
++  vec3 texel = texelFetch(s_image, clamp(pos, lo, hi), 0).rgb;
++  return c_src_is_srgb ? linear_to_srgb(texel) : texel;
++}
++
++// Bilinear sample at a position in source pixels, where texel centers
++// sit at integer + 0.5.
++vec3 sample_gamma(vec2 pos) {
++  vec2 p = pos - 0.5f;
++  ivec2 i = ivec2(floor(p));
++  vec2 f = p - vec2(i);
++
++  vec3 a = mix(fetch_gamma(i),               fetch_gamma(i + ivec2(1, 0)), f.x);
++  vec3 b = mix(fetch_gamma(i + ivec2(0, 1)), fetch_gamma(i + ivec2(1, 1)), f.x);
++  return mix(a, b, f.y);
++}
++
++float luma(vec3 color) {
++  return dot(color, vec3(0.299f, 0.587f, 0.114f));
++}
++
++void main() {
++  ivec2 pos = ivec2(gl_FragCoord.xy) - dst_offset + src_offset;
++  vec2 center = vec2(pos) + 0.5f;
++
++  vec3 rgbM = fetch_gamma(pos);
++  float lumaM  = luma(rgbM);
++  float lumaNW = luma(fetch_gamma(pos + ivec2(-1, -1)));
++  float lumaNE = luma(fetch_gamma(pos + ivec2( 1, -1)));
++  float lumaSW = luma(fetch_gamma(pos + ivec2(-1,  1)));
++  float lumaSE = luma(fetch_gamma(pos + ivec2( 1,  1)));
++
++  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
++  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
++
++  // Flat areas keep the original pixel
++  if (lumaMax - lumaMin < max(FXAA_EDGE_MIN, lumaMax * FXAA_EDGE_REL)) {
++    o_color = vec4(rgbM, 1.0f);
++    return;
++  }
++
++  vec2 dir = vec2(
++    -((lumaNW + lumaNE) - (lumaSW + lumaSE)),
++     ((lumaNW + lumaSW) - (lumaNE + lumaSE)));
++
++  float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.25f * FXAA_REDUCE_MUL, FXAA_REDUCE_MIN);
++  float rcpDirMin = 1.0f / (min(abs(dir.x), abs(dir.y)) + dirReduce);
++  dir = clamp(dir * rcpDirMin, vec2(-FXAA_SPAN_MAX), vec2(FXAA_SPAN_MAX));
++
++  vec3 rgbA = 0.5f * (
++    sample_gamma(center + dir * (1.0f / 3.0f - 0.5f)) +
++    sample_gamma(center + dir * (2.0f / 3.0f - 0.5f)));
++  vec3 rgbB = rgbA * 0.5f + 0.25f * (
++    sample_gamma(center - dir * 0.5f) +
++    sample_gamma(center + dir * 0.5f));
++
++  float lumaB = luma(rgbB);
++  vec3 color = (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
++
++  o_color = vec4(color, 1.0f);
++}
