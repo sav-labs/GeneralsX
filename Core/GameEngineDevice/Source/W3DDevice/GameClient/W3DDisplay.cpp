@@ -1101,6 +1101,11 @@ void W3DDisplay::init()
 				TheWritableGlobalData->m_textureFilteringMode = WW3D::Get_Texture_Filter();
 				WW3D::Set_Anisotropy_Level(TheWritableGlobalData->m_textureAnisotropyLevel);
 				TheWritableGlobalData->m_textureAnisotropyLevel = WW3D::Get_Anisotropy_Level();
+				// GeneralsX @feature Claude 15/10/2026 Negative mip LOD bias for crisper textures, only with anisotropic filtering.
+				WW3D::Set_Texture_Lod_Bias(
+					TheWritableGlobalData->m_textureFilteringMode == TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC
+						? TheWritableGlobalData->m_textureLodBias
+						: 0.0f);
 			}
 
 			++attempt;

@@ -978,6 +978,8 @@ GlobalData::GlobalData()
 	// GeneralsX @tweak sav-labs 14/10/2026 Match the OptionPreferences defaults: anisotropic 16x.
 	m_textureFilteringMode = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_ANISOTROPIC;
 	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_16X;
+	// GeneralsX @feature Claude 15/10/2026 Default mip LOD bias for crisper textures.
+	m_textureLodBias = -0.5f;
 
 //	m_languageFilterPref = false;
 	m_languageFilterPref = true;
@@ -1289,6 +1291,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_antiAliasLevelIsDefault = !optionPref.hasAntiAliasing();
 	TheWritableGlobalData->m_textureFilteringMode = optionPref.getTextureFilterMode();
 	TheWritableGlobalData->m_textureAnisotropyLevel = optionPref.getTextureAnisotropyLevel();
+	// GeneralsX @feature Claude 15/10/2026 Load the mip LOD bias from Options.ini.
+	TheWritableGlobalData->m_textureLodBias = optionPref.getTextureLodBias();
 
 	Int val=optionPref.getGammaValue();
 	//generate a value between 0.6 and 2.0.

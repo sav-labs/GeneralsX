@@ -121,6 +121,8 @@
 #include "static_sort_list.h"
 #include "shdlib.h"
 #include "framgrab.h"
+// GeneralsX @feature Claude 15/10/2026 fprintf for the mip LOD bias log line.
+#include <cstdio>
 #include "Lib/BaseType.h"
 
 
@@ -229,6 +231,8 @@ int														WW3D::LastFrameMemoryFrees;
 
 int														WW3D::TextureFilter = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_BILINEAR;
 int														WW3D::AnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_2X;
+// GeneralsX @feature Claude 15/10/2026 No mip LOD bias until the display applies the configured one.
+float														WW3D::TextureLodBias = 0.0f;
 
 bool														WW3D::Lite = false;
 
@@ -795,6 +799,15 @@ void WW3D::Set_Anisotropy_Level(int level)
 		WWDEBUG_SAY(("Requested anisotropy level %u is unsupported; using %u",
 			(unsigned)level,
 			(unsigned)AnisotropyLevel));
+}
+
+// GeneralsX @feature Claude 15/10/2026 Store and apply the mip LOD bias; DX8Wrapper re-applies it after a device reset.
+void WW3D::Set_Texture_Lod_Bias(float bias)
+{
+	TextureLodBias = bias;
+	TextureFilterClass::_Set_Mip_Lod_Bias(TextureLodBias);
+	fprintf(stderr, "[TextureLodBias] %.2f\n", TextureLodBias);
+	fflush(stderr);
 }
 
 /***********************************************************************************************

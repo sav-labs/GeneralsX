@@ -111,6 +111,22 @@ TextureFilterClass::AnisotropicFilterMode OptionPreferences::getTextureAnisotrop
 	return level;
 }
 
+// GeneralsX @feature Claude 15/10/2026 Read the mip LOD bias, clamped to -2..1; default -0.5 for sharper textures.
+Real OptionPreferences::getTextureLodBias() const
+{
+	OptionPreferences::const_iterator it = find("TextureLodBias");
+	if (it == end())
+		return -0.5f;
+
+	Real bias = (Real)atof(it->second.str());
+	if (bias < -2.0f)
+		bias = -2.0f;
+	if (bias > 1.0f)
+		bias = 1.0f;
+
+	return bias;
+}
+
 Int OptionPreferences::getCampaignDifficulty()
 {
 	OptionPreferences::const_iterator it = find("CampaignDifficulty");
