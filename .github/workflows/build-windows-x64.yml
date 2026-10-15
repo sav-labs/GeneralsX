@@ -6,9 +6,11 @@ name: Build Windows x64 (experimental)
 permissions:
   contents: read
 
+# GeneralsX @build Claude 15/10/2026 Also build every push to main, so main always has a Windows x64 artifact.
 on:
   push:
     branches:
+      - main
       - "claude/**"
   workflow_dispatch:
 

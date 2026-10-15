@@ -191,6 +191,8 @@ protected:
 protected:
 	ma_device_info* m_playbackDevices;
 	ma_uint32 m_playbackDeviceCount;
+	// GeneralsX @bugfix Claude 15/10/2026 True once openDevice() has created the engine; closeDevice() checks it.
+	Bool m_deviceOpened;
 	UnsignedInt m_selectedPlaybackDevice;
 	UnsignedInt m_lastSelectedPlaybackDevice;
 	UnsignedInt m_selectedSpeakerType;
