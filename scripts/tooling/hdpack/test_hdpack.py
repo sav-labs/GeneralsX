@@ -84,6 +84,16 @@ def main():
         assert check_dds(hdpack.read_entry(entries["art/textures/avhouse.dds"]), 256, 256) == b"DXT5"
         assert (previews / "compare_001.jpg").is_file()
 
+        # A rerun reuses the cache; a small part size splits the pack and removes the single file.
+        rerun = subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(out),
+                                "--upscaler", "lanczos", "--part-size", "100000"],
+                               check=True, capture_output=True, text=True).stdout
+        assert "2 textures reused" in rerun, rerun
+        parts = sorted(p.name for p in Path(tmp).glob("!HDTextures*.big"))
+        assert parts == ["!HDTextures_01.big", "!HDTextures_02.big"], parts
+        merged = {**hdpack.read_big(Path(tmp, parts[0])), **hdpack.read_big(Path(tmp, parts[1]))}
+        assert sorted(merged) == ["art/textures/avhouse.dds", "art/textures/avtank.dds"], sorted(merged)
+
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
         subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(onnx_out),
