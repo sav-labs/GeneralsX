@@ -45,4 +45,5 @@ Useful options:
 - `--esrgan-args "-g 0 -j 1:1:1"`: extra upscaler arguments (GPU id, thread counts)
 - `--cache-dir <dir>`: where upscaled `.dds` files are kept (default `<out name>.cache` next to the output). A rerun only upscales textures that are not cached yet, so an interrupted full run resumes instead of starting over.
 - `--max-size 1024`: cap the output size (default 2048) to keep the pack and video memory smaller
+- `--terrain`: build a terrain pack instead (`--out "<game>\!HDTerrain.big"`): Art/Terrain/ tiles are upscaled to exactly 4x (2x when 4x would pass `--max-size`) and written as RLE TGA under their original names, which the HD terrain loader picks up. Use its own `--cache-dir` or the default next to the output.
 - `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)
