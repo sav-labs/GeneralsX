@@ -219,10 +219,6 @@ void W3DView::setHeight(Int height)
  	vMax.Y=(Real)(m_originY+height)/(Real)TheDisplay->getHeight();
  	m_3DCamera->Set_Viewport(vMin,vMax);
 
-	// GeneralsX @feature Claude 15/10/2026 Changing the height changes the aspect ratio, so the
-	// Hor+ view plane must be rebuilt. Otherwise the horizontal FOV would stay fixed and the vertical FOV shrink.
-	setHorPlusViewPlane((Real)getWidth()/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f));
-
 	// TheSuperHackers @bugfix Now recalculates the camera constraints because
 	// showing or hiding the control bar will change the viewable area.
 	m_cameraAreaConstraintsValid = false;
@@ -246,9 +242,7 @@ void W3DView::setWidth(Int width)
 
 	//we want to maintain the same scale, so we'll need to adjust the fov.
 	//default W3D fov for full-screen is 50 degrees.
-	// GeneralsX @feature Claude 15/10/2026 The 50 degrees are the retail horizontal FOV at 4:3. Wider
-	// screens now keep the retail vertical FOV and extend horizontally (Hor+) instead of cutting off vertically.
-	setHorPlusViewPlane((Real)width/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f));
+	m_3DCamera->Set_View_Plane((Real)width/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f),-1);
 
 	m_cameraAreaConstraintsValid = false;
 	m_recalcCamera = true;
@@ -850,8 +844,7 @@ void W3DView::setCameraTransform(const Matrix3D &transform)
 	m_lastScreenToTerrainValid = false;
 
 #if defined(RTS_DEBUG)
-	// GeneralsX @feature Claude 15/10/2026 Keep the Hor+ view plane in debug builds too.
-	setHorPlusViewPlane( m_FOV );
+	m_3DCamera->Set_View_Plane( m_FOV, -1 );
 #endif
 
 	m_3DCamera->Set_Transform(transform);
@@ -2271,10 +2264,7 @@ void W3DView::setCameraHeightAboveGroundLimitsToDefault(Real heightScale)
 
 	if (currentAspectRatio > baseAspectRatio)
 	{
-		// GeneralsX @feature Claude 15/10/2026 Wide screens are handled by the Hor+ view plane, which keeps
-		// the retail vertical framing. Raising the camera here as well would double the compensation and
-		// push the camera so high that the terrain no longer reaches the screen edges.
-		aspectRatioScale = 1.0f;
+		aspectRatioScale = fabs(( 1 + ( currentAspectRatio - baseAspectRatio) ));
 	}
 	else
 	{
@@ -3842,33 +3832,6 @@ void W3DView::updateTerrain()
 		W3DDisplay::m_3DScene->destroyLightsIterator(it);
 		it = nullptr;
 	}
-}
-
-//-------------------------------------------------------------------------------------------------
-// GeneralsX @feature Claude 15/10/2026 Hor+ view plane. The retail game used a fixed 50 degree
-// horizontal FOV, which made wider screens see less vertically (Vert-). Now the vertical FOV of the
-// retail 4:3 screen is kept and wider screens see more to the sides. Screens narrower than 4:3 keep
-// the retail horizontal FOV. This is client-side presentation only and does not feed into game logic.
-//-------------------------------------------------------------------------------------------------
-void W3DView::setHorPlusViewPlane(Real retailHorizontalFov)
-{
-	const Real retailAspectRatio = (Real)DEFAULT_DISPLAY_WIDTH / (Real)DEFAULT_DISPLAY_HEIGHT;
-	const Real aspectRatio = getHeight() > 0 ? (Real)getWidth() / (Real)getHeight() : retailAspectRatio;
-
-	Real halfWidth = tan(retailHorizontalFov * 0.5f);
-	Real halfHeight;
-
-	if (aspectRatio > retailAspectRatio)
-	{
-		halfHeight = halfWidth / retailAspectRatio;
-		halfWidth = halfHeight * aspectRatio;
-	}
-	else
-	{
-		halfHeight = halfWidth / aspectRatio;
-	}
-
-	m_3DCamera->Set_View_Plane(Vector2(-halfWidth, -halfHeight), Vector2(halfWidth, halfHeight));
 }
 
 //-------------------------------------------------------------------------------------------------
