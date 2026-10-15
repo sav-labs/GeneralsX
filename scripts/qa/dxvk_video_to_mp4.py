@@ -6,6 +6,10 @@ first line, then the present time stamp of each frame in microseconds). This
 script streams the frames to ffmpeg as Matroska raw video with those time
 stamps, so the mp4 keeps the real presentation timing, including stutter.
 
+With DXVK_CAPTURE_VIDEO_START=camtest and the game started with -camtest, the
+first frame is the first frame of the camera flight and the time stamps count
+from it, so clips of different runs line up frame for frame in time.
+
 Usage:
     python3 scripts/qa/dxvk_video_to_mp4.py <path> [out.mp4] [-- extra ffmpeg output args]
 

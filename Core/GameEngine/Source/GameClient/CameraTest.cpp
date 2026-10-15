@@ -20,6 +20,9 @@
 // GeneralsX @feature Claude 15/10/2026 The flight also spawns a test convoy of the local player's side
 // and follows it, so recordings show moving units. Spawning changes the match (a replay recorded with
 // -camtest does not play back), so it only happens with -camtest.
+// GeneralsX @feature Claude 15/10/2026 The flight reports its start to the DXVK video capture
+// (DXVK_CAPTURE_VIDEO_START=camtest), so recordings of different runs begin on the same frame of the
+// flight however long the game took to load.
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
@@ -40,6 +43,8 @@
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/TerrainLogic.h"
 #include "GameNetwork/GameInfo.h"
+
+#include "PlatformEnvironment.h"
 
 namespace
 {
@@ -70,6 +75,13 @@ constexpr const Real CameraTestColumnSpacing = 50.0f;				///< Distance between t
 constexpr const Real CameraTestSpawnSearchRadius = 60.0f;		///< Search radius for a clear spot around each slot
 constexpr const Real CameraTestMinTravel = 400.0f;					///< Minimum length of the move order
 constexpr const Real CameraTestFollowSeconds = 0.35f;				///< Time constant of the camera following the convoy
+
+// GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
+// DXVK reads the process environment on every present while it waits: the prepare value starts the encoder when the
+// match starts, the event value starts recording with the first frame of the flight. It only affects rendering tools.
+constexpr const char *CameraTestCaptureSignal = "DXVK_CAPTURE_VIDEO_SIGNAL";
+constexpr const char *CameraTestCapturePrepare = "camtest.prepare";
+constexpr const char *CameraTestCaptureStart = "camtest";
 
 /// Templates of one side: a main battle tank, a fast vehicle and a helicopter (empty when there is none).
 struct CameraTestSideUnits
@@ -487,6 +499,7 @@ void UpdateCameraTest()
 		s.elapsedSeconds = 0.0f;
 		fprintf(stderr, "[CAMTEST] match started, flight begins at logic frame %u\n", CameraTestSettleFrames);
 		fflush(stderr);
+		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCapturePrepare);
 		return;
 	}
 
@@ -503,6 +516,11 @@ void UpdateCameraTest()
 
 		beginCameraTestFlight();
 		s.phase = CAMERA_TEST_FLYING;
+
+		// The frame drawn right after this update shows the first pose of the flight
+		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCaptureStart);
+		fprintf(stderr, "[CAMTEST] capture signal: %s=%s\n", CameraTestCaptureSignal, CameraTestCaptureStart);
+		fflush(stderr);
 	}
 
 	const Real flightSeconds = s.elapsedSeconds - CameraTestSettleSeconds;
