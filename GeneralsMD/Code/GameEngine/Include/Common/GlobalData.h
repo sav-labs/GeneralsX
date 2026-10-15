@@ -377,6 +377,10 @@ public:
 	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish <map> [aiCount]
 	AsciiString m_initialSkirmishMap;	///< If this is specified, start a skirmish on this map from the command-line
 	Int m_initialSkirmishAICount;			///< Number of AI opponents for m_initialSkirmishMap
+	// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup: -side, -aiside, -pos (and -seed, see m_fixedSeed)
+	AsciiString m_initialSkirmishSide;		///< Faction of the local player in m_initialSkirmishMap, America by default
+	AsciiString m_initialSkirmishAISide;	///< Faction of the AI opponents, empty for a random faction drawn from the game seed
+	Int m_initialSkirmishStartPos;				///< 1-based start position of the local player, AI opponents take the next ones
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest [seconds]
 	Real m_cameraTestSeconds;				///< Duration of the -camtest pan in seconds, 0 when disabled
 

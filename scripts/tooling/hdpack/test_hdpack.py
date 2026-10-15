@@ -103,6 +103,7 @@ def main():
                         "--upscaler", "lanczos", "--max-size", "128"], check=True, capture_output=True)
         report = json.loads(Path(tmp, "!HDCapped.report.json").read_text())
         assert report["skipped_already_max_size"] == 1 and report["textures_written"] == 1, report
+        assert len(report["skipped_files"]["already_max_size"]) == 1, report
 
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")

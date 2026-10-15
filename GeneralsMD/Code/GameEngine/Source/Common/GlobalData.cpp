@@ -1031,6 +1031,10 @@ GlobalData::GlobalData()
 	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish
 	m_initialSkirmishMap.clear();
 	m_initialSkirmishAICount = 1;
+	// GeneralsX @feature Claude 15/10/2026 Reproducible -skirmish setup defaults
+	m_initialSkirmishSide = "America";
+	m_initialSkirmishAISide.clear();
+	m_initialSkirmishStartPos = 1;
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
 	m_cameraTestSeconds = 0.0f;
 
@@ -1270,6 +1274,12 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
 	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
 	TheWritableGlobalData->m_skirmishTickRate = optionPref.getSkirmishTickRate();
+	// GeneralsX @feature Claude 15/10/2026 Apply the camera settings saved in Options.ini at startup. They were
+	// only written, so they were lost on restart. Each getter returns the INI value when the key is absent,
+	// so the retail defaults stay untouched. These only drive the client camera and terrain drawing.
+	TheWritableGlobalData->m_maxCameraHeight = optionPref.getMaxCameraHeight();
+	TheWritableGlobalData->m_minCameraHeight = optionPref.getMinCameraHeight();
+	TheWritableGlobalData->m_terrainDrawDistanceScale = optionPref.getTerrainDrawDistanceScale();
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
 	// GeneralsX @tweak Claude 15/10/2026 Remember whether the level is the default, so the device can pick it by GPU class.
