@@ -156,20 +156,39 @@ def collect_archives(game_dirs):
 
 # ---------------------------------------------------------------- exclusions
 
-def mapped_image_textures(archives, game_dirs):
-    """Texture names referenced by MappedImage INI blocks (UI atlases)."""
+def ini_texture_names(archives, game_dirs, path_part, key):
+    """Stems of `key = <file>` values in INI files whose path contains path_part."""
     texts = []
     for name, entry in archives.items():
-        if name.endswith(".ini") and "mappedimages" in name:
+        if name.endswith(".ini") and path_part in name:
             texts.append(read_entry(entry).decode("latin-1", "replace"))
     for d in game_dirs:
-        for ini in Path(d).glob("Data/INI/MappedImages/**/*.ini"):
-            texts.append(ini.read_text("latin-1", "replace"))
+        for ini in Path(d).glob("Data/INI/**/*.ini"):
+            if path_part in ini.as_posix().lower():
+                texts.append(ini.read_text("latin-1", "replace"))
     names = set()
     for t in texts:
-        for m in re.finditer(r"^\s*Texture\s*=\s*(\S+)", t, re.MULTILINE | re.IGNORECASE):
+        for m in re.finditer(rf"^\s*{key}\s*=\s*(\S+)", t, re.MULTILINE | re.IGNORECASE):
             names.add(Path(m.group(1)).stem.lower())
     return names
+
+
+def mapped_image_textures(archives, game_dirs):
+    """Texture names referenced by MappedImage INI blocks (UI atlases)."""
+    return ini_texture_names(archives, game_dirs, "mappedimages", "Texture")
+
+
+def terrain_tile_textures(archives, game_dirs):
+    """Art/Terrain/ sheets that Terrain.ini uses as terrain texture classes.
+
+    Tree textures (W3DTreeDraw TextureName) also live in Art/Terrain/, but the tree
+    buffer packs them into its own atlas assuming retail 64 px cells: an upscaled
+    tree sheet is read as a 4x4 grid, the atlas overflows and every tree on the map
+    falls back to missing.tga (magenta). Only real terrain tiles are upscaled.
+    """
+    tiles = ini_texture_names(archives, game_dirs, "data/ini/terrain.ini", "Texture")
+    trees = ini_texture_names(archives, game_dirs, "data/ini/", "TextureName")
+    return tiles - trees, trees
 
 
 # ---------------------------------------------------------------- upscaling
@@ -376,6 +395,14 @@ def main():
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)
     excluded = set(ui_textures)
+    terrain_tiles = None
+    if args.terrain:
+        terrain_tiles, tree_textures = terrain_tile_textures(archives, args.game_dir)
+        excluded |= tree_textures
+        if not terrain_tiles:
+            print("warning: no Terrain.ini found, upscaling every Art/Terrain/ sheet except tree textures",
+                  file=sys.stderr)
+            terrain_tiles = None
     if args.exclude_list:
         excluded |= {l.strip().lower() for l in open(args.exclude_list) if l.strip() and not l.startswith("#")}
 
@@ -385,7 +412,7 @@ def main():
         if not name.startswith(source_dir) or not name.endswith(source_exts):
             continue
         stem = Path(name).stem
-        if stem in excluded:
+        if stem in excluded or (terrain_tiles is not None and stem not in terrain_tiles):
             continue
         if args.include and not any(fnmatch.fnmatch(stem, p.lower()) for p in args.include):
             continue
@@ -479,6 +506,7 @@ def main():
         "skipped_unreadable": len(skipped["unreadable"]),
         "skipped_files": skipped,  # originals stay in the game as they are
         "ui_textures_excluded": len(ui_textures),
+        "tree_textures_excluded": len(excluded - ui_textures) if args.terrain else 0,
         "parts": {str(p): p.stat().st_size for p in paths},
         "total_bytes": sum(p.stat().st_size for p in paths),
         "seconds": round(time.monotonic() - started, 1),

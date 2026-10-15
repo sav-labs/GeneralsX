@@ -73,6 +73,12 @@ def main():
             ("Art\\Textures\\SCShellUserInterface512_001.tga", tga((512, 512), (0, 0, 0, 255))),
             ("Art\\Textures\\tiny.tga", tga((16, 16), (0, 0, 0, 255))),
             ("Art\\Terrain\\TSGrass01.tga", tga((64, 128), (60, 140, 40, 255))),
+            # Tree sheets sit in Art/Terrain/ too but feed the tree atlas, which needs retail size.
+            ("Art\\Terrain\\PTSnowPine01.tga", tga((64, 64), (20, 60, 20, 255))),
+            ("Art\\Terrain\\TSUnused01.tga", tga((64, 64), (90, 90, 90, 255))),
+            ("Data\\INI\\Terrain.ini", b"Terrain GrassType1\n  Texture = TSGrass01.tga\nEnd\n"),
+            ("Data\\INI\\Object\\CivilianProp.ini",
+             b"Object SnowPine\n  Draw = W3DTreeDraw ModuleTag_01\n    TextureName = PTSnowPine01.tga\n  End\nEnd\n"),
             ("Data\\INI\\MappedImages\\HandCreated\\HandCreatedMappedImages.ini", ini),
         ])
         out = Path(tmp, "!HDTextures.big")
@@ -112,6 +118,8 @@ def main():
                         "--upscaler", "lanczos", "--terrain"], check=True, capture_output=True)
         entries = hdpack.read_big(terrain)
         assert list(entries) == ["art/terrain/tsgrass01.tga"], list(entries)
+        report = json.loads(Path(tmp, "!HDTerrain.report.json").read_text())
+        assert report["tree_textures_excluded"] == 1, report
         data = hdpack.read_entry(entries["art/terrain/tsgrass01.tga"])
         assert data[2] == 10, data[2]  # RLE true-colour
         tile = Image.open(io.BytesIO(data))
