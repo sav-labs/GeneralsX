@@ -63,6 +63,7 @@
 
 #include "GameClient/AnimateWindowManager.h"
 #include "GameClient/ControlBar.h"
+#include "GameClient/UILayout.h"
 #include "GameClient/ControlBarScheme.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/Display.h"
@@ -3851,6 +3852,14 @@ void ControlBar::setFullViewportHeight()
 
 void ControlBar::setScaledViewportHeight()
 {
+	// GeneralsX @bugfix Claude 14/10/2026 On displays wider than 4:3 the control bar is centered and no
+	// longer spans the screen width, so a shortened tactical view left black strips beside the bar.
+	// Draw the world at full height there; the opaque bar art still covers the world behind it.
+	if (UILayoutGetDefaultTransform().isPillarboxed())
+	{
+		TheTacticalView->setHeight(TheDisplay->getHeight());
+		return;
+	}
 	TheTacticalView->setHeight(TheDisplay->getHeight() * TheGlobalData->m_viewportHeightScale);
 }
 
