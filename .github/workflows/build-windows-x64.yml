@@ -20,7 +20,8 @@ jobs:
   # GeneralsX @build Claude 12/10/2026 DXVK 2.6 for Windows with FSR 1.0 (EASU upscale + RCAS sharpening) in the swap chain blitter.
   # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
   # DXVK_FSR_SHARPNESS sets RCAS sharpening in stops (0 = sharpest, default 0.2).
-  # DXVK_POST=1 adds bloom and a light colour grade (0005-present-post.patch); DXVK_BLOOM,
+  # A multisampled back buffer (Options.ini AntiAliasing) is resolved before the FSR EASU pass.
+  # DXVK_POST=1 adds bloom and a light colour grade (0006-present-post.patch); DXVK_BLOOM,
   # DXVK_BLOOM_THRESHOLD, DXVK_SATURATION and DXVK_CONTRAST tune it.
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
   # DXVK_CAPTURE_VIDEO records every presented frame for DXVK_CAPTURE_VIDEO_SECONDS (default 10), starting

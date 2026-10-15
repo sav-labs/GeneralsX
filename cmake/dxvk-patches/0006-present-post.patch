@@ -1,5 +1,5 @@
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
-index c3e171a..0e887fc 100644
+index e97d299..695c2ef 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
 @@ -4,6 +4,9 @@
@@ -52,10 +52,50 @@ index c3e171a..0e887fc 100644
  
      vk->vkDestroyShaderModule(vk->device(), m_shaderVsCursor.stageInfo.module, nullptr);
      vk->vkDestroyShaderModule(vk->device(), m_shaderFsCursor.stageInfo.module, nullptr);
-@@ -681,6 +710,19 @@ namespace dxvk {
-       m_fsrView = nullptr;
-     }
+@@ -673,30 +702,43 @@ namespace dxvk {
+       && dstRect.extent.width >= srcRect.extent.width
+       && dstRect.extent.height >= srcRect.extent.height;
  
++    // EASU and the post-processing passes read single-sampled texels, so a
++    // multisampled back buffer (D3D MultiSampleType) is resolved into an
++    // intermediate image first.
++    bool resolveSrc = srcView->image()->info().sampleCount != VK_SAMPLE_COUNT_1_BIT
++      && (useFsr || (m_postEnabled && srcRect.extent == dstRect.extent));
++
+     Rc<DxvkImageView> blitView = srcView;
+     VkRect2D blitRect = srcRect;
+ 
+-    if (useFsr) {
+-      // EASU reads single-sampled texels, so a multisampled back buffer
+-      // (D3D MultiSampleType) is resolved into an intermediate image first.
+-      Rc<DxvkImageView> easuView = srcView;
+-
+-      if (srcView->image()->info().sampleCount != VK_SAMPLE_COUNT_1_BIT)
+-        easuView = resolveFsrSource(ctx, srcView);
+-      else {
+-        m_fsrResolveImage = nullptr;
+-        m_fsrResolveView = nullptr;
+-      }
++    if (resolveSrc) {
++      blitView = resolveFsrSource(ctx, srcView);
++    } else {
++      m_fsrResolveImage = nullptr;
++      m_fsrResolveView = nullptr;
++    }
+ 
+-      renderFsrEasu(ctx, easuView, srcRect, dstRect.extent);
++    if (useFsr) {
++      renderFsrEasu(ctx, blitView, blitRect, dstRect.extent);
+ 
+       blitView = m_fsrView;
+       blitRect = { { 0, 0 }, dstRect.extent };
+     } else {
+       m_fsrImage = nullptr;
+       m_fsrView = nullptr;
+-      m_fsrResolveImage = nullptr;
+-      m_fsrResolveView = nullptr;
++    }
++
 +    // Post-processing runs in the RCAS pass, which reads its source 1:1,
 +    // so it needs a single-sampled source at the output size.
 +    m_postActive = m_postEnabled
@@ -67,12 +107,10 @@ index c3e171a..0e887fc 100644
 +    } else {
 +      m_bloomImages = { };
 +      m_bloomViews = { };
-+    }
-+
+     }
+ 
      VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
-     barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-     barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-@@ -718,7 +760,7 @@ namespace dxvk {
+@@ -736,7 +778,7 @@ namespace dxvk {
      ctx.cmd->cmdBeginRendering(&renderInfo);
  
      performDraw(ctx, dstView, dstRect, blitView, blitRect, composite,
@@ -81,7 +119,7 @@ index c3e171a..0e887fc 100644
  
      if (!composite) {
        if (m_hud)
-@@ -758,7 +800,7 @@ namespace dxvk {
+@@ -776,7 +818,7 @@ namespace dxvk {
  
        if (!m_capturePending && now >= m_captureNext) {
          captureFrame(ctx, dstView, dstRect, blitView, blitRect,
@@ -90,7 +128,7 @@ index c3e171a..0e887fc 100644
          m_captureNext = now + m_captureInterval;
        }
      }
-@@ -968,7 +1010,17 @@ namespace dxvk {
+@@ -986,7 +1028,17 @@ namespace dxvk {
        cursorDescriptor.imageView = m_cursorView->handle();
      }
  
@@ -109,7 +147,7 @@ index c3e171a..0e887fc 100644
        { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
          set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageDescriptor },
        { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-@@ -977,6 +1029,8 @@ namespace dxvk {
+@@ -995,6 +1047,8 @@ namespace dxvk {
          set, 2, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &hudDescriptor },
        { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
          set, 3, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cursorDescriptor },
@@ -118,7 +156,7 @@ index c3e171a..0e887fc 100644
      }};
  
      ctx.cmd->updateDescriptorSets(
-@@ -994,6 +1048,10 @@ namespace dxvk {
+@@ -1012,6 +1066,10 @@ namespace dxvk {
      args.cursorExtent = m_cursorRect.extent;
      args.dstExtent = dstRect.extent;
      args.fsrSharpness = m_fsrSharpness;
@@ -129,7 +167,7 @@ index c3e171a..0e887fc 100644
  
      ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer,
        m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-@@ -1008,6 +1066,9 @@ namespace dxvk {
+@@ -1026,6 +1084,9 @@ namespace dxvk {
      ctx.cmd->track(srcView->image(), DxvkAccess::Read);
      ctx.cmd->track(dstView->image(), DxvkAccess::Write);
  
@@ -139,7 +177,7 @@ index c3e171a..0e887fc 100644
      if (m_gammaImage)
        ctx.cmd->track(m_gammaImage, DxvkAccess::Read);
  
-@@ -1150,34 +1211,82 @@ namespace dxvk {
+@@ -1301,34 +1362,82 @@ namespace dxvk {
       || m_fsrImage->info().extent != VkExtent3D { extent.width, extent.height, 1u })
        createFsrImage(extent, colorSpace);
  
@@ -230,7 +268,7 @@ index c3e171a..0e887fc 100644
      attachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
      attachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
  
-@@ -1190,25 +1299,25 @@ namespace dxvk {
+@@ -1341,25 +1450,25 @@ namespace dxvk {
  
      ctx.cmd->cmdBeginRendering(&renderInfo);
  
@@ -262,7 +300,7 @@ index c3e171a..0e887fc 100644
    }
  
  
-@@ -1841,9 +1950,12 @@ namespace dxvk {
+@@ -1992,9 +2101,12 @@ namespace dxvk {
    }
  
  
@@ -277,7 +315,7 @@ index c3e171a..0e887fc 100644
      DxvkImageCreateInfo imageInfo = { };
      imageInfo.type          = VK_IMAGE_TYPE_2D;
      imageInfo.format        = VK_FORMAT_R16G16B16A16_SFLOAT;
-@@ -1862,9 +1974,9 @@ namespace dxvk {
+@@ -2013,9 +2125,9 @@ namespace dxvk {
      imageInfo.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
      imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
      imageInfo.colorSpace    = colorSpace;
@@ -289,7 +327,7 @@ index c3e171a..0e887fc 100644
  
      DxvkImageViewKey viewInfo = { };
      viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
-@@ -1877,7 +1989,7 @@ namespace dxvk {
+@@ -2028,7 +2140,7 @@ namespace dxvk {
      viewInfo.layerIndex     = 0u;
      viewInfo.layerCount     = 1u;
  
@@ -298,7 +336,7 @@ index c3e171a..0e887fc 100644
    }
  
  
-@@ -2106,6 +2218,12 @@ namespace dxvk {
+@@ -2257,6 +2369,12 @@ namespace dxvk {
        sizeof(dxvk_present_frag_fsr), dxvk_present_frag_fsr);
      createShaderModule(m_shaderFsFsrEasu, VK_SHADER_STAGE_FRAGMENT_BIT,
        sizeof(dxvk_present_frag_fsr_easu), dxvk_present_frag_fsr_easu);
@@ -311,7 +349,7 @@ index c3e171a..0e887fc 100644
      createShaderModule(m_shaderFsCopy, VK_SHADER_STAGE_FRAGMENT_BIT,
        sizeof(dxvk_present_frag), dxvk_present_frag);
      createShaderModule(m_shaderFsMsBlit, VK_SHADER_STAGE_FRAGMENT_BIT,
-@@ -2156,11 +2274,12 @@ namespace dxvk {
+@@ -2307,11 +2425,12 @@ namespace dxvk {
    VkDescriptorSetLayout DxvkSwapchainBlitter::createSetLayout() {
      auto vk = m_device->vkd();
  
@@ -325,7 +363,7 @@ index c3e171a..0e887fc 100644
      }};
  
      VkDescriptorSetLayoutCreateInfo info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-@@ -2290,6 +2409,12 @@ namespace dxvk {
+@@ -2441,6 +2560,12 @@ namespace dxvk {
        blitStages[1] = m_shaderFsFsrEasu.stageInfo;
      else if (key.fsrPass == DxvkFsrPass::Rcas)
        blitStages[1] = m_shaderFsFsr.stageInfo;
@@ -339,7 +377,7 @@ index c3e171a..0e887fc 100644
        blitStages[1] = key.needsBlit ? m_shaderFsBlit.stageInfo : m_shaderFsCopy.stageInfo;
      else
 diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
-index 0e0016e..038d6b1 100644
+index 19f5a4f..4ef191d 100644
 --- a/src/dxvk/dxvk_swapchain_blitter.h
 +++ b/src/dxvk/dxvk_swapchain_blitter.h
 @@ -34,6 +34,12 @@ namespace dxvk {
@@ -387,7 +425,7 @@ index 0e0016e..038d6b1 100644
      ShaderModule        m_shaderVsCursor;
      ShaderModule        m_shaderFsCursor;
  
-@@ -314,6 +334,9 @@ namespace dxvk {
+@@ -317,6 +337,9 @@ namespace dxvk {
      uint32_t            m_videoPending = 0u;
      uint32_t            m_videoGpuWaits = 0u;
  
@@ -397,7 +435,7 @@ index 0e0016e..038d6b1 100644
      VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
      VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
  
-@@ -396,6 +419,29 @@ namespace dxvk {
+@@ -403,6 +426,29 @@ namespace dxvk {
              VkExtent2D                  extent,
              VkColorSpaceKHR             colorSpace);
  

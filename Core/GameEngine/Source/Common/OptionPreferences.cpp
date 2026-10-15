@@ -70,8 +70,9 @@ Bool OptionPreferences::loadFromIniFile()
 WW3D::MultiSampleModeEnum OptionPreferences::getAntiAliasing() const
 {
 	OptionPreferences::const_iterator it = find("AntiAliasing");
+	// GeneralsX @feature Claude 15/10/2026 4x MSAA by default; the device falls back to a supported level.
 	if (it == end())
-		return WW3D::MULTISAMPLE_MODE_NONE;
+		return WW3D::MULTISAMPLE_MODE_4X;
 
 	WW3D::MultiSampleModeEnum level = (WW3D::MultiSampleModeEnum)atoi(it->second.str());
 	level = clamp(WW3D::MULTISAMPLE_MODE_NONE, level, WW3D::MULTISAMPLE_MODE_8X);

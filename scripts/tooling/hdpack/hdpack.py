@@ -28,6 +28,7 @@ import argparse
 import fnmatch
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -35,6 +36,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -388,6 +390,8 @@ def main():
     pairs = []
     session = None
     cached = 0
+    skipped = {"too_small": [], "already_max_size": [], "unreadable": []}
+    started = time.monotonic()
     for start in range(0, len(keys), args.batch):
         batch = {}
         for stem in keys[start:start + args.batch]:
@@ -404,8 +408,14 @@ def main():
                 img = decode(data)
             except Exception as e:  # unreadable or unsupported source: keep the original
                 print(f"  skip {stem}: {e}", file=sys.stderr)
+                skipped["unreadable"].append(original)
                 continue
             if min(img.size) < MIN_SOURCE_SIZE:
+                skipped["too_small"].append(original)
+                continue
+            if target_size(*img.size, args.scale) == img.size:
+                # Already at --max-size: upscaling would only cost time and change nothing.
+                skipped["already_max_size"].append(original)
                 continue
             batch[stem] = (img, name, cache_file)
         if not batch:
@@ -443,8 +453,27 @@ def main():
     paths = write_big_parts(args.out, output, args.part_size)
     if args.preview_dir:
         comparison_sheets(pairs, args.preview_dir)
+    report = {
+        "textures_written": len(output),
+        "reused_from_cache": cached,
+        "upscaled_now": len(output) - cached,
+        "skipped_too_small": len(skipped["too_small"]),
+        "skipped_already_max_size": len(skipped["already_max_size"]),
+        "skipped_unreadable": len(skipped["unreadable"]),
+        "skipped_files": skipped,  # originals stay in the game as they are
+        "ui_textures_excluded": len(ui_textures),
+        "parts": {str(p): p.stat().st_size for p in paths},
+        "total_bytes": sum(p.stat().st_size for p in paths),
+        "seconds": round(time.monotonic() - started, 1),
+        "upscaler": session.get_providers()[0] if session else args.upscaler,
+        "settings": {"scale": args.scale, "max_size": args.max_size, "include": args.include, "limit": args.limit},
+    }
+    report_path = Path(args.out).with_suffix(".report.json")
+    report_path.write_text(json.dumps(report, indent=2))
     print(f"{cached} textures reused from {cache_dir}")
-    print(f"wrote {len(output)} textures to " + ", ".join(str(p) for p in paths))
+    print(f"wrote {len(output)} textures to " + ", ".join(f"{p} ({p.stat().st_size / 2**20:.0f} MB)" for p in paths))
+    print("skipped: " + ", ".join(f"{len(v)} {k.replace('_', ' ')}" for k, v in skipped.items()))
+    print(f"report: {report_path}, {report['seconds']} s")
 
 
 if __name__ == "__main__":
