@@ -1,0 +1,203 @@
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -669,7 +669,6 @@
+     // With FSR, EASU upscales into an intermediate image first, and the
+     // final blit sharpens that image with RCAS at a 1:1 scale.
+     bool useFsr = m_fsrEnabled
+-      && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
+       && dstRect.extent != srcRect.extent
+       && dstRect.extent.width >= srcRect.extent.width
+       && dstRect.extent.height >= srcRect.extent.height;
+@@ -678,13 +677,26 @@
+     VkRect2D blitRect = srcRect;
+ 
+     if (useFsr) {
+-      renderFsrEasu(ctx, srcView, srcRect, dstRect.extent);
++      // EASU reads single-sampled texels, so a multisampled back buffer
++      // (D3D MultiSampleType) is resolved into an intermediate image first.
++      Rc<DxvkImageView> easuView = srcView;
++
++      if (srcView->image()->info().sampleCount != VK_SAMPLE_COUNT_1_BIT)
++        easuView = resolveFsrSource(ctx, srcView);
++      else {
++        m_fsrResolveImage = nullptr;
++        m_fsrResolveView = nullptr;
++      }
++
++      renderFsrEasu(ctx, easuView, srcRect, dstRect.extent);
+ 
+       blitView = m_fsrView;
+       blitRect = { { 0, 0 }, dstRect.extent };
+     } else {
+       m_fsrImage = nullptr;
+       m_fsrView = nullptr;
++      m_fsrResolveImage = nullptr;
++      m_fsrResolveView = nullptr;
+     }
+ 
+     VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+@@ -1145,6 +1157,139 @@
+   }
+ 
+ 
++  Rc<DxvkImageView> DxvkSwapchainBlitter::resolveFsrSource(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          srcView) {
++    const Rc<DxvkImage>& srcImage = srcView->image();
++    const DxvkImageCreateInfo& srcInfo = srcImage->info();
++
++    if (!m_fsrResolveImage
++     || m_fsrResolveImage->info().extent != srcInfo.extent
++     || m_fsrResolveImage->info().format != srcInfo.format
++     || m_fsrResolveImage->info().colorSpace != srcInfo.colorSpace
++     || m_fsrResolveView->info().format != srcView->info().format) {
++      DxvkImageCreateInfo imageInfo = { };
++      imageInfo.type          = VK_IMAGE_TYPE_2D;
++      imageInfo.format        = srcInfo.format;
++      imageInfo.flags         = srcInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
++      imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++      imageInfo.extent        = srcInfo.extent;
++      imageInfo.mipLevels     = 1;
++      imageInfo.numLayers     = 1;
++      imageInfo.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT
++                              | VK_IMAGE_USAGE_SAMPLED_BIT;
++      imageInfo.stages        = VK_PIPELINE_STAGE_TRANSFER_BIT
++                              | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++      imageInfo.access        = VK_ACCESS_TRANSFER_WRITE_BIT
++                              | VK_ACCESS_SHADER_READ_BIT;
++      imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++      imageInfo.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++      imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++      imageInfo.colorSpace    = srcInfo.colorSpace;
++      imageInfo.viewFormatCount = imageInfo.flags ? srcInfo.viewFormatCount : 0u;
++      imageInfo.viewFormats   = imageInfo.flags ? srcInfo.viewFormats : nullptr;
++      imageInfo.debugName     = "FSR MSAA resolve";
++
++      m_fsrResolveImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++      DxvkImageViewKey viewInfo = { };
++      viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++      viewInfo.usage          = VK_IMAGE_USAGE_SAMPLED_BIT;
++      viewInfo.format         = srcView->info().format;
++      viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++      viewInfo.mipIndex       = 0u;
++      viewInfo.mipCount       = 1u;
++      viewInfo.layerIndex     = 0u;
++      viewInfo.layerCount     = 1u;
++
++      m_fsrResolveView = m_fsrResolveImage->createView(viewInfo);
++    }
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture))) {
++      ctx.cmd->cmdBeginDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer,
++        vk::makeLabel(0xdcc0f0, "FSR MSAA resolve"));
++    }
++
++    VkImageSubresourceRange srcSubresources = srcView->imageSubresources();
++    VkImageSubresourceRange dstSubresources = m_fsrResolveView->imageSubresources();
++
++    VkImageLayout srcLayout = srcImage->pickLayout(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++    VkImageLayout dstLayout = m_fsrResolveImage->pickLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++
++    // The back buffer was last written as a color attachment, and the
++    // previous frame's EASU pass may still read the resolve image
++    std::array<VkImageMemoryBarrier2, 2> barriers = { };
++    barriers[0] = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++    barriers[0].srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
++    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_RESOLVE_BIT;
++    barriers[0].dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
++    barriers[0].oldLayout = srcInfo.layout;
++    barriers[0].newLayout = srcLayout;
++    barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[0].image = srcImage->handle();
++    barriers[0].subresourceRange = srcSubresources;
++
++    barriers[1] = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_RESOLVE_BIT;
++    barriers[1].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[1].newLayout = dstLayout;
++    barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[1].image = m_fsrResolveImage->handle();
++    barriers[1].subresourceRange = dstSubresources;
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = barriers.size();
++    depInfo.pImageMemoryBarriers = barriers.data();
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++    m_fsrResolveImage->trackInitialization(dstSubresources);
++
++    VkImageResolve2 region = { VK_STRUCTURE_TYPE_IMAGE_RESOLVE_2 };
++    region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, srcSubresources.baseMipLevel, srcSubresources.baseArrayLayer, 1u };
++    region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u };
++    region.extent = srcView->mipLevelExtent(0u);
++
++    VkResolveImageInfo2 resolveInfo = { VK_STRUCTURE_TYPE_RESOLVE_IMAGE_INFO_2 };
++    resolveInfo.srcImage = srcImage->handle();
++    resolveInfo.srcImageLayout = srcLayout;
++    resolveInfo.dstImage = m_fsrResolveImage->handle();
++    resolveInfo.dstImageLayout = dstLayout;
++    resolveInfo.regionCount = 1;
++    resolveInfo.pRegions = &region;
++
++    ctx.cmd->cmdResolveImage(&resolveInfo);
++
++    // Return the back buffer to its default layout, and make the
++    // resolved image shader-readable for the EASU pass
++    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_RESOLVE_BIT;
++    barriers[0].srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
++    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++    barriers[0].dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
++    barriers[0].oldLayout = srcLayout;
++    barriers[0].newLayout = srcInfo.layout;
++
++    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_RESOLVE_BIT;
++    barriers[1].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
++    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barriers[1].oldLayout = dstLayout;
++    barriers[1].newLayout = m_fsrResolveImage->info().layout;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
++      ctx.cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
++
++    ctx.cmd->track(m_fsrResolveImage, DxvkAccess::Write);
++    return m_fsrResolveView;
++  }
++
++
+   void DxvkSwapchainBlitter::renderFsrEasu(
+     const DxvkContextObjects&         ctx,
+     const Rc<DxvkImageView>&          srcView,
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -275,6 +275,9 @@
+     Rc<DxvkImage>       m_fsrImage;
+     Rc<DxvkImageView>   m_fsrView;
+ 
++    Rc<DxvkImage>       m_fsrResolveImage;
++    Rc<DxvkImageView>   m_fsrResolveView;
++
+     std::string         m_capturePath;
+     std::chrono::milliseconds m_captureInterval = std::chrono::milliseconds(10000);
+     high_resolution_clock::time_point m_captureNext = { };
+@@ -344,6 +347,10 @@
+ 
+     void destroyHudImage();
+ 
++    Rc<DxvkImageView> resolveFsrSource(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          srcView);
++
+     void renderFsrEasu(
+       const DxvkContextObjects&         ctx,
+       const Rc<DxvkImageView>&          srcView,

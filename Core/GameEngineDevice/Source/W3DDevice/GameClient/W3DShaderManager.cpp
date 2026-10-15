@@ -2683,15 +2683,9 @@ void W3DShaderManager::init()
 		
 		// TheSuperHackers @bugfix Redirecting rendering to a non-multisampled texture
 		// while using a multisampled depth buffer is an API violation in DX8.
-		if (desc.MultiSampleType == D3DMULTISAMPLE_NONE)
-		{
-			hr=DX8Wrapper::_Get_D3D_Device8()->CreateTexture(desc.Width,desc.Height,1,D3DUSAGE_RENDERTARGET,desc.Format,D3DPOOL_DEFAULT,&m_renderTexture);
-		}
-		else
-		{
-			// Force failure path to avoid MSAA mismatch
-			hr = E_FAIL;
-		}
+		// GeneralsX @feature Claude 15/10/2026 With MSAA, startRenderToTexture pairs the texture with a
+		// single-sampled depth buffer from DX8Wrapper, so the screen filters stay available.
+		hr=DX8Wrapper::_Get_D3D_Device8()->CreateTexture(desc.Width,desc.Height,1,D3DUSAGE_RENDERTARGET,desc.Format,D3DPOOL_DEFAULT,&m_renderTexture);
 
 		if (hr != S_OK)
 		{
@@ -2907,7 +2901,8 @@ void W3DShaderManager::startRenderToTexture()
 	DEBUG_ASSERTCRASH(!m_renderingToTexture, ("Already rendering to texture - cannot nest calls."));
 
 	if (m_renderingToTexture || m_newRenderSurface==nullptr || m_oldDepthSurface==nullptr) return;
-	HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->SetRenderTarget(m_newRenderSurface,m_oldDepthSurface);
+	// GeneralsX @feature Claude 15/10/2026 Use a single-sampled depth buffer when the default one is multisampled
+	HRESULT hr = DX8Wrapper::_Set_Render_Target_With_Matching_Depth(m_newRenderSurface, m_oldDepthSurface);
 
 	// TheSuperHackers @bugfix If SetRenderTarget fails (e.g. due to MSAA forced by driver
 	// profile causing a depth buffer mismatch that D3DSURFACE_DESC doesn't report), permanently
