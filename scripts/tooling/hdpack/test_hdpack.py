@@ -72,6 +72,7 @@ def main():
             ("Art\\Textures\\AVHouse.tga", tga((64, 64), (200, 200, 200, 128))),
             ("Art\\Textures\\SCShellUserInterface512_001.tga", tga((512, 512), (0, 0, 0, 255))),
             ("Art\\Textures\\tiny.tga", tga((16, 16), (0, 0, 0, 255))),
+            ("Art\\Terrain\\TSGrass01.tga", tga((64, 128), (60, 140, 40, 255))),
             ("Data\\INI\\MappedImages\\HandCreated\\HandCreatedMappedImages.ini", ini),
         ])
         out = Path(tmp, "!HDTextures.big")
@@ -104,6 +105,17 @@ def main():
         report = json.loads(Path(tmp, "!HDCapped.report.json").read_text())
         assert report["skipped_already_max_size"] == 1 and report["textures_written"] == 1, report
         assert len(report["skipped_files"]["already_max_size"]) == 1, report
+
+        # Terrain mode: same names as RLE TGA at exactly 4x, nothing from Art/Textures/.
+        terrain = Path(tmp, "!HDTerrain.big")
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(terrain),
+                        "--upscaler", "lanczos", "--terrain"], check=True, capture_output=True)
+        entries = hdpack.read_big(terrain)
+        assert list(entries) == ["art/terrain/tsgrass01.tga"], list(entries)
+        data = hdpack.read_entry(entries["art/terrain/tsgrass01.tga"])
+        assert data[2] == 10, data[2]  # RLE true-colour
+        tile = Image.open(io.BytesIO(data))
+        assert tile.size == (256, 512) and tile.mode == "RGB", (tile.size, tile.mode)
 
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
