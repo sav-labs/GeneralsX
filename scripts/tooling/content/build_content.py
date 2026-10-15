@@ -133,6 +133,7 @@ CAMEOS = {
     "GXCameo_CommandCenter": "ABGXCMDHQ",
     "GXCameo_Patriot": "ABGXPATRIOT",
     "GXCameo_FireBase": "ABGXFIREBASE",
+    "GXCameo_DropZone": "ABGXDROPZONE",
 }
 # Retail command bar images redrawn with our cameos. The retail MappedImages load from TextureSize_*
 # before HandCreated, so redefining them here swaps the picture on every button and portrait that uses
@@ -157,6 +158,7 @@ RETAIL_CAMEOS = {
     "GXCameo_CommandCenter": ["SAComCentr"],
     "GXCameo_Patriot": ["SAPatriot"],
     "GXCameo_FireBase": ["SAFirebase"],
+    "GXCameo_DropZone": ["SADropZone"],
 }
 # Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
 DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}

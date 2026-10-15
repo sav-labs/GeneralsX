@@ -521,7 +521,42 @@ def fire_base(name, wall, team, glass, variant=""):
     return k.finish(variant, height=6.4)
 
 
+def supply_drop_zone(name, wall, team, glass, variant=""):
+    """Airdrop landing zone: a marked concrete pad with a team-colour drop cross, an operations
+    container, stacks of netted cargo pallets, light masts and a smoke marker on FLARE01. Retail
+    footprint 54 x 54, height 9."""
+    k = Kit(name, wall, team, glass, height=9.0)
+    k.model.add_bone("FLARE01", "ROOTTRANSFORM", (18.0, 18.0, 1.0))
+    k.pad(-26.0, -26.0, 26.0, 26.0, h=0.5)
+    k.fx_spots.append((-14.0, -14.0, 14.0, 14.0, 0.6))
+    # Drop cross and corner markers in team colour.
+    k.t.box((-14.0, -2.0, 0.5), (14.0, 2.0, 0.56), TEAM)
+    k.t.box((-2.0, -14.0, 0.5), (2.0, 14.0, 0.56), TEAM)
+    for x, y in ((-20.0, -20.0), (-20.0, 20.0), (20.0, -20.0), (20.0, 20.0)):
+        k.t.box((x - 1.6, y - 1.6, 0.5), (x + 1.6, y + 1.6, 0.56), TEAM)
+    # Operations container with a window and an air conditioner, and a fuel bladder.
+    k.block(-24.0, -24.0, -12.0, -18.0, 0.5, 6.0, storey=6.0, region=METAL)
+    k.window_band(-22.0, -18.0, -15.0, -18.0, 2.6, 4.4)
+    k.ac_unit(-16.0, -21.0, 6.0)
+    k.antenna(-22.5, -22.5, 6.0, 7.0)
+    k.b.box((-24.0, 13.0, 0.5), (-14.0, 23.0, 2.2), METAL)
+    # Netted pallets waiting for pickup.
+    for i, (x, y) in enumerate(((8.0, -22.0), (12.5, -22.0), (17.0, -22.0), (21.5, -22.0), (21.5, -17.5), (21.5, -13.0))):
+        h = 2.4 + 1.4 * (i % 2)
+        k.b.box((x - 1.9, y - 1.9, 0.5), (x + 1.9, y + 1.9, 0.9), METAL)
+        k.b.box((x - 1.7, y - 1.7, 0.9), (x + 1.7, y + 1.7, 0.9 + h), WALL)
+        k.fx_spots.append((x - 1.7, y - 1.7, x + 1.7, y + 1.7, 0.9 + h))
+    # Light masts on two corners and a windsock pole.
+    for x, y in ((24.5, 24.5), (-24.5, 24.5), (24.5, -24.5)):
+        k.b.cylinder_z(x, y, 0.5, 9.0, 0.3, 0.2, sides=6, region=METAL)
+        k.b.box((x - 0.9, y - 0.4, 9.0), (x + 0.9, y + 0.4, 9.8), METAL)
+    k.b.cylinder_z(-6.0, 24.5, 0.5, 7.0, 0.15, 0.12, sides=6, region=METAL)
+    k.t.box((-6.0, 24.4, 6.0), (-2.8, 24.6, 6.8), TEAM)
+    return k.finish(variant, height=6.0)
+
+
 BUILDERS = {
+    "ABGXDROPZONE": supply_drop_zone,
     "ABGXPATRIOT": patriot,
     "ABGXFIREBASE": fire_base,
     "ABGXPWR": power_plant,
