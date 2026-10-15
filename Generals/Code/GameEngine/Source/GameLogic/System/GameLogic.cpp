@@ -2213,6 +2213,19 @@ void GameLogic::loadMapINI( AsciiString mapName )
 		return;
 	}
 
+	// GeneralsX @feature Claude 15/10/2026 Load the remaster's own content (new units, weapons, buttons)
+	// from Data\INI\GeneralsX as overrides before every game, the same way map.ini is loaded, so it can
+	// extend retail definitions such as command sets without shipping edited copies of them. Overrides
+	// are dropped on reset, so this runs again for each game. map.ini is loaded afterwards and wins.
+	{
+		INI contentIni;
+		const UnsignedInt contentFiles = contentIni.loadFileDirectory( "Data\\INI\\GeneralsX", INI_LOAD_CREATE_OVERRIDES, nullptr );
+		if (contentFiles > 0) {
+			fprintf(stderr, "[Content] Loaded %u GeneralsX content INI file(s)\n", contentFiles);
+			fflush(stderr);
+		}
+	}
+
 	//
 	// if map name begins with a "SAVE_DIRECTORY\", then the map refers to a map
 	// that has been extracted from a save game file ... in that case we need to get
