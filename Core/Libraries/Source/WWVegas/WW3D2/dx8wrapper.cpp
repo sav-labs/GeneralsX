@@ -175,6 +175,7 @@ float DX8Wrapper::s_pixelDensity = 1.0f;
 IDirect3DTexture8* DX8Wrapper::s_offscreenTex = nullptr;
 IDirect3DSurface8* DX8Wrapper::s_offscreenSurf = nullptr;
 IDirect3DSurface8* DX8Wrapper::s_depthSurf = nullptr;
+IDirect3DSurface8* DX8Wrapper::s_offscreenMsaaSurf = nullptr;
 IDirect3DSurface8* DX8Wrapper::s_savedBackbuffer = nullptr;
 IDirect3DSurface8* DX8Wrapper::s_savedDepth = nullptr;
 
@@ -199,6 +200,7 @@ void DX8Wrapper::Pillarbox_Cleanup()
 	if (s_savedBackbuffer) { s_savedBackbuffer->Release(); s_savedBackbuffer = nullptr; }
 	if (s_savedDepth) { s_savedDepth->Release(); s_savedDepth = nullptr; }
 	if (s_depthSurf) { s_depthSurf->Release(); s_depthSurf = nullptr; }
+	if (s_offscreenMsaaSurf) { s_offscreenMsaaSurf->Release(); s_offscreenMsaaSurf = nullptr; }
 	if (s_offscreenSurf) { s_offscreenSurf->Release(); s_offscreenSurf = nullptr; }
 	if (s_offscreenTex) { s_offscreenTex->Release(); s_offscreenTex = nullptr; }
 	s_pillarboxEnabled = false;
@@ -246,9 +248,26 @@ bool DX8Wrapper::Pillarbox_Setup(int gameW, int gameH)
 	if (FAILED(hr)) return false;
 	s_offscreenTex->GetSurfaceLevel(0, &s_offscreenSurf);
 
+	// GeneralsX @feature Claude 15/10/2026 With MSAA, the scene renders into a multisampled surface that
+	// Pillarbox_End resolves into the offscreen texture, so the pillarboxed scene keeps its anti-aliasing.
+	D3DMULTISAMPLE_TYPE sceneMsaa = _PresentParameters.MultiSampleType;
+	if (sceneMsaa != D3DMULTISAMPLE_NONE) {
+		hr = D3DDevice->CreateRenderTarget(gameW, gameH, D3DFMT_A8R8G8B8, sceneMsaa, FALSE, &s_offscreenMsaaSurf);
+		if (FAILED(hr)) {
+			s_offscreenMsaaSurf = nullptr;
+			sceneMsaa = D3DMULTISAMPLE_NONE;
+		}
+	}
+
 	// Create dedicated depth stencil at game resolution
 	hr = D3DDevice->CreateDepthStencilSurface(gameW, gameH,
-		_PresentParameters.AutoDepthStencilFormat, D3DMULTISAMPLE_NONE, &s_depthSurf);
+		_PresentParameters.AutoDepthStencilFormat, sceneMsaa, &s_depthSurf);
+	if (FAILED(hr) && sceneMsaa != D3DMULTISAMPLE_NONE) {
+		s_offscreenMsaaSurf->Release(); s_offscreenMsaaSurf = nullptr;
+		sceneMsaa = D3DMULTISAMPLE_NONE;
+		hr = D3DDevice->CreateDepthStencilSurface(gameW, gameH,
+			_PresentParameters.AutoDepthStencilFormat, D3DMULTISAMPLE_NONE, &s_depthSurf);
+	}
 	if (FAILED(hr)) {
 		s_offscreenSurf->Release(); s_offscreenSurf = nullptr;
 		s_offscreenTex->Release(); s_offscreenTex = nullptr;
@@ -268,14 +287,15 @@ bool DX8Wrapper::Pillarbox_Setup(int gameW, int gameH)
 		s_dstX = 0; s_dstY = (bbH - s_dstH) / 2;
 	}
 	s_pillarboxEnabled = true;
-	fprintf(stderr, "INFO: Pillarbox: game=%dx%d, backbuffer=%dx%d, present=%ux%u, windowed=%d\n",
+	fprintf(stderr, "INFO: Pillarbox: game=%dx%d, backbuffer=%dx%d, present=%ux%u, windowed=%d, msaa=%u\n",
 		gameW,
 		gameH,
 		bbW,
 		bbH,
 		_PresentParameters.BackBufferWidth,
 		_PresentParameters.BackBufferHeight,
-		IsWindowed ? 1 : 0);
+		IsWindowed ? 1 : 0,
+		(unsigned)sceneMsaa);
 	return true;
 }
 
@@ -283,7 +303,7 @@ void DX8Wrapper::Pillarbox_Begin()
 {
 	if (!s_pillarboxEnabled || !s_offscreenSurf || !s_depthSurf) return;
 	// GeneralsX @bugfix GitHub Copilot 10/05/2026 Route pillarbox target switches through the DX8Wrapper cache so render-target size queries stay correct during the frame.
-	Set_Render_Target(s_offscreenSurf, s_depthSurf);
+	Set_Render_Target(s_offscreenMsaaSurf ? s_offscreenMsaaSurf : s_offscreenSurf, s_depthSurf);
 	// GeneralsX @bugfix GitHub Copilot 10/05/2026 Pillarbox uses an offscreen target for presentation only and must not advertise the whole frame as an effect RTT pass.
 	IsRenderToTexture = false;
 	// GeneralsX @bugfix GitHub Copilot 27/04/2026 Ensure scene render uses game-resolution viewport on the offscreen RT.
@@ -316,6 +336,23 @@ void DX8Wrapper::Pillarbox_End()
 	// Restore backbuffer (still inside active scene)
 	Set_Render_Target((IDirect3DSurface8 *)nullptr);
 	IsRenderToTexture = false;
+
+	// GeneralsX @feature Claude 15/10/2026 Resolve the multisampled scene into the offscreen texture. DXVK runs
+	// a DEFAULT pool to DEFAULT pool CopyRects as StretchRect, which resolves multisampled sources.
+	if (s_offscreenMsaaSurf) {
+		HRESULT hr = D3DDevice->CopyRects(s_offscreenMsaaSurf, nullptr, 0, s_offscreenSurf, nullptr);
+		if (FAILED(hr)) {
+			fprintf(stderr, "WARNING: Pillarbox: MSAA resolve failed (0x%08lx), rendering the scene without MSAA\n", (unsigned long)hr);
+			fflush(stderr);
+			s_offscreenMsaaSurf->Release(); s_offscreenMsaaSurf = nullptr;
+			s_depthSurf->Release(); s_depthSurf = nullptr;
+			if (FAILED(D3DDevice->CreateDepthStencilSurface(ResolutionWidth, ResolutionHeight,
+				_PresentParameters.AutoDepthStencilFormat, D3DMULTISAMPLE_NONE, &s_depthSurf))) {
+				s_depthSurf = nullptr;
+				s_pillarboxEnabled = false;
+			}
+		}
+	}
 
 	// Blit offscreen texture centered onto backbuffer (fit rect cached in Pillarbox_Setup)
 	D3DVIEWPORT8 vp = {0, 0, (DWORD)s_bbW, (DWORD)s_bbH, 0.0f, 1.0f};
@@ -454,6 +491,7 @@ IDirect3DSurface8 *			DX8Wrapper::CurrentRenderTarget						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::CurrentDepthBuffer						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::DefaultRenderTarget						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::DefaultDepthBuffer						= nullptr;
+IDirect3DSurface8 *			DX8Wrapper::SingleSampleDepthBuffer					= nullptr;
 bool								DX8Wrapper::IsRenderToTexture							= false;
 
 unsigned							DX8Wrapper::_MainThreadID								= 0;
@@ -995,6 +1033,8 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		if (m_pCleanupHook) {
 			m_pCleanupHook->ReleaseResources();
 		}
+		// GeneralsX @feature Claude 15/10/2026 D3DPOOL_DEFAULT surfaces must be released before Reset.
+		Release_Single_Sample_Depth_Buffer();
 		DynamicVBAccessClass::_Deinit();
 		DynamicIBAccessClass::_Deinit();
 		DX8TextureManagerClass::Release_Textures();
@@ -1035,6 +1075,7 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 void DX8Wrapper::Release_Device()
 {
 	Pillarbox_Cleanup();
+	Release_Single_Sample_Depth_Buffer();
 
 	if (D3DDevice) {
 
@@ -3736,6 +3777,91 @@ void DX8Wrapper::Create_Render_Target
  * Set render target
  * KM Added optional custom z target
  */
+// GeneralsX @feature Claude 15/10/2026 Single-sampled depth buffer for render target textures while MSAA is on
+HRESULT DX8Wrapper::_Set_Render_Target_With_Matching_Depth(IDirect3DSurface8* render_target, IDirect3DSurface8* depth_buffer)
+{
+	IDirect3DSurface8* depth = Get_Single_Sample_Depth_Buffer(render_target, depth_buffer);
+	HRESULT hr = D3DDevice->SetRenderTarget(render_target, depth);
+	if (SUCCEEDED(hr) && depth != depth_buffer)
+	{
+		// The substitute starts out cleared, like the default depth buffer at the start of the frame
+		D3DSURFACE_DESC depthDesc;
+		DWORD flags = D3DCLEAR_ZBUFFER;
+		if (SUCCEEDED(depth->GetDesc(&depthDesc))
+			&& (depthDesc.Format == D3DFMT_D24S8 || depthDesc.Format == D3DFMT_D15S1 || depthDesc.Format == D3DFMT_D24X4S4))
+		{
+			flags |= D3DCLEAR_STENCIL;
+		}
+		D3DDevice->Clear(0, nullptr, flags, 0, 1.0f, 0);
+	}
+	return hr;
+}
+
+IDirect3DSurface8 * DX8Wrapper::Get_Single_Sample_Depth_Buffer(IDirect3DSurface8* render_target, IDirect3DSurface8* depth_buffer)
+{
+	if (render_target == nullptr || depth_buffer == nullptr)
+		return depth_buffer;
+
+	D3DSURFACE_DESC targetDesc;
+	D3DSURFACE_DESC depthDesc;
+	if (FAILED(render_target->GetDesc(&targetDesc)) || FAILED(depth_buffer->GetDesc(&depthDesc)))
+		return depth_buffer;
+
+	if (targetDesc.MultiSampleType == depthDesc.MultiSampleType)
+		return depth_buffer;
+
+	if (targetDesc.MultiSampleType != D3DMULTISAMPLE_NONE)
+		return depth_buffer;
+
+	if (SingleSampleDepthBuffer != nullptr)
+	{
+		D3DSURFACE_DESC singleDesc;
+		if (SUCCEEDED(SingleSampleDepthBuffer->GetDesc(&singleDesc))
+			&& singleDesc.Format == depthDesc.Format
+			&& singleDesc.Width >= targetDesc.Width
+			&& singleDesc.Height >= targetDesc.Height)
+		{
+			return SingleSampleDepthBuffer;
+		}
+	}
+
+	// Keep the largest size requested so far, so that targets of different sizes share one buffer
+	UINT width = targetDesc.Width;
+	UINT height = targetDesc.Height;
+	if (SingleSampleDepthBuffer != nullptr)
+	{
+		D3DSURFACE_DESC singleDesc;
+		if (SUCCEEDED(SingleSampleDepthBuffer->GetDesc(&singleDesc)) && singleDesc.Format == depthDesc.Format)
+		{
+			if (singleDesc.Width > width)
+				width = singleDesc.Width;
+			if (singleDesc.Height > height)
+				height = singleDesc.Height;
+		}
+	}
+	Release_Single_Sample_Depth_Buffer();
+
+	if (FAILED(D3DDevice->CreateDepthStencilSurface(width, height, depthDesc.Format, D3DMULTISAMPLE_NONE, &SingleSampleDepthBuffer)))
+	{
+		SingleSampleDepthBuffer = nullptr;
+		fprintf(stderr, "WARNING: MSAA: could not create a %ux%u single-sampled depth buffer, render target texture draws without depth\n",
+			width, height);
+		fflush(stderr);
+		return depth_buffer;
+	}
+
+	return SingleSampleDepthBuffer;
+}
+
+void DX8Wrapper::Release_Single_Sample_Depth_Buffer()
+{
+	if (SingleSampleDepthBuffer != nullptr)
+	{
+		SingleSampleDepthBuffer->Release();
+		SingleSampleDepthBuffer = nullptr;
+	}
+}
+
 void DX8Wrapper::Set_Render_Target_With_Z
 (
 	TextureClass* texture,
@@ -3890,7 +4016,9 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 			//
 			if (use_default_depth_buffer)
 			{
-				DX8CALL(SetRenderTarget (CurrentRenderTarget, DefaultDepthBuffer));
+				// GeneralsX @feature Claude 15/10/2026 Render target textures are single-sampled; with MSAA they
+				// get a single-sampled depth buffer instead of the multisampled default one.
+				_Set_Render_Target_With_Matching_Depth(CurrentRenderTarget, DefaultDepthBuffer);
 			}
 			else
 			{
