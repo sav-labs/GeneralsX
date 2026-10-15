@@ -840,18 +840,39 @@ Int parseSkirmishStartPos(char *args[], int num)
 // GeneralsX @feature Claude 14/10/2026 Drive the tactical camera on a fixed, input-free script once a match
 // has started: -camtest [seconds]. The optional duration of the pan defaults to 8 seconds.
 // Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
+// GeneralsX @feature Claude 15/10/2026 A trailing "close" token (-camtest close, -camtest 8 close) selects the
+// close-up flight, the same as -camclose.
 Int parseCameraTest(char *args[], int num)
 {
 	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
 
-	if (num > 1 && args[1][0] >= '0' && args[1][0] <= '9')
+	Int consumed = 1;
+	if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
 	{
-		const Real seconds = (Real)atof(args[1]);
+		const Real seconds = (Real)atof(args[consumed]);
 		if (seconds > 0.0f)
 		{
 			TheWritableGlobalData->m_cameraTestSeconds = seconds;
 		}
-		return 2;
+		++consumed;
+	}
+	if (num > consumed && stricmp(args[consumed], "close") == 0)
+	{
+		TheWritableGlobalData->m_cameraTestClose = TRUE;
+		++consumed;
+	}
+	return consumed;
+}
+
+// GeneralsX @feature Claude 15/10/2026 -camclose: close-up variant of the -camtest flight. The camera stays below the
+// minimum zoom height with a lower pitch and moves along the test convoy and then past the player's base buildings,
+// so unit and building textures and edge antialiasing fill the screen. Enables -camtest (8 seconds) when not given.
+Int parseCameraTestClose(char *args[], int num)
+{
+	TheWritableGlobalData->m_cameraTestClose = TRUE;
+	if (TheWritableGlobalData->m_cameraTestSeconds <= 0.0f)
+	{
+		TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
 	}
 	return 1;
 }
@@ -1355,6 +1376,8 @@ static CommandLineParam paramsForEngineInit[] =
 
 	// GeneralsX @feature Claude 14/10/2026 Fly the tactical camera on a fixed script without user input.
 	{ "-camtest", parseCameraTest },
+	// GeneralsX @feature Claude 15/10/2026 Close-up variant of the -camtest flight.
+	{ "-camclose", parseCameraTestClose },
 
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },
