@@ -75,6 +75,7 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DVideoBuffer.h
     Include/W3DDevice/GameClient/W3DView.h
     Include/W3DDevice/GameClient/W3DScreenshot.h
+    Include/W3DDevice/GameClient/W3DCapture.h
 #    Include/W3DDevice/GameClient/W3DVolumetricShadow.h
     Include/W3DDevice/GameClient/W3DWater.h
     Include/W3DDevice/GameClient/W3DWaterTracks.h
@@ -176,6 +177,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DVideoBuffer.cpp
     Source/W3DDevice/GameClient/W3DView.cpp
     Source/W3DDevice/GameClient/W3DScreenshot.cpp
+    Source/W3DDevice/GameClient/W3DCapture.cpp
     Source/W3DDevice/GameClient/stb_image_write_impl.cpp
 #    Source/W3DDevice/GameClient/W3dWaypointBuffer.cpp
 #    Source/W3DDevice/GameClient/W3DWebBrowser.cpp
@@ -335,9 +337,16 @@ if(RTS_BUILD_OPTION_FFMPEG)
             Include/VideoDevice/FFmpeg/FFmpegVideoPlayer.h
             Source/VideoDevice/FFmpeg/FFmpegFile.cpp
             Source/VideoDevice/FFmpeg/FFmpegVideoPlayer.cpp
+            # GeneralsX @feature Claude 15/10/2026 Encoder for bug report video clips recorded by DXVK
+            Include/VideoDevice/FFmpeg/FFmpegCaptureEncoder.h
+            Source/VideoDevice/FFmpeg/FFmpegCaptureEncoder.cpp
         )
         target_include_directories(corei_gameenginedevice_private INTERFACE ${FFMPEG_INCLUDE_DIRS})
         target_link_libraries(corei_gameenginedevice_private INTERFACE PkgConfig::FFMPEG)
         target_compile_definitions(corei_gameenginedevice_public INTERFACE RTS_HAS_FFMPEG)
+        # GeneralsX @build Claude 15/10/2026 The capture encoder reads its wide command line and may use Media Foundation.
+        if(WIN32)
+            target_link_libraries(corei_gameenginedevice_private INTERFACE ole32 shell32)
+        endif()
     endif()
 endif()

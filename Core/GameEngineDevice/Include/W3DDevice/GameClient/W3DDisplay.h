@@ -126,6 +126,8 @@ public:
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality) override;	//save screenshot in specified format
 	virtual void toggleMovieCapture() override;			//enable AVI or frame capture mode.
+	// GeneralsX @feature Claude 15/10/2026 Start or stop a video clip through DXVK for bug reports.
+	virtual void toggleVideoCapture() override;
 
 	virtual void toggleLetterBox() override;	///<enabled letter-boxed display
 	virtual void enableLetterBox(Bool enable) override;	///<forces letter-boxed display on/off

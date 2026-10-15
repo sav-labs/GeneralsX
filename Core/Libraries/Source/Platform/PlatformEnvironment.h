@@ -29,7 +29,10 @@
 #include <windows.h>
 #else
 #include <stdlib.h>
+#include <string.h>
 #endif
+
+#include <stddef.h>
 
 namespace Platform {
 
@@ -45,6 +48,39 @@ inline bool SetProcessEnvironmentVariable(const char *name, const char *value)
 	return SetEnvironmentVariableA( name, value ) != FALSE;
 #else
 	return setenv( name, value, 1 ) == 0;
+#endif
+}
+
+// GeneralsX @feature Claude 15/10/2026 Reads an environment variable of the running process, including values
+// that other modules (for example the DXVK libraries) set with SetProcessEnvironmentVariable or their own
+// equivalent. Returns false and an empty buffer when the variable is missing or does not fit.
+inline bool GetProcessEnvironmentVariable(const char *name, char *buffer, size_t bufferSize)
+{
+	if ( !buffer || bufferSize == 0 ) {
+		return false;
+	}
+	buffer[0] = '\0';
+	if ( !name || name[0] == '\0' ) {
+		return false;
+	}
+#if defined(_WIN32)
+	const DWORD length = GetEnvironmentVariableA( name, buffer, (DWORD)bufferSize );
+	if ( length == 0 || length >= bufferSize ) {
+		buffer[0] = '\0';
+		return false;
+	}
+	return true;
+#else
+	const char *value = getenv( name );
+	if ( !value ) {
+		return false;
+	}
+	const size_t length = strlen( value );
+	if ( length >= bufferSize ) {
+		return false;
+	}
+	memcpy( buffer, value, length + 1 );
+	return true;
 #endif
 }
 
