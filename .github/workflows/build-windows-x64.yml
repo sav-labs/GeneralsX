@@ -21,6 +21,7 @@ jobs:
   # The patch lives in cmake/dxvk-patches; set DXVK_FSR=1 and run the game with -upscale to use it.
   # DXVK_FSR_SHARPNESS sets RCAS sharpening in stops (0 = sharpest, default 0.2).
   # A multisampled back buffer (Options.ini AntiAliasing) is resolved before the FSR EASU pass.
+  # d3d9.log reports each back buffer's MultiSampleType and, on every change, whether FSR is active.
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
   # DXVK_CAPTURE_VIDEO records every presented frame for DXVK_CAPTURE_VIDEO_SECONDS (default 10), starting
   # DXVK_CAPTURE_VIDEO_START seconds (default 5) after the first present, at DXVK_CAPTURE_VIDEO_SCALE percent

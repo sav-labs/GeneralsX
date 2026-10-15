@@ -67,6 +67,8 @@ public:
 	Bool loadFromIniFile();
 
 	WW3D::MultiSampleModeEnum getAntiAliasing() const;
+	// GeneralsX @tweak Claude 15/10/2026 False when Options.ini has no AntiAliasing entry and the default applies.
+	Bool hasAntiAliasing() const;
 	TextureFilterClass::TextureFilterMode getTextureFilterMode() const;
 	TextureFilterClass::AnisotropicFilterMode getTextureAnisotropyLevel() const;
 	UnsignedInt getLANIPAddress();

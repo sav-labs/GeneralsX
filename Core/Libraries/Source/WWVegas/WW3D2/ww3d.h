@@ -278,7 +278,7 @@ public:
 	static void					Set_Texture_Bitdepth(int bitdepth);
 	static int					Get_Texture_Bitdepth();
 
-	static void					Set_MSAA_Mode(MultiSampleModeEnum mode);
+	static void					Set_MSAA_Mode(MultiSampleModeEnum mode, bool is_default = false);
 	static MultiSampleModeEnum Get_MSAA_Mode();
 
 	static void					Set_Mesh_Draw_Mode (MeshDrawModeEnum mode)	{ MeshDrawMode = mode; }
