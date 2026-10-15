@@ -53,6 +53,9 @@ enum CameraTestPhase
 };
 
 constexpr const Real CameraTestSettleSeconds = 2.0f;						///< Wait after the match starts before the flight
+// GeneralsX @tweak Claude 15/10/2026 The wait is counted in logic frames, so the convoy spawns on the same logic
+// frame on every run and a -skirmish match with a fixed -seed plays out the same way in every recording.
+constexpr const UnsignedInt CameraTestSettleFrames = (UnsignedInt)(CameraTestSettleSeconds * LOGICFRAMES_PER_SECOND);
 constexpr const Real CameraTestPanSpeed = 30.0f;								///< World units per second along the pan line (no convoy)
 constexpr const Real CameraTestTurnSpeed = DEG_TO_RADF(4.0f);	///< Camera yaw change per second while panning
 constexpr const Real CameraTestZoomOutSeconds = 2.5f;					///< Zoom-out from closest to default height after the pan
@@ -482,7 +485,7 @@ void UpdateCameraTest()
 	{
 		s.phase = CAMERA_TEST_SETTLING;
 		s.elapsedSeconds = 0.0f;
-		fprintf(stderr, "[CAMTEST] match started, flight begins in %.1f s\n", CameraTestSettleSeconds);
+		fprintf(stderr, "[CAMTEST] match started, flight begins at logic frame %u\n", CameraTestSettleFrames);
 		fflush(stderr);
 		return;
 	}
@@ -493,8 +496,10 @@ void UpdateCameraTest()
 
 	if (s.phase == CAMERA_TEST_SETTLING)
 	{
-		if (s.elapsedSeconds < CameraTestSettleSeconds)
+		if (TheGameLogic->getFrame() < CameraTestSettleFrames)
 			return;
+
+		s.elapsedSeconds = CameraTestSettleSeconds;
 
 		beginCameraTestFlight();
 		s.phase = CAMERA_TEST_FLYING;

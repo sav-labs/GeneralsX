@@ -1,0 +1,66 @@
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -1042,6 +1042,13 @@
+       m_backBuffers.emplace_back(surface);
+     }
+ 
++    // GeneralsX: report the back buffer the game asked for, including its
++    // multisample type, on every swap chain creation and reset.
++    Logger::info(str::format("D3D9SwapChainEx: ", bufferCount, " back buffer(s) ",
++      desc.Width, "x", desc.Height, ", format ", uint32_t(m_presentParams.BackBufferFormat),
++      ", MultiSampleType ", uint32_t(m_presentParams.MultiSampleType),
++      ", MultiSampleQuality ", m_presentParams.MultiSampleQuality));
++
+     // Initialize the image so that we can use it. Clearing
+     // to black prevents garbled output for the first frame.
+     small_vector<Rc<DxvkImage>, 4> images;
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -673,6 +673,30 @@
+       && dstRect.extent.width >= srcRect.extent.width
+       && dstRect.extent.height >= srcRect.extent.height;
+ 
++    // GeneralsX: log the present path once per change of FSR state, sizes or
++    // back buffer sample count, so the log shows whether FSR runs and whether
++    // it resolves a multisampled (D3D MultiSampleType) back buffer first.
++    VkSampleCountFlagBits srcSamples = srcView->image()->info().sampleCount;
++
++    if (useFsr != m_presentLogFsr
++     || srcSamples != m_presentLogSamples
++     || srcRect.extent != m_presentLogSrc
++     || dstRect.extent != m_presentLogDst) {
++      m_presentLogFsr = useFsr;
++      m_presentLogSamples = srcSamples;
++      m_presentLogSrc = srcRect.extent;
++      m_presentLogDst = dstRect.extent;
++
++      std::string msaa = srcSamples != VK_SAMPLE_COUNT_1_BIT
++        ? str::format(uint32_t(srcSamples), "x MSAA back buffer")
++        : std::string("single-sampled back buffer");
++
++      Logger::info(str::format("Swap chain: present ", srcRect.extent.width, "x", srcRect.extent.height,
++        " ", msaa, " to ", dstRect.extent.width, "x", dstRect.extent.height,
++        useFsr ? (srcSamples != VK_SAMPLE_COUNT_1_BIT ? ", FSR 1.0 active (MSAA resolved before EASU)" : ", FSR 1.0 active")
++               : (m_fsrEnabled ? ", FSR 1.0 enabled but inactive (no upscale)" : ", FSR 1.0 off")));
++    }
++
+     Rc<DxvkImageView> blitView = srcView;
+     VkRect2D blitRect = srcRect;
+ 
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -250,6 +250,11 @@
+     bool                m_fsrEnabled = false;
+     float               m_fsrSharpness = 0.2f;
+ 
++    bool                  m_presentLogFsr = false;
++    VkSampleCountFlagBits m_presentLogSamples = VkSampleCountFlagBits(0);
++    VkExtent2D            m_presentLogSrc = { };
++    VkExtent2D            m_presentLogDst = { };
++
+     ShaderModule        m_shaderVsCursor;
+     ShaderModule        m_shaderFsCursor;
+ 

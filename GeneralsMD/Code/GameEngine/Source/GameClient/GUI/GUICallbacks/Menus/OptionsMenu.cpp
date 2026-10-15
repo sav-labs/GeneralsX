@@ -590,6 +590,8 @@ static void saveOptions()
 		mode = (index > 0) ? 1 << index : 0;
 
 		TheWritableGlobalData->m_antiAliasLevel = mode;
+		// GeneralsX @tweak Claude 15/10/2026 The level is now the player's choice, not the GPU class default.
+		TheWritableGlobalData->m_antiAliasLevelIsDefault = FALSE;
     AsciiString prefString;
 		prefString.format("%d", mode);
 		(*pref)["AntiAliasing"] = prefString;
@@ -1265,7 +1267,9 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	}
 	// GeneralsX @feature Claude 15/10/2026 Read the level through OptionPreferences, so that a missing
 	// AntiAliasing entry shows the 4x default instead of Off.
-	Int val = pref->getAntiAliasing();
+	// GeneralsX @tweak Claude 15/10/2026 Without an AntiAliasing entry, show the level the device picked
+	// (2x on integrated GPUs, 4x on discrete GPUs, lower when unsupported), which Accept then saves.
+	Int val = pref->hasAntiAliasing() ? (Int)pref->getAntiAliasing() : (Int)TheGlobalData->m_antiAliasLevel;
 	Int pos = 0;
 
 	if (val == WW3D::MULTISAMPLE_MODE_NONE)
