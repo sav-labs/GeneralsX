@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(HERE, "models"))
 import textures  # noqa: E402
 from PIL import Image  # noqa: E402
 from render import render  # noqa: E402
+import gx_ambulance  # noqa: E402
 import gx_apache  # noqa: E402
 import gx_buildings  # noqa: E402
 import gx_chinook  # noqa: E402
@@ -30,6 +31,7 @@ import gx_jets  # noqa: E402
 import gx_jltv  # noqa: E402
 import gx_mlrs  # noqa: E402
 import gx_mbt  # noqa: E402
+import gx_microwave  # noqa: E402
 
 PACK_NAME = "GeneralsXContent.big"
 
@@ -94,6 +96,9 @@ def build_models(w3d_dir, tex):
             "AVGXCHINOOK" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxrotor.tga")
         models["AVGXAPACHE" + suffix] = gx_apache.build(
             "AVGXAPACHE" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", "gxrotor.tga")
+        models["AVGXMICRO" + suffix] = gx_microwave.build(
+            "AVGXMICRO" + suffix, f"gxpal_body{d}.tga", "gxmbt_tread.tga", "gxteam.tga", "gxglass.tga")
+        models["AVGXMEDIC" + suffix] = gx_ambulance.build("AVGXMEDIC" + suffix, f"gxmbt_body{d}.tga", "gxteam.tga", "gxglass.tga")
         for jet, variant in (("AVGXF35", "f35"), ("AVGXWING", "wing"), ("AVGXHYPER", "hyper")):
             models[jet + suffix] = gx_jets.build(
                 jet + suffix, f"gxjet_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", variant=variant)
@@ -116,6 +121,8 @@ CAMEOS = {
     "GXCameo_JLTV": "AVGXJLTV",
     "GXCameo_MLRS": "AVGXMLRS",
     "GXCameo_Chinook": "AVGXCHINOOK",
+    "GXCameo_Microwave": "AVGXMICRO",
+    "GXCameo_Medic": "AVGXMEDIC",
     "GXCameo_F35": "AVGXF35",
     "GXCameo_Wing": "AVGXWING",
     "GXCameo_Hyper": "AVGXHYPER",
