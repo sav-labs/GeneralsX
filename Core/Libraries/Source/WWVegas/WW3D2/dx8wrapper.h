@@ -440,6 +440,11 @@ public:
 	static IDirect3DSurface8 * _Get_DX8_Front_Buffer();
 	static SurfaceClass * _Get_DX8_Back_Buffer(unsigned int num=0);
 
+	// GeneralsX @feature Claude 15/10/2026 With MSAA, the default depth buffer is multisampled and must not be paired
+	// with a single-sampled render target texture. Binds render_target with depth_buffer when the sample counts match,
+	// otherwise with a cleared single-sampled depth buffer of the same format, owned by DX8Wrapper.
+	static HRESULT _Set_Render_Target_With_Matching_Depth(IDirect3DSurface8* render_target, IDirect3DSurface8* depth_buffer);
+
 	static void _Copy_DX8_Rects(
 			IDirect3DSurface8* pSourceSurface,
 			CONST RECT* pSourceRectsArray,
@@ -732,6 +737,9 @@ protected:
 	static IDirect3DSurface8 *			CurrentDepthBuffer;
 	static IDirect3DSurface8 *			DefaultRenderTarget;
 	static IDirect3DSurface8 *			DefaultDepthBuffer;
+	static IDirect3DSurface8 *			SingleSampleDepthBuffer;
+	static IDirect3DSurface8 *			Get_Single_Sample_Depth_Buffer(IDirect3DSurface8* render_target, IDirect3DSurface8* depth_buffer);
+	static void								Release_Single_Sample_Depth_Buffer();
 
 	static unsigned							DrawPolygonLowBoundLimit;
 
@@ -751,6 +759,7 @@ protected:
 	static IDirect3DTexture8*			s_offscreenTex;
 	static IDirect3DSurface8*			s_offscreenSurf;
 	static IDirect3DSurface8*			s_depthSurf;
+	static IDirect3DSurface8*			s_offscreenMsaaSurf;
 	static IDirect3DSurface8*			s_savedBackbuffer;
 	static IDirect3DSurface8*			s_savedDepth;
 
