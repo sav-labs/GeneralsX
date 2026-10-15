@@ -208,6 +208,9 @@ public:
 	virtual void setZoom(Real z) { m_zoom = z; }
 	virtual Real getHeightAboveGround() { return m_heightAboveGround; }
 	virtual void setHeightAboveGround(Real z);
+	// GeneralsX @feature Claude 14/10/2026 Expose the camera height limits for the -camtest camera flight
+	Real getMinHeightAboveGround() const { return m_minHeightAboveGround; }
+	Real getMaxHeightAboveGround() const { return m_maxHeightAboveGround; }
 	virtual void zoom( Real height ); ///< Zoom in/out, closer to the ground, limit to min, or farther away from the ground, limit to max
 	virtual void setZoomToMax();
 	virtual void setZoomToDefault() { m_zoom  = 1.0f; } ///< Set zoom to default value

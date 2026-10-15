@@ -1,0 +1,15 @@
+diff --git a/src/util/log/log.cpp b/src/util/log/log.cpp
+index 2fca3ec..29bef7f 100644
+--- a/src/util/log/log.cpp
++++ b/src/util/log/log.cpp
+@@ -109,8 +109,9 @@ namespace dxvk {
+ #endif
+         }
+ 
++        // Flush every line so the log can be read while the game is running
+         if (m_fileStream)
+-          m_fileStream << adjusted;
++          m_fileStream << adjusted << std::flush;
+       }
+     }
+   }

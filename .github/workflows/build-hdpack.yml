@@ -32,6 +32,10 @@ env:
   # where the 2022 build above fails vkAllocateMemory. Shipped unmodified with its licence.
   UPSCAYL_URL: https://github.com/upscayl/upscayl-ncnn/releases/download/20240601-103425/upscayl-bin-20240601-103425-windows.zip
   UPSCAYL_SHA256: 2707e7904cc186ca1e47be3a3735feb56219975b6926ff1c35e0dd21dbed2b81
+  # Real-ESRGAN x4plus weights (BSD-3-Clause), converted to ONNX for the DirectML path,
+  # which is the default: both ncnn builds fail vkAllocateMemory on the Radeon 780M.
+  X4PLUS_URL: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+  X4PLUS_SHA256: 4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1
 
 jobs:
   hdpack:
@@ -47,13 +51,21 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install pillow==12.0.0 pyinstaller==6.11.1
+        run: python -m pip install pillow==12.0.0 pyinstaller==6.11.1 numpy==2.1.3 onnx==1.17.0 onnxruntime-directml==1.20.1
 
       - name: Self-test
         run: python scripts/tooling/hdpack/test_hdpack.py
 
       - name: Build hdpack.exe
-        run: pyinstaller --onefile --name hdpack --distpath dist --workpath build-hdpack scripts/tooling/hdpack/hdpack.py
+        run: pyinstaller --onefile --name hdpack --collect-binaries onnxruntime --distpath dist --workpath build-hdpack scripts/tooling/hdpack/hdpack.py
+
+      - name: Export Real-ESRGAN x4plus to ONNX
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:X4PLUS_URL -OutFile RealESRGAN_x4plus.pth
+          $hash = (Get-FileHash RealESRGAN_x4plus.pth -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:X4PLUS_SHA256) { throw "x4plus checksum mismatch: $hash" }
+          python scripts/tooling/hdpack/export_onnx.py RealESRGAN_x4plus.pth dist/realesrgan_x4plus.onnx
 
       - name: Bundle Real-ESRGAN
         shell: pwsh
@@ -80,7 +92,13 @@ jobs:
 
       - name: Check the bundle runs
         shell: pwsh
-        run: dist/hdpack.exe --help
+        run: |
+          dist/hdpack.exe --help
+          New-Item -ItemType Directory -Force smoke/game | Out-Null
+          python -c "import io, sys; sys.path.insert(0, 'scripts/tooling/hdpack'); import hdpack; from PIL import Image; b = io.BytesIO(); Image.new('RGBA', (64, 64), (90, 120, 60, 255)).save(b, 'TGA'); hdpack.write_big('smoke/game/Textures.big', [('Art\\Textures\\AVTank.tga', b.getvalue())])"
+          dist/hdpack.exe --game-dir smoke/game --out "smoke/!HDTextures.big"
+          if ($LASTEXITCODE -ne 0) { throw "hdpack.exe failed" }
+          if (!(Test-Path "smoke/!HDTextures.big")) { throw "no pack written" }
 
       - name: Upload
         uses: actions/upload-artifact@v7

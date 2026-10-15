@@ -274,6 +274,8 @@ public:
 private:
 	ControlBarScheme *m_currentScheme;													///< the current scheme that everythign uses
 	Coord2D m_multiplier;
+	// GeneralsX @feature Claude 14/10/2026 Horizontal centering offset of the scheme art on wide displays
+	ICoord2D m_layoutOffset;
 
 	typedef std::list< ControlBarScheme* > ControlBarSchemeList;			///< list of control bar schemes
 	ControlBarSchemeList m_schemeList;

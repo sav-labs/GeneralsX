@@ -35,6 +35,32 @@ def check_dds(data, width, height):
     return fourcc
 
 
+def check_onnx_tiling(tmp):
+    """Tiled ONNX upscale must match a single full-image pass (nearest 4x stand-in model)."""
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    scales = numpy_helper.from_array(np.array([1, 1, 4, 4], dtype=np.float32), "scales")
+    graph = helper.make_graph(
+        [helper.make_node("Resize", ["input", "", "scales"], ["output"], mode="nearest")], "x4",
+        [helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 3, "h", "w"])],
+        [helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 3, "h4", "w4"])], [scales])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = 8
+    path = Path(tmp, "x4.onnx")
+    onnx.save(model, path)
+
+    rng = np.random.default_rng(1)
+    img = Image.fromarray(rng.integers(0, 256, (70, 100, 3), dtype=np.uint8), "RGB")
+    session = hdpack.onnx_session(path)
+    tiled = hdpack.upscale_rgb_onnx({"t": img}, session, 32)["t"]
+    full = img.resize((400, 280), Image.Resampling.NEAREST)
+    assert tiled.size == (400, 280), tiled.size
+    assert np.array_equal(np.asarray(tiled), np.asarray(full))
+    return path
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         game = Path(tmp, "game")
@@ -56,7 +82,24 @@ def main():
         assert sorted(entries) == ["art/textures/avhouse.dds", "art/textures/avtank.dds"], sorted(entries)
         assert check_dds(hdpack.read_entry(entries["art/textures/avtank.dds"]), 512, 256) == b"DXT1"
         assert check_dds(hdpack.read_entry(entries["art/textures/avhouse.dds"]), 256, 256) == b"DXT5"
-        assert (previews / "compare.jpg").is_file()
+        assert (previews / "compare_001.jpg").is_file()
+
+        # A rerun reuses the cache; a small part size splits the pack and removes the single file.
+        rerun = subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(out),
+                                "--upscaler", "lanczos", "--part-size", "100000"],
+                               check=True, capture_output=True, text=True).stdout
+        assert "2 textures reused" in rerun, rerun
+        parts = sorted(p.name for p in Path(tmp).glob("!HDTextures*.big"))
+        assert parts == ["!HDTextures_01.big", "!HDTextures_02.big"], parts
+        merged = {**hdpack.read_big(Path(tmp, parts[0])), **hdpack.read_big(Path(tmp, parts[1]))}
+        assert sorted(merged) == ["art/textures/avhouse.dds", "art/textures/avtank.dds"], sorted(merged)
+
+        model = check_onnx_tiling(tmp)
+        onnx_out = Path(tmp, "!HDTexturesOnnx.big")
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(onnx_out),
+                        "--upscaler", "onnx", "--onnx", str(model), "--tile", "32"], check=True)
+        entries = hdpack.read_big(onnx_out)
+        assert check_dds(hdpack.read_entry(entries["art/textures/avtank.dds"]), 512, 256) == b"DXT1"
     print("hdpack self-test passed")
 
 

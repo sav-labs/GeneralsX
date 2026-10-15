@@ -13,6 +13,8 @@ Excluded on purpose:
 - everything outside Art/Textures/ (terrain tiles, maps, INI, audio).
 
 Upscalers:
+- `onnx`: Real-ESRGAN x4plus through ONNX Runtime, DirectML on any DirectX 12 GPU
+  (onnxruntime-directml) or the CPU; the Windows package uses this by default;
 - `esrgan`: runs realesrgan-ncnn-vulkan (Vulkan, works on AMD/NVIDIA/Apple)
   on the colour channels; alpha is resized with Lanczos to keep cut-outs clean;
 - `lanczos`: plain resize, for pipeline checks without a GPU.
@@ -24,9 +26,11 @@ Requires Python 3.9+ and Pillow 11.2+ (DXT1/DXT5 writing).
 
 import argparse
 import fnmatch
+import hashlib
 import io
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -69,19 +73,64 @@ def read_entry(entry):
 
 
 def write_big(path, files):
-    """files: list of (archive name with backslashes, bytes)."""
+    """files: list of (archive name with backslashes, bytes or Path of a file to copy in).
+
+    Path entries are streamed, so a full pack never has to fit in memory.
+    """
+    sizes = [len(data) if isinstance(data, bytes) else Path(data).stat().st_size for _, data in files]
     names = [n.encode("latin-1") + b"\0" for n, _ in files]
     header_size = 16 + sum(8 + len(n) for n in names)
     offset = header_size
     table = b""
-    for (_, data), name in zip(files, names):
-        table += struct.pack(">II", offset, len(data)) + name
-        offset += len(data)
+    for size, name in zip(sizes, names):
+        table += struct.pack(">II", offset, size) + name
+        offset += size
     with open(path, "wb") as f:
         f.write(b"BIGF" + struct.pack("<I", offset) + struct.pack(">II", len(files), header_size))
         f.write(table)
         for _, data in files:
-            f.write(data)
+            if isinstance(data, bytes):
+                f.write(data)
+            else:
+                with open(data, "rb") as src:
+                    shutil.copyfileobj(src, f)
+
+
+PART_LIMIT = 2_000_000_000  # BIG offsets are 32-bit; stay well clear of 4 GiB and signed 2 GiB
+
+
+def write_big_parts(out, files, part_limit=PART_LIMIT):
+    """Write files into one archive, or <stem>_01.big, <stem>_02.big, ... when too large.
+
+    Parts from an earlier run that this run does not rewrite are removed, so a
+    smaller pack never leaves stale textures behind. Returns the written paths.
+    """
+    out = Path(out)
+    parts, current, size = [], [], 0
+    for name, data in files:
+        length = len(data) if isinstance(data, bytes) else Path(data).stat().st_size
+        if current and size + length + 64 > part_limit:
+            parts.append(current)
+            current, size = [], 0
+        current.append((name, data))
+        size += length + 64
+    if current or not parts:
+        parts.append(current)
+    stale = set(out.parent.glob(f"{glob_escape(out.stem)}_[0-9][0-9].big"))
+    if len(parts) == 1:
+        paths = [out]
+    else:
+        paths = [out.with_name(f"{out.stem}_{i:02d}.big") for i in range(1, len(parts) + 1)]
+        stale.add(out)
+    for path in stale - set(paths):
+        path.unlink(missing_ok=True)
+    for path, part in zip(paths, parts):
+        write_big(path, part)
+    return paths
+
+
+def glob_escape(text):
+    return re.sub(r"([\[\]*?])", r"[\1]", text)
 
 
 def collect_archives(game_dirs):
@@ -139,6 +188,49 @@ def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
         return out
 
 
+TILE_PAD = 10
+
+
+def onnx_session(model):
+    """DirectML on any DirectX 12 GPU when onnxruntime-directml is installed, CPU otherwise."""
+    import onnxruntime as ort
+    options = ort.SessionOptions()
+    providers = ["CPUExecutionProvider"]
+    if "DmlExecutionProvider" in ort.get_available_providers():
+        # DirectML needs these off; see the onnxruntime DirectML execution provider docs.
+        options.enable_mem_pattern = False
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        providers.insert(0, "DmlExecutionProvider")
+    session = ort.InferenceSession(str(model), options, providers=providers)
+    print(f"ONNX upscaler on {session.get_providers()[0]}")
+    return session
+
+
+def upscale_rgb_onnx(images, session, tile):
+    """4x upscale with the Real-ESRGAN ONNX model, tile by tile to bound GPU memory.
+
+    Each tile is read with TILE_PAD px of context on every side (edge-replicated at
+    the image border) and only its centre is kept, so tile seams do not show.
+    """
+    import numpy as np
+    out = {}
+    for key, img in images.items():
+        src = np.asarray(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
+        _, h, w = src.shape
+        padded = np.pad(src, ((0, 0), (TILE_PAD, TILE_PAD), (TILE_PAD, TILE_PAD)), mode="edge")
+        result = np.zeros((3, h * 4, w * 4), dtype=np.float32)
+        for y in range(0, h, tile):
+            for x in range(0, w, tile):
+                th, tw = min(tile, h - y), min(tile, w - x)
+                patch = padded[:, y:y + th + 2 * TILE_PAD, x:x + tw + 2 * TILE_PAD][None]
+                up = session.run(None, {"input": np.ascontiguousarray(patch)})[0][0]
+                p = TILE_PAD * 4
+                result[:, y * 4:(y + th) * 4, x * 4:(x + tw) * 4] = up[:, p:p + th * 4, p:p + tw * 4]
+        pixels = (np.clip(result, 0.0, 1.0) * 255.0).round().astype(np.uint8).transpose(1, 2, 0)
+        out[key] = Image.fromarray(pixels, "RGB")
+    return out
+
+
 def target_size(w, h, scale):
     factor = scale
     while factor > 1 and max(w, h) * factor > MAX_OUTPUT_SIZE:
@@ -183,24 +275,32 @@ def write_dds_mipmapped(img, has_alpha):
 SHEET_CELL = 256
 
 
-def comparison_sheet(pairs, path):
-    """One image with a row per texture: plain resize on the left, pack result on the right.
+SHEET_ROWS = 40  # keeps each sheet far below the 65500 px JPEG limit
 
-    Each cell is a centre crop of SHEET_CELL px at output resolution, so detail is
-    compared 1:1 instead of being hidden by a thumbnail downscale.
+
+def comparison_cells(before, after):
+    """Centre crops of SHEET_CELL px at output resolution: plain bicubic resize and pack result.
+
+    Comparing 1:1 crops shows the detail a thumbnail downscale would hide. Only the
+    crops are kept, so previews of a full pack stay small in memory.
     """
-    if not pairs:
-        return
-    sheet = Image.new("RGB", (SHEET_CELL * 2 + 12, len(pairs) * (SHEET_CELL + 4)), (32, 32, 32))
-    for row, (before, after) in enumerate(pairs):
-        plain = before.convert("RGB").resize(after.size, Image.Resampling.BICUBIC)
-        w, h = after.size
-        cw, ch = min(SHEET_CELL, w), min(SHEET_CELL, h)
-        box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
-        y = row * (SHEET_CELL + 4)
-        sheet.paste(plain.crop(box), (0, y))
-        sheet.paste(after.convert("RGB").crop(box), (SHEET_CELL + 12, y))
-    sheet.save(path, quality=90)
+    plain = before.convert("RGB").resize(after.size, Image.Resampling.BICUBIC)
+    w, h = after.size
+    cw, ch = min(SHEET_CELL, w), min(SHEET_CELL, h)
+    box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
+    return plain.crop(box), after.convert("RGB").crop(box)
+
+
+def comparison_sheets(cells, preview_dir):
+    """compare_001.jpg, compare_002.jpg, ...: a row per texture, SHEET_ROWS rows per sheet."""
+    for page, first in enumerate(range(0, len(cells), SHEET_ROWS), start=1):
+        rows = cells[first:first + SHEET_ROWS]
+        sheet = Image.new("RGB", (SHEET_CELL * 2 + 12, len(rows) * (SHEET_CELL + 4)), (32, 32, 32))
+        for row, (plain, upscaled) in enumerate(rows):
+            y = row * (SHEET_CELL + 4)
+            sheet.paste(plain, (0, y))
+            sheet.paste(upscaled, (SHEET_CELL + 12, y))
+        sheet.save(Path(preview_dir, f"compare_{page:03d}.jpg"), quality=90)
 
 
 # ---------------------------------------------------------------- main
@@ -211,11 +311,16 @@ def decode(data):
     return img.convert("RGBA")
 
 
+def default_onnx():
+    """realesrgan_x4plus.onnx next to hdpack.exe or hdpack.py (built by export_onnx.py)."""
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    return base / "realesrgan_x4plus.onnx"
+
+
 def default_esrgan():
     """The packaged hdpack.exe ships realesrgan-ncnn-vulkan.exe next to itself."""
     if getattr(sys, "frozen", False):
-        # upscayl-bin is the same CLI on a newer ncnn; the 2022 realesrgan-ncnn-vulkan
-        # build fails vkAllocateMemory on the Radeon 780M before the first tile.
+        # upscayl-bin is the same CLI on a newer ncnn.
         for exe in ("upscayl-bin.exe", "realesrgan-ncnn-vulkan.exe"):
             bundled = Path(sys.executable).parent / exe
             if bundled.is_file():
@@ -224,22 +329,34 @@ def default_esrgan():
 
 
 def main():
+    global MAX_OUTPUT_SIZE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game-dir", action="append", required=True,
                     help="Folder with the retail .big files (repeat for Generals + Zero Hour; later wins)")
     ap.add_argument("--out", required=True, help="Output archive, e.g. <game>/!HDTextures.big")
-    ap.add_argument("--upscaler", choices=("esrgan", "lanczos"), default="esrgan")
+    ap.add_argument("--upscaler", choices=("onnx", "esrgan", "lanczos"),
+                    default="onnx" if default_onnx().is_file() else "esrgan",
+                    help="onnx: Real-ESRGAN via ONNX Runtime (DirectML/CPU); esrgan: ncnn Vulkan binary; lanczos: plain resize")
+    ap.add_argument("--onnx", default=str(default_onnx()), help="Real-ESRGAN x4plus ONNX model")
     ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan or upscayl-bin")
     ap.add_argument("--model", default="realesrgan-x4plus", help="Real-ESRGAN model name")
     ap.add_argument("--scale", type=int, choices=(2, 4), default=4)
     ap.add_argument("--esrgan-args", default="", help='Extra upscaler arguments, e.g. "-g 0 -j 1:1:1"')
-    ap.add_argument("--tile", type=int, default=128, help="Real-ESRGAN tile size in px (lower uses less VRAM, min 32)")
+    ap.add_argument("--tile", type=int, default=128, help="Upscaler tile size in source px (lower uses less VRAM, min 32)")
     ap.add_argument("--include", action="append", help="Only texture names matching this glob (e.g. AV*)")
     ap.add_argument("--exclude-list", help="Text file with texture names (no extension) to keep original")
     ap.add_argument("--limit", type=int, default=0, help="Process at most N textures (prototype runs)")
     ap.add_argument("--batch", type=int, default=64, help="Textures per upscaler run")
     ap.add_argument("--preview-dir", help="Also write before/after PNGs here for comparison")
+    ap.add_argument("--max-size", type=int, default=MAX_OUTPUT_SIZE, help="Largest output side in px")
+    ap.add_argument("--cache-dir", help="Keep upscaled .dds here and reuse them on the next run "
+                    "(default: <out name>.cache next to the output)")
+    ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    MAX_OUTPUT_SIZE = args.max_size
+    cache_dir = Path(args.cache_dir) if args.cache_dir else Path(args.out).with_suffix(".cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    settings = f"{args.upscaler}|{args.model}|{args.scale}|{args.max_size}|v1".encode()
 
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)
@@ -269,27 +386,42 @@ def main():
 
     output = []
     pairs = []
+    session = None
+    cached = 0
     for start in range(0, len(keys), args.batch):
         batch = {}
         for stem in keys[start:start + args.batch]:
+            original = sources[stem][3]
+            name = original[:original.rfind(".")] + ".dds"
+            data = read_entry(sources[stem])
+            # Cache key: source bytes plus every setting that changes the result.
+            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}.dds"
+            if cache_file.is_file():
+                output.append((name, cache_file))
+                cached += 1
+                continue
             try:
-                img = decode(read_entry(sources[stem]))
+                img = decode(data)
             except Exception as e:  # unreadable or unsupported source: keep the original
                 print(f"  skip {stem}: {e}", file=sys.stderr)
                 continue
             if min(img.size) < MIN_SOURCE_SIZE:
                 continue
-            batch[stem] = img
+            batch[stem] = (img, name, cache_file)
         if not batch:
             continue
 
-        rgb = {k: v.convert("RGB") for k, v in batch.items()}
-        if args.upscaler == "esrgan":
+        rgb = {k: v[0].convert("RGB") for k, v in batch.items()}
+        if args.upscaler == "onnx":
+            if session is None:
+                session = onnx_session(args.onnx)
+            up_rgb = upscale_rgb_onnx(rgb, session, args.tile)
+        elif args.upscaler == "esrgan":
             up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
         else:
             up_rgb = {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
 
-        for stem, img in batch.items():
+        for stem, (img, name, cache_file) in batch.items():
             size = target_size(*img.size, args.scale)
             colour = up_rgb[stem]
             if colour.size != size:
@@ -298,19 +430,21 @@ def main():
             has_alpha = alpha.getextrema()[0] < 255
             result = colour.convert("RGBA")
             result.putalpha(alpha.resize(size, Image.Resampling.LANCZOS))
-            original = sources[stem][3]
-            name = original[:original.rfind(".")] + ".dds"
-            output.append((name, write_dds_mipmapped(result, has_alpha)))
+            partial = cache_file.with_suffix(".tmp")
+            partial.write_bytes(write_dds_mipmapped(result, has_alpha))
+            partial.replace(cache_file)  # only complete files count as cached
+            output.append((name, cache_file))
             if args.preview_dir:
                 img.save(Path(args.preview_dir, f"{stem}_before.png"))
                 result.save(Path(args.preview_dir, f"{stem}_after.png"))
-                pairs.append((img, result))
+                pairs.append(comparison_cells(img, result))
         print(f"  {min(start + args.batch, len(keys))}/{len(keys)}")
 
-    write_big(args.out, output)
+    paths = write_big_parts(args.out, output, args.part_size)
     if args.preview_dir:
-        comparison_sheet(pairs, Path(args.preview_dir, "compare.jpg"))
-    print(f"wrote {len(output)} textures to {args.out}")
+        comparison_sheets(pairs, args.preview_dir)
+    print(f"{cached} textures reused from {cache_dir}")
+    print(f"wrote {len(output)} textures to " + ", ".join(str(p) for p in paths))
 
 
 if __name__ == "__main__":

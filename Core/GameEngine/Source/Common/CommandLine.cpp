@@ -34,6 +34,7 @@
 #include "Common/CommandLine.h"
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
+#include "Common/OptionPreferences.h"
 #include "Common/version.h"
 #include "Common/WorkingDirectory.h"
 #include "GameClient/ClientInstance.h"
@@ -134,6 +135,20 @@ Int parseUpscale(char *args[], int)
 	TheWritableGlobalData->m_windowed = true;
 	TheWritableGlobalData->m_upscaleToDisplay = true;
 
+	return 1;
+}
+
+// GeneralsX @feature Claude 14/10/2026 -renderscale <percent> overrides Options.ini RenderScale. Below 100 the
+// game renders at that share of the display size and FSR 1.0 upscales it; 100 turns it off.
+Int parseRenderScale(char *args[], int num)
+{
+	if (num > 1)
+	{
+		Int scale = atoi(args[1]);
+		if (scale > 0)
+			TheWritableGlobalData->m_renderScale = clamp((Int)OptionPreferences::RENDER_SCALE_MIN, scale, (Int)OptionPreferences::RENDER_SCALE_OFF);
+		return 2;
+	}
 	return 1;
 }
 
@@ -698,14 +713,8 @@ Int parsePreload( char *args[], int num )
 #endif
 
 
-#if defined(RTS_DEBUG)
-Int parseDisplayDebug(char *args[], int)
-{
-	TheWritableGlobalData->m_displayDebug = TRUE;
-
-	return 1;
-}
-
+// GeneralsX @feature Claude 14/10/2026 -file <map> is available in release builds so automated
+// tests can start a match on a map directly, for example to capture gameplay frames.
 Int parseFile(char *args[], int num)
 {
 	if (num > 1)
@@ -716,6 +725,14 @@ Int parseFile(char *args[], int num)
 	return 2;
 }
 
+
+#if defined(RTS_DEBUG)
+Int parseDisplayDebug(char *args[], int)
+{
+	TheWritableGlobalData->m_displayDebug = TRUE;
+
+	return 1;
+}
 
 Int parsePreloadEverything( char *args[], int num )
 {
@@ -760,6 +777,48 @@ Int parseLoadSave(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 14/10/2026 Start a skirmish match from the command line: -skirmish <map path> [aiCount]
+// The map path is the one the map cache knows, e.g. "Maps\Tournament Desert\Tournament Desert.map".
+// The optional AI opponent count defaults to 1 and is clamped to the map's start positions at launch.
+Int parseSkirmish(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_initialSkirmishMap = args[1];
+		TheWritableGlobalData->m_initialSkirmishAICount = 1;
+		TheWritableGlobalData->m_shellMapOn = FALSE;
+		TheWritableGlobalData->m_playIntro = FALSE;
+		TheWritableGlobalData->m_playSizzle = FALSE;
+
+		if (num > 2 && args[2][0] >= '0' && args[2][0] <= '9')
+		{
+			TheWritableGlobalData->m_initialSkirmishAICount = atoi(args[2]);
+			return 3;
+		}
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 14/10/2026 Drive the tactical camera on a fixed, input-free script once a match
+// has started: -camtest [seconds]. The optional duration of the pan defaults to 8 seconds.
+// Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
+Int parseCameraTest(char *args[], int num)
+{
+	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
+
+	if (num > 1 && args[1][0] >= '0' && args[1][0] <= '9')
+	{
+		const Real seconds = (Real)atof(args[1]);
+		if (seconds > 0.0f)
+		{
+			TheWritableGlobalData->m_cameraTestSeconds = seconds;
+		}
+		return 2;
+	}
+	return 1;
+}
+
 Int parseLoadReplay(char *args[], int num)
 {
 	if (num > 1)
@@ -784,7 +843,9 @@ Int parseNoFX(char *args[], int)
 	return 1;
 }
 
-#if defined(RTS_DEBUG) && ENABLE_CONFIGURABLE_SHROUD
+// GeneralsX @feature Claude 14/10/2026 -noshroud is available in release builds so a map started with
+// -file (no units, no vision) shows the battlefield in automated screenshots. Shroud is client-side only.
+#if ENABLE_CONFIGURABLE_SHROUD
 Int parseNoShroud(char *args[], int)
 {
 	TheWritableGlobalData->m_shroudOn = FALSE;
@@ -1191,6 +1252,7 @@ static CommandLineParam paramsForStartup[] =
 {
 	{ "-win", parseWin },
 	{ "-upscale", parseUpscale },
+	{ "-renderscale", parseRenderScale },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
@@ -1219,6 +1281,10 @@ static CommandLineParam paramsForStartup[] =
 // These Params are parsed during Engine Init before INI data is loaded
 static CommandLineParam paramsForEngineInit[] =
 {
+#if ENABLE_CONFIGURABLE_SHROUD
+	{ "-noshroud", parseNoShroud },
+#endif
+	{ "-file", parseFile },
 	{ "-nologo", parseNoLogo }, // TheSuperHackers @tweak Is now available in Release builds.
 	{ "-noshellmap", parseNoShellMap },
 	{ "-noShellAnim", parseNoWindowAnimation }, // TheSuperHackers @tweak Is now available in Release builds.
@@ -1238,6 +1304,12 @@ static CommandLineParam paramsForEngineInit[] =
 
 	// TheSuperHackers @feature bobtista 08/08/2026 Play a replay file from the command line.
 	{ "-loadreplay", parseLoadReplay },
+
+	// GeneralsX @feature Claude 14/10/2026 Start a skirmish match against AI from the command line.
+	{ "-skirmish", parseSkirmish },
+
+	// GeneralsX @feature Claude 14/10/2026 Fly the tactical camera on a fixed script without user input.
+	{ "-camtest", parseCameraTest },
 
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },
@@ -1332,7 +1404,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-jabber", parseJabber },
 	{ "-munkee", parseMunkee },
 	{ "-displayDebug", parseDisplayDebug },
-	{ "-file", parseFile },
 
 //	{ "-preload", parsePreload },
 
@@ -1345,9 +1416,6 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-vTune", parseVTune },
 	{ "-selectTheUnselectable", parseSelectAll },
 	{ "-RunAhead", parseRunAhead },
-#if ENABLE_CONFIGURABLE_SHROUD
-	{ "-noshroud", parseNoShroud },
-#endif
 	{ "-forceBenchmark", parseForceBenchmark },
 	{ "-buildmapcache", parseBuildMapCache },
 	{ "-noshadowvolumes", parseNoShadows },

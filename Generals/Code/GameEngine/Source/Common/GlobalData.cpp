@@ -78,6 +78,8 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 {
 	// GeneralsX @feature BenderAI 21/04/2026 Opt-out flag for in-game update checker
 	{ "CheckForUpdates",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_checkForUpdates ) },
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	{ "SmoothMotion",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_smoothMotion ) },
 	{ "Windowed",									INI::parseBool,				nullptr,			offsetof( GlobalData, m_windowed ) },
 	{ "XResolution",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_xResolution ) },
 	{ "YResolution",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_yResolution ) },
@@ -651,8 +653,13 @@ GlobalData::GlobalData()
 	m_headless = FALSE;
 	// GeneralsX @feature BenderAI 21/04/2026 Default to TRUE; user can override via Options.ini
 	m_checkForUpdates = TRUE;
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	m_smoothMotion = TRUE;
 	m_windowed = 0;
 	m_upscaleToDisplay = FALSE;
+	m_renderScale = 0;
+	m_renderScaleDisplayWidth = 0;
+	m_renderScaleDisplayHeight = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;
 	m_maxShellScreens = 0;
@@ -1007,6 +1014,11 @@ GlobalData::GlobalData()
 	m_buildMapCache = FALSE;
 	m_initialFile.clear();
 	m_pendingFile.clear();
+	// GeneralsX @feature Claude 14/10/2026 Skirmish match requested with -skirmish
+	m_initialSkirmishMap.clear();
+	m_initialSkirmishAICount = 1;
+	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
+	m_cameraTestSeconds = 0.0f;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
@@ -1240,6 +1252,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_gameTimeFontSize = optionPref.getGameTimeFontSize();
 	TheWritableGlobalData->m_playerInfoListFontSize = optionPref.getPlayerInfoListFontSize();
 	TheWritableGlobalData->m_showMoneyPerMinute = optionPref.getShowMoneyPerMinute();
+	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+	TheWritableGlobalData->m_smoothMotion = optionPref.getSmoothMotion();
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
 	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
 	TheWritableGlobalData->m_skirmishTickRate = optionPref.getSkirmishTickRate();
@@ -1275,6 +1289,18 @@ void GlobalData::parseCustomDefinition()
 	{
 		// TheSuperHackers @tweak xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 		m_viewportHeightScale = 1.0f;
+	}
+
+	// GeneralsX @feature Claude 14/10/2026 With a render scale below 100 the game renders at that share of
+	// the display size and the swap chain upscales it to the display-size window with FSR 1.0.
+	if (m_upscaleToDisplay)
+	{
+		Int xres, yres;
+		if (OptionPreferences::getRenderScaleResolution(m_renderScale, m_renderScaleDisplayWidth, m_renderScaleDisplayHeight, &xres, &yres))
+		{
+			m_xResolution = xres;
+			m_yResolution = yres;
+		}
 	}
 }
 

@@ -50,6 +50,7 @@
 #include "GameClient/GameWindowGlobal.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetSlider.h"
+#include "GameClient/UILayout.h"
 #include "W3DDevice/GameClient/W3DGadget.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 
@@ -150,7 +151,9 @@ void W3DGadgetHorizontalSliderImageDraw( GameWindow *window,
 
 	SliderData *s = (SliderData *)window->winGetUserData();
 
-	Real xMulti = INT_TO_REAL(TheDisplay->getWidth()) / DEFAULT_DISPLAY_WIDTH;
+	// GeneralsX @feature Claude 14/10/2026 Size the slider boxes with the shared UI layout scale so they
+	// keep their proportions with the slider window on wide displays
+	Real xMulti = UILayoutGetDefaultTransform().scaleX;
 
 	// figure out how many boxes we draw for this slider
 	Int numBoxes = 0;
@@ -229,8 +232,10 @@ void W3DGadgetHorizontalSliderImageDrawB( GameWindow *window,
 
 	SliderData *s = (SliderData *)window->winGetUserData();
 
-	Real xMulti = INT_TO_REAL(TheDisplay->getWidth()) / DEFAULT_DISPLAY_WIDTH;
-	Real yMulti = INT_TO_REAL(TheDisplay->getHeight()) / DEFAULT_DISPLAY_HEIGHT;
+	// GeneralsX @feature Claude 14/10/2026 Use the shared UI layout scale (uniform on wide displays)
+	const UILayoutTransform layout = UILayoutGetDefaultTransform();
+	Real xMulti = layout.scaleX;
+	Real yMulti = layout.scaleY;
 	// get image offset
 	xOffset = instData->m_imageOffset.x;
 	yOffset = instData->m_imageOffset.y;

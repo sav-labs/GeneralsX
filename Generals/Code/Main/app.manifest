@@ -23,6 +23,10 @@
     <asmv3:windowsSettings>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!-- GeneralsX @bugfix Claude 13/10/2026 AsciiString holds UTF-8 (AsciiString::translate), so make the
+           ANSI Windows and CRT file APIs use UTF-8 too. Otherwise a non-Latin Documents path such as
+           "Документы" is re-read in the system code page and the game creates a mangled user data folder. -->
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
     </asmv3:windowsSettings>
   </asmv3:application>
 </assembly>

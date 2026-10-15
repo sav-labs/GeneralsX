@@ -891,6 +891,20 @@ Bool OptionPreferences::getShowMoneyPerMinute() const
 	return FALSE;
 }
 
+// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
+Bool OptionPreferences::getSmoothMotion() const
+{
+	OptionPreferences::const_iterator it = find("SmoothMotion");
+	if (it == end())
+		return TheGlobalData->m_smoothMotion;
+
+	if (stricmp(it->second.str(), "yes") == 0)
+	{
+		return TRUE;
+	}
+	return FALSE;
+}
+
 Real OptionPreferences::getMaxCameraHeight() const
 {
 	OptionPreferences::const_iterator it = find("MaxCameraHeight");
@@ -981,5 +995,42 @@ Int OptionPreferences::getSkirmishTickRate() const
 	}
 
 	return clamp(5, rate, 120);
+}
+
+// GeneralsX @feature Claude 14/10/2026 RenderScale is the game resolution in percent of the display size.
+// Below 100 the game runs in a borderless display-size window and the DXVK swap chain upscales it with FSR 1.0.
+Int OptionPreferences::getRenderScale() const
+{
+	OptionPreferences::const_iterator it = find("RenderScale");
+	if (it == end())
+		return RENDER_SCALE_OFF;
+
+	Int scale = atoi(it->second.str());
+	if (scale <= 0)
+		return RENDER_SCALE_OFF;
+
+	return clamp((Int)RENDER_SCALE_MIN, scale, (Int)RENDER_SCALE_OFF);
+}
+
+// GeneralsX @feature Claude 14/10/2026 Game resolution for a render scale: the display size scaled by
+// scale percent, rounded down to even numbers, keeping the display aspect ratio and at least 600 lines.
+Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres)
+{
+	if (scale <= 0 || scale >= RENDER_SCALE_OFF || displayWidth <= 0 || displayHeight <= 0)
+		return FALSE;
+
+	Int height = displayHeight * scale / 100;
+	if (height < RENDER_SCALE_MIN_HEIGHT)
+		height = RENDER_SCALE_MIN_HEIGHT;
+	Int width = displayWidth * height / displayHeight;
+
+	width &= ~1;
+	height &= ~1;
+	if (width >= displayWidth || height >= displayHeight)
+		return FALSE;
+
+	*xres = width;
+	*yres = height;
+	return TRUE;
 }
 

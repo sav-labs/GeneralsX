@@ -46,6 +46,7 @@
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
 #include "GameClient/Anim2D.h"
+#include "GameClient/CameraTest.h"
 #include "GameClient/CampaignManager.h"
 #include "GameClient/CommandXlat.h"
 #include "GameClient/ControlBar.h"
@@ -58,6 +59,7 @@
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GlobalLanguage.h"
 #include "GameClient/GraphDraw.h"
+#include "GameClient/GUICallbacks.h"
 #include "GameClient/GUICommandTranslator.h"
 #include "GameClient/HeaderTemplate.h"
 #include "GameClient/HintSpy.h"
@@ -526,6 +528,11 @@ void GameClient::update()
 			{
 				TheRecorder->loadQueuedReplay();
 			}
+			// GeneralsX @feature Claude 14/10/2026 Start the skirmish requested with -skirmish once the shell is up
+			else if (TheGlobalData->m_initialSkirmishMap.isNotEmpty())
+			{
+				StartQueuedSkirmishGame();
+			}
 		}
 	}
 
@@ -666,6 +673,10 @@ void GameClient::update()
 		return;
 	}
 #endif
+
+	// GeneralsX @feature Claude 14/10/2026 Fly the camera for -camtest right before the view is updated and drawn,
+	// so no scroll or zoom from the message stream can show up between our pose and the frame.
+	UpdateCameraTest();
 
 	// update the terrain visuals
 	{
