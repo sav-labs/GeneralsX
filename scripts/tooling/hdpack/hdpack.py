@@ -375,6 +375,14 @@ def drift(before, after):
     return p99(after) - p99(plain)
 
 
+def cache_settings(upscaler, model, scale, max_size, mode):
+    """Settings part of the cache key. Texture mode keeps the key it had before
+    terrain mode existed, so caches built by earlier versions stay valid."""
+    if mode == "textures":
+        return f"{upscaler}|{model}|{scale}|{max_size}|v1".encode()
+    return f"{upscaler}|{model}|{scale}|{max_size}|{mode}|v1".encode()
+
+
 def review(sources, keys, cache_dir, settings, out_ext, review_dir, count):
     """Rank cached results by drift and write comparison sheets of the worst ones."""
     from PIL import ImageDraw
@@ -470,7 +478,7 @@ def main():
     mode = "terrain" if args.terrain else "textures"
     out_ext = ".tga" if args.terrain else ".dds"
     source_dir, source_exts = (TERRAIN_DIR, TERRAIN_EXTS) if args.terrain else (TEXTURE_DIR, TEXTURE_EXTS)
-    settings = f"{args.upscaler}|{args.model}|{args.scale}|{args.max_size}|{mode}|v1".encode()
+    settings = cache_settings(args.upscaler, args.model, args.scale, args.max_size, mode)
 
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)

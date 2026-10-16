@@ -153,6 +153,10 @@ def main():
         assert report["content_pack_textures_excluded"] == ["avjeep", "gxtank"], report
         assert report["written_files"] == ["Art\\Textures\\AVTank.dds"], report["written_files"]
 
+        # Texture caches built before terrain mode existed must keep matching.
+        assert hdpack.cache_settings("onnx", "realesrgan-x4plus", 4, 1024, "textures") == b"onnx|realesrgan-x4plus|4|1024|v1"
+        assert hdpack.cache_settings("onnx", "realesrgan-x4plus", 4, 1024, "terrain") == b"onnx|realesrgan-x4plus|4|1024|terrain|v1"
+
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
         subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(onnx_out),
