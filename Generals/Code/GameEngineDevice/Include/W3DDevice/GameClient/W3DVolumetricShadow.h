@@ -56,7 +56,9 @@ public:
 	Bool init();	///<initialize resources used by manager, must have valid D3D device.
 	// shadow list management
 	void reset();
-	W3DVolumetricShadow* addShadow( RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw);	///< adds shadow caster to rendering system.
+	// GeneralsX @performance Claude 16/10/2026 overTriangleLimit is set when the model has more shadow caster
+	// triangles than Options.ini ShadowVolumeMaxTriangles; the shadow manager then uses a decal shadow.
+	W3DVolumetricShadow* addShadow( RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw, Bool *overTriangleLimit = nullptr);	///< adds shadow caster to rendering system.
 	void removeShadow(W3DVolumetricShadow *shadow);	///< removed shadow from rendering system and frees its resources.
 	void removeAllShadows(); ///< Remove all shadows.
 	/// queues up a dynamic shadow caster for rendering - only used internally by shadow system.

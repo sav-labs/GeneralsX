@@ -1182,6 +1182,72 @@ Bool OptionPreferences::getAmbientOcclusionEnabled() const
 	return stricmp(it->second.str(), "no") != 0;
 }
 
+// GeneralsX @performance Claude 16/10/2026 Options.ini PerfOverlay = yes turns on the frame profiler: a [PERF]
+// summary on stderr every PerfInterval seconds and a small text overlay in the top left corner.
+Bool OptionPreferences::getPerfOverlayEnabled() const
+{
+	OptionPreferences::const_iterator it = find("PerfOverlay");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Seconds between two [PERF] summaries, 1 to 600, default 5.
+Real OptionPreferences::getPerfIntervalSeconds() const
+{
+	OptionPreferences::const_iterator it = find("PerfInterval");
+	if (it == end())
+		return 5.0f;
+
+	return clamp(1.0f, (Real)atof(it->second.str()), 600.0f);
+}
+
+// GeneralsX @performance Claude 16/10/2026 Options.ini SkinCache: keep the deformed vertices of each skinned
+// mesh and skip the CPU skinning while its bones have not moved. On unless set to "no".
+Bool OptionPreferences::getSkinCacheEnabled() const
+{
+	OptionPreferences::const_iterator it = find("SkinCache");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Shadow volume caster meshes with at least this many triangles rebuild
+// their silhouette only after ShadowVolumeHighPolyAngle degrees of rotation instead of 0.2. Retail models stay
+// below the default of 4000 triangles. 0 turns the throttle off.
+Int OptionPreferences::getShadowVolumeHighPolyTriangles() const
+{
+	OptionPreferences::const_iterator it = find("ShadowVolumeHighPolyTriangles");
+	if (it == end())
+		return 4000;
+
+	return max(0, atoi(it->second.str()));
+}
+
+// GeneralsX @performance Claude 16/10/2026 Rotation in degrees (0.2 to 30, default 3) that a high poly shadow
+// caster mesh may turn before its shadow silhouette is rebuilt.
+Real OptionPreferences::getShadowVolumeHighPolyAngle() const
+{
+	OptionPreferences::const_iterator it = find("ShadowVolumeHighPolyAngle");
+	if (it == end())
+		return 3.0f;
+
+	return clamp(0.2f, (Real)atof(it->second.str()), 30.0f);
+}
+
+// GeneralsX @performance Claude 16/10/2026 Models whose shadow volume casters have more triangles than this in
+// total get a ground decal shadow instead of a shadow volume. 0 (the default) keeps shadow volumes for all.
+Int OptionPreferences::getShadowVolumeMaxTriangles() const
+{
+	OptionPreferences::const_iterator it = find("ShadowVolumeMaxTriangles");
+	if (it == end())
+		return 0;
+
+	return max(0, atoi(it->second.str()));
+}
+
 // GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
 // overrides the default, D:\GeneralsX\bugs on Windows. Elsewhere there is no default and the capture code
 // uses a bugs folder in the user data folder.

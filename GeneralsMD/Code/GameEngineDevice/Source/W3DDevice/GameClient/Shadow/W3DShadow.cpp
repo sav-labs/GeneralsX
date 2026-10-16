@@ -187,7 +187,25 @@ Shadow *W3DShadowManager::addShadow( RenderObjClass *robj, Shadow::ShadowTypeInf
 	if (type & SHADOW_VOLUME)
 	{
 		if (TheW3DVolumetricShadowManager)
-			return (Shadow *)TheW3DVolumetricShadowManager->addShadow(robj, shadowInfo, draw);
+		{
+			// GeneralsX @performance Claude 16/10/2026 Models over Options.ini ShadowVolumeMaxTriangles get a ground
+			// decal shadow (the default shadow.tga sized to the model's bounding box) instead of a shadow volume.
+			Bool overTriangleLimit = FALSE;
+			Shadow *shadow = (Shadow *)TheW3DVolumetricShadowManager->addShadow(robj, shadowInfo, draw, &overTriangleLimit);
+			if (shadow != nullptr || !overTriangleLimit || TheW3DProjectedShadowManager == nullptr)
+				return shadow;
+
+			Shadow::ShadowTypeInfo decalInfo;
+			if (shadowInfo)
+				decalInfo = *shadowInfo;
+			decalInfo.m_type = SHADOW_DECAL;
+			decalInfo.m_ShadowName[0] = 0;
+			decalInfo.m_sizeX = 0.0f;
+			decalInfo.m_sizeY = 0.0f;
+			decalInfo.m_offsetX = 0.0f;
+			decalInfo.m_offsetY = 0.0f;
+			return (Shadow *)TheW3DProjectedShadowManager->addShadow(robj, &decalInfo, draw);
+		}
 	}
 
 	if (type & (SHADOW_PROJECTION | SHADOW_DYNAMIC_PROJECTION | SHADOW_DECAL | SHADOW_ALPHA_DECAL | SHADOW_ADDITIVE_DECAL))

@@ -271,6 +271,8 @@ static int dx8_skin_polygons;
 static int last_frame_dx8_skin_polygons;
 static int dx8_skin_vertices;
 static int last_frame_dx8_skin_vertices;
+static int dx8_skin_cache_hits;
+static int last_frame_dx8_skin_cache_hits;
 static int dx8_polygons;
 static int last_frame_dx8_polygons;
 static int dx8_vertices;
@@ -315,6 +317,17 @@ int Debug_Statistics::Get_DX8_Skin_Polygons()
 int Debug_Statistics::Get_DX8_Skin_Vertices()
 {
 	return last_frame_dx8_skin_vertices;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Skin cache hits per frame for the frame profiler.
+void Debug_Statistics::Record_DX8_Skin_Cache_Hit()
+{
+	dx8_skin_cache_hits++;
+}
+
+int Debug_Statistics::Get_DX8_Skin_Cache_Hits()
+{
+	return last_frame_dx8_skin_cache_hits;
 }
 
 int Debug_Statistics::Get_DX8_Polygons()
@@ -362,6 +375,7 @@ void Debug_Statistics::Begin_Statistics()
 	dx8_skin_polygons=0;
 	dx8_skin_vertices=0;
 	dx8_skin_renders=0;
+	dx8_skin_cache_hits=0;
 	sorting_polygons=0;
 	sorting_vertices=0;
 	draw_calls=0;
@@ -376,6 +390,7 @@ void Debug_Statistics::End_Statistics()
 	last_frame_dx8_skin_polygons=dx8_skin_polygons;
 	last_frame_dx8_skin_vertices=dx8_skin_vertices;
 	last_frame_dx8_skin_renders=dx8_skin_renders;
+	last_frame_dx8_skin_cache_hits=dx8_skin_cache_hits;
 	last_frame_dx8_polygons=dx8_polygons;
 	last_frame_dx8_vertices=dx8_vertices;
 	last_frame_sorting_polygons=sorting_polygons;

@@ -200,4 +200,11 @@ public:
 	Bool getAmbientOcclusionEnabled() const;
 	// GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos (Options.ini CapturePath).
 	AsciiString getCapturePath() const;
+	// GeneralsX @performance Claude 16/10/2026 Frame profiler and big battle render options.
+	Bool getPerfOverlayEnabled() const;			///< Options.ini PerfOverlay, default no
+	Real getPerfIntervalSeconds() const;		///< Options.ini PerfInterval, default 5
+	Bool getSkinCacheEnabled() const;			///< Options.ini SkinCache, default yes
+	Int getShadowVolumeHighPolyTriangles() const;	///< Options.ini ShadowVolumeHighPolyTriangles, default 4000
+	Real getShadowVolumeHighPolyAngle() const;	///< Options.ini ShadowVolumeHighPolyAngle in degrees, default 3
+	Int getShadowVolumeMaxTriangles() const;	///< Options.ini ShadowVolumeMaxTriangles, default 0 (no limit)
 };

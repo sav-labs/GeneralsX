@@ -85,6 +85,7 @@
 #include "GameClient/View.h"
 #include "GameClient/VideoPlayer.h"
 #include "GameClient/WindowXlat.h"
+#include "Common/PerfStats.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/GhostObject.h"
 #include "GameLogic/Object.h"
@@ -659,6 +660,8 @@ void GameClient::update()
 
 
 		// call the update for all client drawables
+		// GeneralsX @performance Claude 16/10/2026 Drawable update time for the frame profiler.
+		PERF_STATS_SCOPE(SECTION_DRAWABLES);
 		const Real timeScale = TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
 		Drawable* draw = firstDrawable();
 		while (draw)
@@ -741,6 +744,8 @@ void GameClient::update()
 	if( !freezeTime && TheGameLogic->hasUpdated() )
 	{
 		TheParticleSystemManager->setLocalPlayerIndex(localPlayerIndex);
+		// GeneralsX @performance Claude 16/10/2026 Particle update time for the frame profiler.
+		PERF_STATS_SCOPE(SECTION_PARTICLE_UPDATE);
 		TheParticleSystemManager->UPDATE();
 	}
 
