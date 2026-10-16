@@ -28,6 +28,11 @@
 // buildings, so unit and building textures and edge antialiasing fill the screen in A/B recordings. Its timeline is
 // counted in logic frames (plus the render phase inside the frame), so runs with the same -seed show the same views.
 // It only moves the camera; the convoy spawn is the one the regular flight already does.
+// GeneralsX @feature Claude 16/10/2026 Battle flight (-camtest [seconds] battle [units] [night]): instead of the convoy, a
+// column of the local player's side and a column of the first enemy player's side spawn facing each other on open ground
+// in front of the local start position and attack-move through each other, one structure near the fight is damaged to
+// 30% health so it burns and smokes, and the camera orbits the middle of the battle line at a medium-low height. "night"
+// switches the match to night when it starts. Like the convoy, this changes the match and only happens with -camtest.
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
@@ -40,13 +45,18 @@
 #include "Common/PlayerTemplate.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
+#include "GameClient/Drawable.h"
+#include "GameClient/GameClient.h"
 #include "GameClient/View.h"
 #include "GameLogic/AI.h"
+#include "GameLogic/Damage.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/PartitionManager.h"
 #include "GameLogic/TerrainLogic.h"
+#include "GameLogic/Weapon.h"
 #include "GameNetwork/GameInfo.h"
 
 #include "PlatformEnvironment.h"
@@ -96,6 +106,26 @@ constexpr const Real CameraTestCloseOrbitSpeed = DEG_TO_RADF(9.0f);	///< Camera 
 constexpr const Real CameraTestCloseSearchRadius = 450.0f;		///< Buildings are picked within this distance of the start position
 constexpr const Real CameraTestCloseMinRadius = 12.0f;				///< Skips fences and small props
 
+// GeneralsX @feature Claude 16/10/2026 Battle flight. The unit count of -camtest battle <units> is the whole scene, split
+// evenly between the two sides.
+constexpr const Int CameraTestBattleDefaultPerSide = 10;			///< Units per side when no count is given
+constexpr const Int CameraTestBattleMinPerSide = 4;
+constexpr const Int CameraTestBattleMaxPerSide = 60;
+constexpr const Int CameraTestBattleAirCount = 2;						///< Helicopters per side, when the side has one
+constexpr const Int CameraTestBattleAirMinPerSide = 8;				///< Smaller columns get no helicopters
+constexpr const Int CameraTestBattleSupportPercent = 30;			///< Share of artillery and rocket units in the rear rows
+constexpr const Int CameraTestBattleMinWidth = 3;						///< Units per row across the battle line
+constexpr const Int CameraTestBattleMaxWidth = 8;
+constexpr const Real CameraTestBattleGap = 280.0f;						///< Distance between the two front rows at spawn
+constexpr const Real CameraTestBattleRowSpacing = 40.0f;
+constexpr const Real CameraTestBattleColumnSpacing = 40.0f;
+constexpr const Real CameraTestBattleMapMargin = 150.0f;			///< The battle center keeps this far from the map edges
+constexpr const Real CameraTestBattleBuildingRadius = 700.0f;	///< The burning structure is picked within this distance of the battle center
+constexpr const Real CameraTestBattleBuildingHealth = 0.3f;		///< Health fraction left to the burning structure
+constexpr const Real CameraTestBattleOrbitSpeed = DEG_TO_RADF(8.0f);	///< Camera yaw change per second around the battle center
+constexpr const Real CameraTestBattleEndHeightScale = 0.8f;		///< Final camera height as a fraction of the minimum zoom height
+constexpr const Real CameraTestBattlePitch = DEG_TO_RADF(30.0f);	///< Final pitch, lower than the default 37.5
+
 // GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
 // DXVK reads the process environment on every present while it waits: the prepare value starts the encoder when the
 // match starts, the event value starts recording with the first frame of the flight. It only affects rendering tools.
@@ -104,19 +134,23 @@ constexpr const char *CameraTestCapturePrepare = "camtest.prepare";
 constexpr const char *CameraTestCaptureStart = "camtest";
 
 /// Templates of one side: a main battle tank, a fast vehicle and a helicopter (empty when there is none).
+// GeneralsX @feature Claude 16/10/2026 Plus the artillery and rocket units the battle flight puts in its rear rows
+// (retail template names; a name the game does not know is skipped, America has the Tomahawk for both).
 struct CameraTestSideUnits
 {
 	const char *baseSide;
 	const char *tank;
 	const char *fast;
 	const char *air;
+	const char *artillery;
+	const char *rocket;
 };
 
 const CameraTestSideUnits CameraTestSides[] =
 {
-	{ "America", "AmericaTankCrusader", "AmericaVehicleHumvee", "AmericaVehicleComanche" },
-	{ "China", "ChinaTankBattleMaster", "ChinaTankGattling", "ChinaVehicleHelix" },
-	{ "GLA", "GLATankScorpion", "GLAVehicleTechnical", "" },
+	{ "America", "AmericaTankCrusader", "AmericaVehicleHumvee", "AmericaVehicleComanche", "AmericaVehicleTomahawk", "" },
+	{ "China", "ChinaTankBattleMaster", "ChinaTankGattling", "ChinaVehicleHelix", "ChinaVehicleInfernoCannon", "ChinaVehicleNukeLauncher" },
+	{ "GLA", "GLATankScorpion", "GLAVehicleTechnical", "", "GLAVehicleScudLauncher", "GLAVehicleRocketBuggy" },
 };
 
 struct CameraTestState
@@ -147,6 +181,12 @@ struct CameraTestState
 	AsciiString closeTargetName[CameraTestCloseMaxTargets];
 	Int closeTargetCount;
 	Int closeShot;													///< Last logged shot, -1 before the first
+
+	// GeneralsX @feature Claude 16/10/2026 Battle flight state
+	Bool battle;														///< The battle was spawned, the camera orbits battleCenter
+	Coord2D battleCenter;										///< Middle of the two front rows at spawn
+	ObjectID battleUnits[2][CameraTestBattleMaxPerSide];	///< Local column, enemy column
+	Int battleCount[2];
 };
 
 CameraTestState s_cameraTest;
@@ -211,7 +251,10 @@ const ThingTemplate *findCameraTestTemplate(const char *preferred, const char *f
 }
 
 /// Creates one unit near pos, facing angle, and orders it to move to dest through the normal AI command path.
-Object *spawnCameraTestUnit(const ThingTemplate *thingTemplate, Team *team, const Coord2D &pos, Real angle, const Coord2D &dest)
+// GeneralsX @feature Claude 16/10/2026 attackMove gives an attack-move order instead, so the battle columns shoot what
+// they meet on the way.
+Object *spawnCameraTestUnit(const ThingTemplate *thingTemplate, Team *team, const Coord2D &pos, Real angle, const Coord2D &dest,
+	Bool attackMove = FALSE)
 {
 	Object *obj = TheThingFactory->newObject(thingTemplate, team);
 	if (obj == nullptr)
@@ -241,7 +284,10 @@ Object *spawnCameraTestUnit(const ThingTemplate *thingTemplate, Team *team, cons
 		moveTo.x = dest.x;
 		moveTo.y = dest.y;
 		moveTo.z = TheTerrainLogic->getGroundHeight(dest.x, dest.y);
-		ai->aiMoveToPosition(&moveTo, CMD_FROM_PLAYER);
+		if (attackMove)
+			ai->aiAttackMoveToPosition(&moveTo, NO_MAX_SHOTS_LIMIT, CMD_FROM_PLAYER);
+		else
+			ai->aiMoveToPosition(&moveTo, CMD_FROM_PLAYER);
 	}
 	return obj;
 }
@@ -520,6 +566,357 @@ void chooseCameraTestCloseTargets()
 	s.closeTargetCount = bestCount;
 }
 
+/// GeneralsX @feature Claude 15/10/2026 Smooth start and stop of a glide.
+Real getCameraTestSmoothStep(Real t)
+{
+	const Real x = clamp(0.0f, t, 1.0f);
+	return x * x * (3.0f - 2.0f * x);
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Units per side of the battle flight: half the -camtest battle count, clamped.
+Int getCameraTestBattlePerSide()
+{
+	const Int units = TheGlobalData->m_cameraTestBattleUnits;
+	if (units <= 0)
+		return CameraTestBattleDefaultPerSide;
+	return clamp(CameraTestBattleMinPerSide, (units + 1) / 2, CameraTestBattleMaxPerSide);
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Layout of one battle column: helicopters, ground units, units per row and rows.
+struct CameraTestBattleLayout
+{
+	Int air;
+	Int ground;
+	Int width;
+	Int rows;
+};
+
+CameraTestBattleLayout getCameraTestBattleLayout(Int perSide, Bool hasAir)
+{
+	CameraTestBattleLayout layout;
+	layout.air = (hasAir && perSide >= CameraTestBattleAirMinPerSide) ? CameraTestBattleAirCount : 0;
+	layout.ground = perSide - layout.air;
+	// About one and a half times as wide as deep
+	layout.width = CameraTestBattleMinWidth;
+	while (layout.width < CameraTestBattleMaxWidth && layout.width * layout.width < layout.ground * 3 / 2)
+		++layout.width;
+	layout.rows = (layout.ground + layout.width - 1) / layout.width;
+	return layout;
+}
+
+/// GeneralsX @feature Claude 16/10/2026 The first active player the local player considers an enemy, by player index.
+Player *findCameraTestEnemyPlayer(const Player *localPlayer)
+{
+	for (Int i = 0; i < ThePlayerList->getPlayerCount(); ++i)
+	{
+		Player *player = ThePlayerList->getNthPlayer(i);
+		if (player == nullptr || player == localPlayer || !player->isPlayerActive())
+			continue;
+		const Team *team = player->getDefaultTeam();
+		if (team != nullptr && localPlayer->getRelationship(team) == ENEMIES)
+			return player;
+	}
+	return nullptr;
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Spawns one battle column. Its front row lies gap/2 before the center, against
+/// toEnemy, the rows extend backwards, tanks and fast vehicles lead, artillery and rocket units fill the rear rows and the
+/// helicopters fly in behind the flanks. Every unit attack-moves to its mirror image behind the other column.
+Int spawnCameraTestBattleColumn(Player *player, const Coord2D &center, const Coord2D &toEnemy, ObjectID *ids,
+	AsciiString *summary)
+{
+	Team *team = player->getDefaultTeam();
+	if (team == nullptr)
+		return 0;
+
+	const CameraTestSideUnits &side = getCameraTestSideUnits(player);
+	const ThingTemplate *tank = findCameraTestTemplate(side.tank, side.fast, CameraTestSides[0].tank);
+	const ThingTemplate *fast = findCameraTestTemplate(side.fast, side.tank, CameraTestSides[0].fast);
+	const ThingTemplate *air = findCameraTestTemplate(side.air, nullptr, nullptr);
+	const ThingTemplate *artillery = findCameraTestTemplate(side.artillery, side.rocket, nullptr);
+	const ThingTemplate *rocket = findCameraTestTemplate(side.rocket, side.artillery, nullptr);
+
+	const CameraTestBattleLayout layout = getCameraTestBattleLayout(getCameraTestBattlePerSide(), air != nullptr);
+	const Int support = artillery != nullptr ? layout.ground * CameraTestBattleSupportPercent / 100 : 0;
+	const Int front = layout.ground - support;
+
+	Coord2D right;
+	right.x = -toEnemy.y;
+	right.y = toEnemy.x;
+	const Real angle = toEnemy.toAngle();
+
+	Coord2D frontRow;
+	frontRow.x = center.x - toEnemy.x * CameraTestBattleGap * 0.5f;
+	frontRow.y = center.y - toEnemy.y * CameraTestBattleGap * 0.5f;
+
+	Int count = 0;
+	Int counts[5] = { 0, 0, 0, 0, 0 };	// tank, fast, artillery, rocket, air
+	for (Int i = 0; i < layout.ground; ++i)
+	{
+		const Int row = i / layout.width;
+		const Int inRow = min(layout.width, layout.ground - row * layout.width);
+		const Real lateral = ((Real)(i % layout.width) - (Real)(inRow - 1) * 0.5f) * CameraTestBattleColumnSpacing;
+
+		Int kind;
+		if (i < front)
+			kind = (i % 3) == 2 ? 1 : 0;
+		else
+			kind = ((i - front) % 2) == 0 ? 2 : 3;
+		const ThingTemplate *thingTemplate = kind == 0 ? tank : kind == 1 ? fast : kind == 2 ? artillery : rocket;
+		if (thingTemplate == nullptr)
+			continue;
+
+		const Real back = CameraTestBattleRowSpacing * row;
+		Coord2D pos;
+		pos.x = frontRow.x - toEnemy.x * back + right.x * lateral;
+		pos.y = frontRow.y - toEnemy.y * back + right.y * lateral;
+
+		Coord2D dest;
+		dest.x = pos.x + toEnemy.x * (CameraTestBattleGap + 2.0f * back);
+		dest.y = pos.y + toEnemy.y * (CameraTestBattleGap + 2.0f * back);
+
+		Object *obj = spawnCameraTestUnit(thingTemplate, team, pos, angle, dest, TRUE);
+		if (obj != nullptr)
+		{
+			ids[count++] = obj->getID();
+			++counts[kind];
+		}
+	}
+
+	for (Int i = 0; i < layout.air; ++i)
+	{
+		const Real columnSign = (i % 2) == 0 ? -1.0f : 1.0f;
+		const Real back = CameraTestBattleRowSpacing * layout.rows;
+		const Real lateral = CameraTestBattleColumnSpacing * (layout.width * 0.5f + 1.0f) * columnSign;
+
+		Coord2D pos;
+		pos.x = frontRow.x - toEnemy.x * back + right.x * lateral;
+		pos.y = frontRow.y - toEnemy.y * back + right.y * lateral;
+
+		Coord2D dest;
+		dest.x = pos.x + toEnemy.x * (CameraTestBattleGap + 2.0f * back);
+		dest.y = pos.y + toEnemy.y * (CameraTestBattleGap + 2.0f * back);
+
+		Object *obj = spawnCameraTestUnit(air, team, pos, angle, dest, TRUE);
+		if (obj != nullptr)
+		{
+			ids[count++] = obj->getID();
+			++counts[4];
+		}
+	}
+
+	summary->format("%s %d units (%d %s, %d %s, %d %s, %d %s, %d %s)", side.baseSide, count,
+		counts[0], tank != nullptr ? tank->getName().str() : "none",
+		counts[1], fast != nullptr ? fast->getName().str() : "none",
+		counts[2], artillery != nullptr ? artillery->getName().str() : "none",
+		counts[3], rocket != nullptr ? rocket->getName().str() : "none",
+		counts[4], air != nullptr ? air->getName().str() : "none");
+	return count;
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Damages the structure nearest the battle center to 30% health through its body
+/// module, so it burns and smokes in frame. Structures of the two fighting players come first, then any other one.
+/// Ties are broken by object ID so every run picks the same structure.
+void burnCameraTestBattleBuilding(const Coord2D &center, const Player *localPlayer, const Player *enemyPlayer,
+	AsciiString *summary)
+{
+	*summary = "none";
+
+	Object *best = nullptr;
+	Int bestRank = 0;
+	Real bestDistSqr = 0.0f;
+	const Real searchSqr = CameraTestBattleBuildingRadius * CameraTestBattleBuildingRadius;
+	for (Object *obj = TheGameLogic->getFirstObject(); obj != nullptr; obj = obj->getNextObject())
+	{
+		if (obj->isEffectivelyDead() || !obj->isKindOf(KINDOF_STRUCTURE)
+			|| obj->isKindOf(KINDOF_BRIDGE) || obj->isKindOf(KINDOF_BRIDGE_TOWER) || obj->isKindOf(KINDOF_WALK_ON_TOP_OF_WALL))
+			continue;
+		if (obj->getGeometryInfo().getBoundingCircleRadius() < CameraTestCloseMinRadius)
+			continue;
+		const BodyModuleInterface *body = obj->getBodyModule();
+		if (body == nullptr || body->getMaxHealth() <= 0.0f)
+			continue;
+
+		const Real dx = obj->getPosition()->x - center.x;
+		const Real dy = obj->getPosition()->y - center.y;
+		const Real distSqr = dx * dx + dy * dy;
+		if (distSqr > searchSqr)
+			continue;
+
+		const Player *owner = obj->getControllingPlayer();
+		const Int rank = (owner == localPlayer || owner == enemyPlayer) ? 0 : 1;
+		const Bool better = best == nullptr
+			|| (rank != bestRank ? rank < bestRank
+			: distSqr != bestDistSqr ? distSqr < bestDistSqr
+			: obj->getID() < best->getID());
+		if (better)
+		{
+			best = obj;
+			bestRank = rank;
+			bestDistSqr = distSqr;
+		}
+	}
+
+	if (best == nullptr)
+		return;
+
+	BodyModuleInterface *body = best->getBodyModule();
+	const Real maxHealth = body->getMaxHealth();
+	const Real damage = body->getHealth() - maxHealth * CameraTestBattleBuildingHealth;
+	if (damage > 0.0f)
+	{
+		DamageInfo damageInfo;
+		damageInfo.in.m_damageType = DAMAGE_UNRESISTABLE;
+		damageInfo.in.m_deathType = DEATH_NORMAL;
+		damageInfo.in.m_sourceID = INVALID_ID;
+		damageInfo.in.m_amount = damage;
+		best->attemptDamage(&damageInfo);
+	}
+
+	summary->format("%s at (%.1f, %.1f), health %.0f/%.0f", best->getTemplate()->getName().str(),
+		best->getPosition()->x, best->getPosition()->y, body->getHealth(), maxHealth);
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Spawns the battle in front of the local start position, towards the map center.
+/// False when the match has no enemy player, so the regular flight takes over.
+Bool beginCameraTestBattle()
+{
+	CameraTestState &s = s_cameraTest;
+	s.battle = FALSE;
+	s.battleCount[0] = 0;
+	s.battleCount[1] = 0;
+
+	if (ThePlayerList == nullptr || TheThingFactory == nullptr || ThePartitionManager == nullptr || TheTerrainLogic == nullptr)
+		return FALSE;
+
+	Player *localPlayer = ThePlayerList->getLocalPlayer();
+	if (localPlayer == nullptr || localPlayer->getDefaultTeam() == nullptr)
+	{
+		fprintf(stderr, "[CAMTEST] battle: no local player team\n");
+		fflush(stderr);
+		return FALSE;
+	}
+
+	Player *enemyPlayer = findCameraTestEnemyPlayer(localPlayer);
+	if (enemyPlayer == nullptr)
+	{
+		fprintf(stderr, "[CAMTEST] battle: no enemy player\n");
+		fflush(stderr);
+		return FALSE;
+	}
+
+	// The local column's rear row stands where the regular convoy leads, the battle center lies past its front row
+	const Bool localHasAir = findCameraTestTemplate(getCameraTestSideUnits(localPlayer).air, nullptr, nullptr) != nullptr;
+	const CameraTestBattleLayout localLayout = getCameraTestBattleLayout(getCameraTestBattlePerSide(), localHasAir);
+	const Real lead = CameraTestConvoyLead + CameraTestBattleRowSpacing * (localLayout.rows - 1) + CameraTestBattleGap * 0.5f;
+
+	Coord2D center;
+	center.x = s.startPos.x + s.panDir.x * lead;
+	center.y = s.startPos.y + s.panDir.y * lead;
+
+	Region3D extent;
+	TheTerrainLogic->getExtent(&extent);
+	if (extent.hi.x - extent.lo.x > 2.0f * CameraTestBattleMapMargin && extent.hi.y - extent.lo.y > 2.0f * CameraTestBattleMapMargin)
+	{
+		center.x = clamp(extent.lo.x + CameraTestBattleMapMargin, center.x, extent.hi.x - CameraTestBattleMapMargin);
+		center.y = clamp(extent.lo.y + CameraTestBattleMapMargin, center.y, extent.hi.y - CameraTestBattleMapMargin);
+	}
+	s.battleCenter = center;
+
+	Coord2D toLocal;
+	toLocal.x = -s.panDir.x;
+	toLocal.y = -s.panDir.y;
+
+	AsciiString localSummary;
+	AsciiString enemySummary;
+	s.battleCount[0] = spawnCameraTestBattleColumn(localPlayer, center, s.panDir, s.battleUnits[0], &localSummary);
+	s.battleCount[1] = spawnCameraTestBattleColumn(enemyPlayer, center, toLocal, s.battleUnits[1], &enemySummary);
+
+	AsciiString buildingSummary;
+	burnCameraTestBattleBuilding(center, localPlayer, enemyPlayer, &buildingSummary);
+
+	s.battle = TRUE;
+	fprintf(stderr, "[CAMTEST] battle start: center (%.1f, %.1f), local %s, enemy %s (player %d), burning %s, night %s, %.1f s orbit\n",
+		center.x, center.y, localSummary.str(), enemySummary.str(), enemyPlayer->getPlayerIndex(), buildingSummary.str(),
+		TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT ? "on" : "off", TheGlobalData->m_cameraTestSeconds);
+	fflush(stderr);
+	return TRUE;
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Live units of one battle column.
+Int countCameraTestBattleAlive(Int column)
+{
+	const CameraTestState &s = s_cameraTest;
+	Int alive = 0;
+	for (Int i = 0; i < s.battleCount[column]; ++i)
+	{
+		const Object *obj = TheGameLogic->findObjectByID(s.battleUnits[column][i]);
+		if (obj != nullptr && !obj->isEffectivelyDead())
+			++alive;
+	}
+	return alive;
+}
+
+/// GeneralsX @feature Claude 16/10/2026 Places the battle camera for the given flight time, counted in logic frames:
+/// a slow orbit around the battle center that glides from the minimum zoom height and the default pitch down to a
+/// medium-low height (never below the close-up flight's height) and a lower pitch.
+void applyCameraTestBattlePose(Real flightSeconds)
+{
+	const CameraTestState &s = s_cameraTest;
+	const Real total = TheGlobalData->m_cameraTestSeconds;
+	const Real blend = getCameraTestSmoothStep(total > 0.0f ? flightSeconds / total : 1.0f);
+
+	const Real closeHeight = max(s.minHeight * CameraTestCloseHeightScale, CameraTestCloseMinHeight);
+	const Real endHeight = clamp(closeHeight, s.minHeight * CameraTestBattleEndHeightScale, max(closeHeight, s.minHeight));
+	const Real height = s.minHeight + (endHeight - s.minHeight) * blend;
+
+	Coord3D pivot;
+	pivot.x = s.battleCenter.x;
+	pivot.y = s.battleCenter.y;
+	pivot.z = TheTerrainLogic != nullptr ? TheTerrainLogic->getGroundHeight(pivot.x, pivot.y) : 0.0f;
+
+	TheTacticalView->lookAt(&pivot);
+	TheTacticalView->setAngle(s.startAngle + CameraTestBattleOrbitSpeed * flightSeconds);
+	TheTacticalView->setPitch(s.pitch + (CameraTestBattlePitch - s.pitch) * blend);
+	if (s.maxHeight > 0.0f)
+	{
+		// setZoom is not clamped to the minimum zoom height, so the medium-low height holds
+		TheTacticalView->setZoom(height / s.maxHeight);
+	}
+}
+
+/// GeneralsX @feature Claude 16/10/2026 -camtest night: switches the match to night the way the debug time of day
+/// command does (global lighting, then the drawables, water, shadows and terrain through the game client).
+void applyCameraTestNight()
+{
+	const TimeOfDay previous = TheGlobalData->m_timeOfDay;
+	if (!TheWritableGlobalData->setTimeOfDay(TIME_OF_DAY_NIGHT))
+		return;
+
+	if (TheGameClient != nullptr)
+	{
+		TheGameClient->setTimeOfDay(TheGlobalData->m_timeOfDay);
+		if (TheGlobalData->m_forceModelsToFollowTimeOfDay)
+		{
+			for (Object *obj = TheGameLogic->getFirstObject(); obj != nullptr; obj = obj->getNextObject())
+			{
+				Drawable *draw = obj->getDrawable();
+				if (draw != nullptr)
+				{
+					// Forces a refresh of the model condition, which includes the night state
+					ModelConditionFlags empty;
+					draw->clearAndSetModelConditionFlags(empty, empty);
+				}
+			}
+		}
+	}
+
+	fprintf(stderr, "[CAMTEST] night: time of day %s -> %s\n",
+		(previous >= TIME_OF_DAY_FIRST && previous < TIME_OF_DAY_COUNT) ? TimeOfDayNames[previous] : "unknown",
+		TimeOfDayNames[TIME_OF_DAY_NIGHT]);
+	fflush(stderr);
+}
+
 void beginCameraTestFlight()
 {
 	CameraTestState &s = s_cameraTest;
@@ -554,8 +951,13 @@ void beginCameraTestFlight()
 		s.startPos.x, s.startPos.y, TheGlobalData->m_cameraTestSeconds, s.panDir.x, s.panDir.y, CameraTestZoomOutSeconds);
 	fflush(stderr);
 
+	// GeneralsX @feature Claude 16/10/2026 The battle flight spawns two hostile columns instead of the convoy; without an
+	// enemy player it falls back to the regular flight
+	const Bool battle = TheGlobalData->m_cameraTestBattle && beginCameraTestBattle();
+
 	// The convoy drives from near the start position to about the map center
-	spawnCameraTestConvoy(distanceToCenter);
+	if (!battle)
+		spawnCameraTestConvoy(distanceToCenter);
 	s.hasCentroid = FALSE;
 	s.hasFollowPivot = FALSE;
 
@@ -563,7 +965,7 @@ void beginCameraTestFlight()
 	s.flightFrame = TheGameLogic->getFrame();
 	s.closeShot = -1;
 	s.closeTargetCount = 0;
-	if (TheGlobalData->m_cameraTestClose)
+	if (TheGlobalData->m_cameraTestClose && !battle)
 	{
 		chooseCameraTestCloseTargets();
 		fprintf(stderr, "[CAMTEST] close start: logic frame %u, %.1f s along the convoy, %d building(s), height %.1f (min zoom %.1f), pitch %.1f\n",
@@ -581,13 +983,6 @@ Real getCameraTestCloseTotalSeconds()
 	// Without buildings the convoy shot takes the whole flight
 	const Int shots = s_cameraTest.closeTargetCount > 0 ? s_cameraTest.closeTargetCount : CameraTestCloseMaxTargets;
 	return scale * (CameraTestCloseConvoySeconds + shots * (CameraTestCloseGlideSeconds + CameraTestCloseHoldSeconds));
-}
-
-/// GeneralsX @feature Claude 15/10/2026 Smooth start and stop of a glide.
-Real getCameraTestSmoothStep(Real t)
-{
-	const Real x = clamp(0.0f, t, 1.0f);
-	return x * x * (3.0f - 2.0f * x);
 }
 
 /// GeneralsX @feature Claude 15/10/2026 Places the close-up camera for the given flight time, counted in logic frames.
@@ -724,6 +1119,9 @@ void UpdateCameraTest()
 		s.hasCentroid = FALSE;
 		s.hasFollowPivot = FALSE;
 		s.closeTargetCount = 0;
+		s.battle = FALSE;
+		s.battleCount[0] = 0;
+		s.battleCount[1] = 0;
 		return;
 	}
 
@@ -736,6 +1134,9 @@ void UpdateCameraTest()
 		s.elapsedSeconds = 0.0f;
 		fprintf(stderr, "[CAMTEST] match started, flight begins at logic frame %u\n", CameraTestSettleFrames);
 		fflush(stderr);
+		// GeneralsX @feature Claude 16/10/2026 Night for the whole recorded flight, set before the settle wait
+		if (TheGlobalData->m_cameraTestNight)
+			applyCameraTestNight();
 		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCapturePrepare);
 		return;
 	}
@@ -758,6 +1159,26 @@ void UpdateCameraTest()
 		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCaptureStart);
 		fprintf(stderr, "[CAMTEST] capture signal: %s=%s\n", CameraTestCaptureSignal, CameraTestCaptureStart);
 		fflush(stderr);
+	}
+
+	// GeneralsX @feature Claude 16/10/2026 The battle flight is timed like the close-up flight and lasts the given seconds.
+	if (s.battle)
+	{
+		const Real phase = clamp(0.0f, TheFramePacer->getLogicFramePhase(), 1.0f);
+		const Real battleSeconds = ((Real)(TheGameLogic->getFrame() - s.flightFrame) + phase) / (Real)LOGICFRAMES_PER_SECOND;
+		const Real battleTotal = TheGlobalData->m_cameraTestSeconds;
+
+		applyCameraTestBattlePose(min(battleSeconds, battleTotal));
+
+		if (battleSeconds >= battleTotal)
+		{
+			s.phase = CAMERA_TEST_DONE;
+			fprintf(stderr, "[CAMTEST] battle stop: flight finished after %u logic frames (%.2f s), alive local %d/%d, enemy %d/%d\n",
+				TheGameLogic->getFrame() - s.flightFrame, battleSeconds,
+				countCameraTestBattleAlive(0), s.battleCount[0], countCameraTestBattleAlive(1), s.battleCount[1]);
+			fflush(stderr);
+		}
+		return;
 	}
 
 	// GeneralsX @feature Claude 15/10/2026 The close-up flight is timed in logic frames plus the render phase inside the

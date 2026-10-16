@@ -30,4 +30,10 @@
 // GeneralsX @feature Claude 15/10/2026 With -camclose (or -camtest [seconds] close) the flight is a close-up instead:
 // below the minimum zoom height, with a lower pitch and no zoom-out, along the convoy and then past the local
 // player's base buildings. It is timed in logic frames, about 10 seconds for -camtest 8.
+// GeneralsX @feature Claude 16/10/2026 With -camtest [seconds] battle [units] [night] a column of the local player's side
+// and a column of the first enemy player's side (artillery and rocket units in the rear rows) spawn facing each other in
+// front of the local start position and attack-move through each other, a structure near the fight is damaged to 30%
+// health so it burns, and the camera orbits the battle line for the given seconds. units is the whole scene, split
+// evenly between both sides (default 20, at most 120). night switches the match to night when it starts. Without an
+// enemy player the regular flight runs instead.
 void UpdateCameraTest();
