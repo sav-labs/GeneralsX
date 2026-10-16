@@ -8,44 +8,39 @@ the CREDITS.md fetched with the sources.
 """
 
 UNITS = {
-    # M1A1 Abrams by MirzaArrafiERV_45, CC-BY. Its objects are split by material, so the turret, gun and
-    # wheels are picked out of the loose pieces by position; misc_a.4 is a decal layer (alpha-cut
-    # markings) and is dropped; chassis_vlo.7 is the static track, replaced by our scrolling band.
+    # M1A2 Abrams by coderslava402, CC-BY: desert tan with normal and metal/roughness maps. Four objects
+    # share the "abram" material (hull, turret floor, turret with its fittings, gun), split into loose
+    # faces; "transmin" is one object per wheel, "track" the static track and its upper run, replaced by
+    # our scrolling band. The whip antennas would stand 20 units tall and are dropped.
     "crusader": {
-        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 12000, "split": ".",
+        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 15000, "split": "abram",
         "parents": {"BARREL": "TURRET"},
         # The retail Crusader's Draw module fires from TurretMS and recoils Barrel.
         "muzzles": {"TURRETMS": "BARREL", "TURRETFX": "BARREL"},
         "rules": [
-            {"name": r"misc_a\.4", "bone": "DROP"},
-            {"name": r"chassis_vlo\.7", "bone": "TRACK"},
-            {"box": (4.0, 30.0, -1.2, 1.2, 8.3, 11.0), "bone": "BARREL"},
-            # The turret with its bustle rack and stowage boxes overhanging the engine deck.
-            {"box": (-21.0, 6.0, -8.0, 8.0, 7.9, 30.0), "bone": "TURRET"},
-            # Road wheels (centres 2 up, 6.2 out), drive sprocket at the rear, idler at the front; the
-            # torsion-bar arms just inboard stay on the hull.
-            {"box": (-16.0, 9.0, 5.6, 7.0, 1.2, 2.8), "maxsize": 4.0, "bone": "WHEEL#"},
-            {"box": (-16.0, 9.0, -7.0, -5.6, 1.2, 2.8), "maxsize": 4.0, "bone": "WHEEL#"},
-            {"box": (-20.0, -16.5, 4.8, 7.2, 3.6, 5.4), "maxsize": 4.0, "bone": "SPROCKET#"},
-            {"box": (-20.0, -16.5, -7.2, -4.8, 3.6, 5.4), "maxsize": 4.0, "bone": "SPROCKET#"},
-            {"box": (11.0, 14.0, 4.0, 6.0, 3.6, 5.6), "maxsize": 4.0, "bone": "IDLER#"},
-            {"box": (11.0, 14.0, -6.0, -4.0, 3.6, 5.6), "maxsize": 4.0, "bone": "IDLER#"},
+            {"name": r"^Object_13 ", "box": (-18.0, -12.0, -9.0, 9.0, 14.5, 30.0), "bone": "DROP"},
+            {"name": r"track", "bone": "TRACK"},
+            {"name": r"^Object_9 ", "bone": "BARREL"},
+            {"name": r"^Object_(11|13) ", "bone": "TURRET"},
+            # Drive sprocket at the rear, idler at the front, seven road wheels between.
+            {"name": r"transmin", "box": (-30.0, -16.5, -10.0, 10.0, 0.0, 8.0), "bone": "SPROCKET#"},
+            {"name": r"transmin", "box": (8.5, 30.0, -10.0, 10.0, 0.0, 8.0), "bone": "IDLER#"},
+            {"name": r"transmin", "bone": "WHEEL#"},
         ],
-        # Desert tan #B49A6E: (colour, unused, how much of the repaint replaces the source's grey-olive).
         "tint": ((180, 154, 110), None, 1.0),
-        # Tyres and sprocket teeth: (finish, from what fraction of the wheel's radius outwards).
         "rims": {"WHEEL": ("rubber", 0.8), "SPROCKET": ("metal", 0.82)},
-        # Side skirt sections: dark seams between them.
-        "seams": [(-25.0, 25.0, 7.4, 9.5, 3.0, 7.5), (-25.0, 25.0, -9.5, -7.4, 3.0, 7.5)],
         "track": {"links": 3.5, "sprocket": 0.88},
-        # Damaged: a skirt section torn off on the left, one hanging on the right, the left stowage boxes
-        # blown off the turret bustle, the gun sagging.
-        "damage": {"drop": [(-10.5, -6.5, 7.4, 9.5, 3.0, 7.5), (-19.5, -14.5, 2.0, 7.5, 9.0, 12.5)],
-                   "bend": [((1.0, 7.0, -9.5, -7.4, 3.0, 7.5), 28.0)], "droop": 6.0},
-        "burns": [((-15.0, 0.0, 7.0), 6.0), ((-3.0, 6.5, 10.0), 3.5), ((2.0, -7.0, 5.0), 3.5), ((-9.0, 7.5, 5.0), 3.5),
-                  ((8.0, 2.0, 8.0), 2.5), ((-5.0, -3.0, 11.5), 2.5), ((-17.0, 4.5, 10.5), 3.0)],
-        "fx": {"SMOKE01": (-15.0, -2.0, 7.4), "SMOKE02": (-13.0, 3.0, 7.4), "SMOKE03": (-5.0, 3.0, 11.6),
-               "FIRE01": (-15.0, 0.0, 7.4), "FIRE02": (-17.0, -4.5, 7.2), "FIRE03": (-5.0, -3.0, 11.6)},
+        # Damaged: the middle skirt section torn off on the left, the rear one hanging on the right, the
+        # gun sagging.
+        "damage": {"drop": [(-9.9, -3.6, 7.6, 9.2, 2.6, 7.4)],
+                   "bend": [((-16.3, -10.1, -9.2, -7.6, 2.6, 7.4), 32.0)], "droop": 6.0},
+        "burns": [((-19.0, 0.0, 8.2), 5.0), ((-6.0, 7.6, 10.0), 3.0), ((2.0, -8.4, 5.0), 3.0),
+                  ((-7.0, 8.0, 4.5), 3.0), ((4.0, 3.0, 11.0), 2.5), ((-8.0, -3.0, 12.0), 2.5),
+                  ((-16.0, 4.5, 11.0), 3.0)],
+        # Penetrations: turret side, hull side behind the torn skirt, turret front corner.
+        "hits": [((-6.5, 7.7, 10.2), 0.8), ((-6.5, 8.0, 4.6), 0.9), ((3.0, -6.0, 10.0), 0.7)],
+        "fx": {"SMOKE01": (-19.0, -2.0, 8.4), "SMOKE02": (-17.0, 3.0, 8.4), "SMOKE03": (-8.0, 3.0, 12.3),
+               "FIRE01": (-19.0, 0.0, 8.4), "FIRE02": (-20.0, -4.5, 8.2), "FIRE03": (-8.0, -3.0, 12.3)},
     },
     # M109A6 Paladin by MirzaArrafiERV_45, CC-BY. Named objects: cannon and cradle, turret with its
     # stowage, numbered wheels (1 and 10 the drive sprockets at the front, 9 and 18 the idlers), tracks.

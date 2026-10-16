@@ -625,7 +625,10 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
         L(amp.outputs[0], wp.inputs[1])
         warped = wp.outputs[0]
         heat = None
-        for centre, radius in burns or ():
+        hit_heat = None
+        for burn in burns or ():
+            centre, radius = burn[0], burn[1]
+            hit = len(burn) > 2 and burn[2] == "hit"
             off = N("ShaderNodeVectorMath")
             off.operation = "SUBTRACT"
             L(warped, off.inputs[0])
@@ -638,6 +641,10 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
             ln.operation = "LENGTH"
             L(sq.outputs[0], ln.inputs[0])
             h = math_node("SUBTRACT", 1.0, ln.outputs["Value"])
+            if hit:
+                hit_heat = h if hit_heat is None else math_node("MAXIMUM", hit_heat, h)
+                # A penetration also scorches the paint around it, twice its radius out.
+                h = math_node("SUBTRACT", 1.0, math_node("MULTIPLY", ln.outputs["Value"], 0.5))
             heat = h if heat is None else math_node("MAXIMUM", heat, h)
         if heat is None:
             heat = noise(0.22, 5.0, coords, w=11.0)
@@ -660,8 +667,24 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
         for e in list(el)[1:]:
             e.alpha = 1.0
         col = mix(cr.outputs["Alpha"], col, cr.outputs["Color"])
-        soot = ramp(noise(1.2, 5.0, coords, w=19.0), 0.45, 0.62)
-        col = mix(math_node("MULTIPLY", math_node("MULTIPLY", soot, up), 0.55, clamp=True), col, srgb((20, 18, 16)))
+        # Soot gathers round the burns (a halo out to about 1.6 radii, thickest just outside the scorch),
+        # broken up finely and carried upward in streaks on vertical faces; no free-floating blotches.
+        halo = math_node("MULTIPLY", ramp(heat, -0.6, 0.05), ramp(noise(5.0, 6.0, coords, w=19.0), 0.25, 0.7))
+        rise = ramp(noise(2.5, 3.0, coords, stretch=(1.0, 1.0, 0.12), w=23.0), 0.45, 0.65)
+        halo = math_node("MAXIMUM", halo, math_node("MULTIPLY", math_node("MULTIPLY", ramp(heat, -1.4, -0.2), rise),
+                                                        math_node("MULTIPLY", vert, 0.8)))
+        col = mix(math_node("MULTIPLY", halo, 0.85, clamp=True), col, srgb((22, 20, 18)))
+        # Smoke and fire stain the lower hull, skirts and running gear too, not just the deck.
+        lowsoot = math_node("MULTIPLY", low, ramp(noise(1.6, 5.0, coords, w=29.0), 0.3, 0.7))
+        col = mix(math_node("MULTIPLY", lowsoot, 0.45, clamp=True), col, srgb((34, 30, 26)))
+        if hit_heat is not None:
+            # Penetrations: a black hole with a ragged rim of bare, heat-blued steel where the round melted
+            # through, inside its scorch.
+            jag = math_node("ADD", hit_heat, math_node("MULTIPLY", math_node("SUBTRACT", noise(7.0, 4.0, coords, w=31.0),
+                                                                             0.5), 0.35))
+            rim = math_node("MULTIPLY", ramp(jag, 0.25, 0.4), math_node("SUBTRACT", 1.0, ramp(jag, 0.5, 0.58)))
+            col = mix(math_node("MULTIPLY", rim, 0.9, clamp=True), col, srgb((112, 104, 96)))
+            col = mix(ramp(jag, 0.52, 0.6), col, srgb((4, 4, 4)))
 
     # Relief baked into the albedo (the game has no normal maps): cast and rolled steel pitting and small
     # dents, lit from the upper left like the game's sun.

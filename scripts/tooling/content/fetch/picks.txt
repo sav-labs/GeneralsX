@@ -1,5 +1,5 @@
 # Unit name and Sketchfab model uid, one per line. sketchfab.py fetch downloads these.
-crusader 1529f5d842cb4f578aa8cb672524f044  # M1A1 Abrams Main Battle Tank / MirzaArrafiERV_45, CC-BY, 69816 faces
+crusader 0e98541f6f684311ac7a8abe08c9449e  # abrams m1a2 / coderslava402, CC-BY, 201540 faces (desert tan, normal and metal/roughness maps)
 paladin 7bc24252d4b84ac5bb7fd3b67f119b0a  # M109A6 Paladin Self-Propelled Howitzer / MirzaArrafiERV_45, CC-BY, 47467 faces
 humvee ffbc4b053628413fb84acf5b89595d96  # HMMWV M998A1 (soft top) / 42manako, CC-BY, 20702 faces
 ambulance 597e28fd34cb4177847058b06940243e  # M997A2 HMMWV communications vehicle / 42manako, CC-BY, 20654 faces

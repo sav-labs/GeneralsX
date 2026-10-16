@@ -340,6 +340,18 @@ def weathered(src, image, damaged, burns, spec):
     lum = source_luminance(src)
 
     def base(nt):
+        out = repaint(nt)
+        relief = source_relief(src, nt, spec.get("relief", 0.7))
+        if relief is None:
+            return out
+        m = nt.nodes.new("ShaderNodeMix")
+        m.data_type, m.blend_type = "RGBA", "MULTIPLY"
+        m.inputs[0].default_value = 1.0
+        nt.links.new(out, m.inputs[6])
+        nt.links.new(relief, m.inputs[7])
+        return m.outputs[2]
+
+    def repaint(nt):
         colour = source_colour(src, nt)
 
         def node(kind, **inputs):
@@ -401,6 +413,63 @@ def weathered(src, image, damaged, burns, spec):
     nt.nodes.active = tex
     mat["finish"] = finish
     return mat
+
+
+def source_relief(src, nt, strength):
+    """Relief of the source's normal map, lit into the colour: 1 + strength x (N_map . L - N . L) under a
+    light from above, clamped, as a grey socket; None when the source has no normal map. The game has no
+    normal maps, so the bolts, weld seams and plate edges the source only painted into its normal map
+    would be lost from the atlas otherwise."""
+    bsdf = next((n for n in (src.node_tree.nodes if src.use_nodes else []) if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None or not bsdf.inputs["Normal"].links:
+        return None
+    nmap = bsdf.inputs["Normal"].links[0].from_node
+    if nmap.type != "NORMAL_MAP" or not nmap.inputs["Color"].links:
+        return None
+    tex_src = nmap.inputs["Color"].links[0].from_node
+    if tex_src.type != "TEX_IMAGE" or not tex_src.image:
+        return None
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = tex_src.image
+    tex.image.colorspace_settings.name = "Non-Color"
+    uv_name = ""
+    for o in bpy.context.scene.objects:
+        if o.type == "MESH" and o.data.uv_layers and o.data.uv_layers[0].name != "Atlas":
+            uv_name = o.data.uv_layers[0].name
+            break
+    uvn = nt.nodes.new("ShaderNodeUVMap")
+    uvn.uv_map = uv_name
+    nt.links.new(uvn.outputs[0], tex.inputs["Vector"])
+    nm = nt.nodes.new("ShaderNodeNormalMap")
+    nm.uv_map = uv_name
+    nt.links.new(tex.outputs["Color"], nm.inputs["Color"])
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    light = nt.nodes.new("ShaderNodeCombineXYZ")
+    for i, v in enumerate((0.35, 0.3, 0.89)):
+        light.inputs[i].default_value = v
+    dots = []
+    for sock in (nm.outputs[0], geo.outputs["Normal"]):
+        d = nt.nodes.new("ShaderNodeVectorMath")
+        d.operation = "DOT_PRODUCT"
+        nt.links.new(sock, d.inputs[0])
+        nt.links.new(light.outputs[0], d.inputs[1])
+        dots.append(d.outputs["Value"])
+    diff = nt.nodes.new("ShaderNodeMath")
+    diff.operation = "SUBTRACT"
+    nt.links.new(dots[0], diff.inputs[0])
+    nt.links.new(dots[1], diff.inputs[1])
+    ma = nt.nodes.new("ShaderNodeMath")
+    ma.operation = "MULTIPLY_ADD"
+    nt.links.new(diff.outputs[0], ma.inputs[0])
+    ma.inputs[1].default_value = strength
+    ma.inputs[2].default_value = 1.0
+    cl = nt.nodes.new("ShaderNodeClamp")
+    nt.links.new(ma.outputs[0], cl.inputs["Value"])
+    cl.inputs["Min"].default_value, cl.inputs["Max"].default_value = 0.65, 1.3
+    grey = nt.nodes.new("ShaderNodeCombineColor")
+    for i in range(3):
+        nt.links.new(cl.outputs[0], grey.inputs[i])
+    return grey.outputs[0]
 
 
 def source_colour(src, nt):
@@ -482,8 +551,9 @@ def battle_damage(groups, damage, step):
                 continue
             for box, deg in damage.get("bend", ()):
                 if in_box(c, box):
-                    lo, hi = bounds([p])
-                    hinge = Vector((c[0], c[1], hi.z))
+                    # One hinge per box, along its top edge: sources built from loose faces would scatter
+                    # if every face turned about its own top.
+                    hinge = Vector((c[0], (box[2] + box[3]) / 2, box[5]))
                     rot = Matrix.Rotation(math.radians(deg if c[1] > 0 else -deg), 4, "X")
                     p.data.transform(Matrix.Translation(hinge) @ rot @ Matrix.Translation(-hinge))
                     step(f"bent {p['src']} at {tuple(round(v, 1) for v in c)}")
@@ -749,9 +819,13 @@ def build(path, spec, name, size, damaged=False):
         if hits:
             shell = shadow_shell(hits, f"SHADOW{bone[:4]}")
             joined[(bone, f"SHADOW{bone[:4]}", "shadow")] = shell
-    k.burns = spec.get("burns", burns) if damaged else None
+    k.burns = (list(spec.get("burns", burns)) + [(c, r, "hit") for c, r in spec.get("hits", ())]) if damaged else None
     visible = [o for (b, g, kd), o in joined.items() if kd == "body"]
     for o in visible:
+        # Only the source's first UV map is baked from; joined sources can carry up to Blender's limit of
+        # eight, which leaves no room for the atlas.
+        for layer in list(o.data.uv_layers)[1:]:
+            o.data.uv_layers.remove(layer)
         o.data.uv_layers.new(name="Atlas")
         o.data.uv_layers.active = o.data.uv_layers["Atlas"]
     step("shadows")

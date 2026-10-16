@@ -66,15 +66,27 @@ def track_texture(seed=13, links=4, w=512, h=256):
     colour[m] = rubber
     inner = v < 0.4
     wi = v / 0.4
-    track_path = ((np.abs(wi - 0.25) < 0.15) | (np.abs(wi - 0.75) < 0.15)) & inner
-    horn = box(0.44, 0.56, 0.3, 0.7, wi, p, 0.05) * inner
-    height[inner] = 0.3 + horn[inner] * 0.7
-    colour[track_path] = bright
+    # Wheel side: dark shoe backs, the two polished wheel paths broken at every link joint, a tall guide
+    # horn in the middle of each link and the end connectors with their wedge bolts on the outer edges,
+    # so the run between the wheels still reads as separate links from above.
+    track_path = ((np.abs(wi - 0.33) < 0.11) | (np.abs(wi - 0.67) < 0.11)) & inner & (np.minimum(p, 1 - p) > 0.07)
+    horn = box(0.43, 0.57, 0.28, 0.72, wi, p, 0.06) * inner
+    end_conn = ((wi < 0.17) | (wi > 0.83)) & inner
+    wedge = np.clip(1 - np.hypot((p - 0.5) / 0.1, ((wi % 0.83) - np.where(wi < 0.5, 0.085, 0.085)) / 0.05), 0, 1)
+    wedge = wedge * end_conn
+    height[inner] = 0.25 + (track_path * 0.12 + end_conn * 0.25 + horn * 0.75 + wedge * 0.2)[inner]
+    colour[inner] = steel * 0.9
+    colour[track_path] = np.array([100, 97, 90.0])
+    colour[(horn > 0.4) & inner] = steel * 1.05
     side = (~outer) & (~inner)
-    pin = np.clip(1 - np.hypot((p - 0.5) / 0.12, (v - 0.45) / 0.03), 0, 1) * side
-    height[side] = 0.4 + pin[side] * 0.3
+    # Sides: an end connector block per link with its pin head.
+    pin = np.clip(1 - np.hypot((p - 0.5) / 0.1, (v - 0.45) / 0.035), 0, 1) * side
+    height[side] = 0.4 + (box(0.12, 0.88, 0.4, 0.5, p, v, 0.05) * 0.25 + pin * 0.35)[side]
     height[gap] = 0.0
-    colour[gap] = steel * 0.35
+    colour[gap] = steel * 0.3
+    gap = np.minimum(p, 1 - p) < 0.06
+    height[gap & inner] = 0.0
+    colour[gap & inner] = steel * 0.28
     # Relief lighting and creases.
     gy, gx = np.gradient(height * 6.0)
     nrm = np.dstack([-gx, gy, np.ones_like(height)])
@@ -86,12 +98,13 @@ def track_texture(seed=13, links=4, w=512, h=256):
     grain = textures.fbm(w, rng, octaves=5, base=16)[:h, :w]
     img = colour * shade[..., None] * crease[..., None] * (0.85 + 0.3 * grain[..., None])
     # Packed dirt in the low parts, polish on the high parts of the ground side.
-    dust = np.clip((0.5 - height) * 1.4 + (textures.fbm(w, rng, base=6)[:h, :w] - 0.5), 0, 1)[..., None] * 0.7
+    dust = np.clip((0.5 - height) * 1.4 + (textures.fbm(w, rng, base=6)[:h, :w] - 0.5), 0, 1)
+    dust = (dust * np.where(v < 0.4, 0.3, 0.7))[..., None]
     img = img * (1 - dust) + np.array([128, 110, 82]) * dust
     # Dry dust caked on the band's edges and end connectors: from above the track reads as a light-edged
     # band, not one dark mass with the wheels.
     edges = (side | (conn & ((wo < 0.16) | (wo > 0.84)))).astype(float)
-    edges = (edges * (0.45 + 0.35 * textures.fbm(w, rng, base=24)[:h, :w]))[..., None]
+    edges = (edges * (0.2 + 0.25 * textures.fbm(w, rng, base=24)[:h, :w]))[..., None]
     img = img * (1 - edges) + np.array([156, 138, 104]) * edges
     return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB")
 
