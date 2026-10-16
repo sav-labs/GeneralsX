@@ -72,16 +72,16 @@ def setup_smoke(g, rng):
 def setup_fire(g, rng):
     nx, ny, nz = g.shape
     g.buoyancy, g.weight, g.vorticity = 12.0, 0.0, 7.0
-    g.burn_rate, g.heat, g.soot, g.expansion, g.cooling = 3.0, 1.6, 0.25, 0.3, 1.8
-    g.flame_decay, g.glow_temp = 5.0, 1.3
+    g.burn_rate, g.heat, g.soot, g.expansion, g.cooling = 12.0, 1.4, 0.25, 0.3, 3.5
+    g.flame_decay, g.glow_temp, g.flame_gain = 9.0, 3.0, 1.0
     g.density_decay = 1.5
     c = (nx / 2, ny / 2, nz * 0.06)
-    src = g.blob(c, nx * 0.2, 0.6) * (g.gz < nz * 0.1)
+    src = g.blob(c, nx * 0.16, 0.6) * (g.gz < nz * 0.08)
 
     def emit(frame):
         # Steady burning: the atlas loops a fully developed fire, so feed it for the whole run.
-        g.fuel += src * 0.6
-        g.temp += src * 0.8
+        g.fuel += src * 0.3
+        g.temp += src * 0.6
         g.turbulence(src, 2.5)
     return dict(frames=88, warmup=24, substeps=2, dt=1 / 60.0, emit=emit)
 
@@ -107,9 +107,9 @@ def setup_dust(g, rng):
 KINDS = {
     # grid shape at scale 1, cell size, smoke colour, density gain, fire emission gain, view framing
     "explosion": dict(setup=setup_explosion, shape=(80, 80, 128), smoke=(0.42, 0.39, 0.36), dens=2.0, fire=12.0),
-    "smoke": dict(setup=setup_smoke, shape=(72, 72, 112), smoke=(0.36, 0.34, 0.32), dens=2.5, fire=0.0),
-    "fire": dict(setup=setup_fire, shape=(64, 64, 112), smoke=(0.06, 0.05, 0.045), dens=3.0, fire=26.0),
-    "dust": dict(setup=setup_dust, shape=(96, 96, 56), smoke=(0.78, 0.68, 0.52), dens=2.0, fire=0.0),
+    "smoke": dict(setup=setup_smoke, shape=(72, 72, 112), smoke=(0.5, 0.47, 0.44), dens=2.5, fire=0.0),
+    "fire": dict(setup=setup_fire, shape=(64, 64, 112), smoke=(0.06, 0.05, 0.045), dens=2.0, fire=1.6, flame_body=0.5),
+    "dust": dict(setup=setup_dust, shape=(96, 96, 56), smoke=(0.85, 0.76, 0.6), dens=0.55, fire=0.0, firm=0.02),
 }
 
 
@@ -452,7 +452,10 @@ def render_atlas(kind, frames, shape, dx, grid, tile, samples, out, only=None):
             continue
         dens, flame, temp = up([dens, flame, temp], i * 0.25)
         # Firm up billow edges: thin wisps fade, bodies keep their density.
-        dens = dens * np.clip((dens - 0.12) / 0.5, 0, 1) ** 0.9
+        # Flames are thin sheets: give them some body so they are not a speckle of emission.
+        dens = dens + flame * cfg.get("flame_body", 0.0)
+        firm = cfg.get("firm", 0.12)
+        dens = dens * np.clip((dens - firm) / (0.5 if firm > 0.05 else 0.2), 0, 1) ** 0.9
         vdb = os.path.join(tmp, "f%03d.vdb" % i)
         wall = wall_fade(dens.shape)
         write_vdb(vdb, dx_hi, {"density": dens * wall, "flame": flame * wall, "temperature": temp * wall})
