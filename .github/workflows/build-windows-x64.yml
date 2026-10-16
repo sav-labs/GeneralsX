@@ -40,7 +40,9 @@ jobs:
   # (default 50) of the presented size, with the DXVK HUD. raw:<path> writes <path>.bgra and <path>.txt
   # (scripts/qa/dxvk_video_to_mp4.py turns them into an mp4); any other value is a command that reads
   # Matroska raw BGRA video with present time stamps on stdin, e.g.
-  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 clip.mp4
+  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode cfr -r 60 clip.mp4
+  # GeneralsX @bugfix Claude 16/10/2026 Constant 60 fps output placed by the present time stamps: a variable rate mp4 judders
+  # in players that assume a fixed rate. Every presented frame is captured, so a 21 fps battle gives a 21 fps clip.
   # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0011) starts recording with the first frame
   # of the -camtest flight instead of a fixed time, so A/B clips line up whatever the load time. The game sets the process
   # environment variable DXVK_CAPTURE_VIDEO_SIGNAL to camtest.prepare when the match starts and to camtest when the flight begins.
@@ -282,7 +284,7 @@ jobs:
           sets a building near them on fire and circles the fight for 10 s; add a unit count for both sides together
           (-camtest 10 battle 60) and night for a night match (-camtest 10 battle 60 night). Use it with -skirmish.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
-          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
+          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode cfr -r 60 C:\cap\clip.mp4
           Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
           starts and stops a video (mp4, at most 1080 lines). Files are named by date and time and go to D:\GeneralsX\bugs,
           or to CapturePath in Options.ini (for example CapturePath = E:\Captures); when that folder cannot be created,

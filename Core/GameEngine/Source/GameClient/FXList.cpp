@@ -36,6 +36,7 @@
 #include "Common/GameAudio.h"
 #include "Common/GameUtility.h"
 #include "Common/INI.h"
+#include "Common/PerfStats.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/RandomValue.h"
@@ -366,9 +367,19 @@ public:
 		((FXList*)instance)->addFXNugget(nugget);
 	}
 
-	// GeneralsX @feature Claude 16/10/2026 The data lights this effect itself: no automatic light on top.
+	// GeneralsX @bugfix Claude 16/10/2026 A LightPulse marks an effect that gives off light; its colour and radius
+	// shape the automatic light (retail pulses are too small for createLightPulse to draw, see EffectLights.cpp).
 	virtual void addLightTraits(EffectLights::FXTraits &traits) const override
 	{
+		const Real radius = m_boundingCirclePct > 0 ? 0.0f : m_radius;
+		if (!traits.hasLightPulse || radius > traits.pulseRadius)
+		{
+			traits.pulseRed = m_color.red;
+			traits.pulseGreen = m_color.green;
+			traits.pulseBlue = m_color.blue;
+			if (radius > traits.pulseRadius)
+				traits.pulseRadius = radius;
+		}
 		traits.hasLightPulse = TRUE;
 	}
 
@@ -889,6 +900,18 @@ void FXList::addEffectLight(const Coord3D *pos, Real objectRadius) const
 		}
 		m_lightProfile = EffectLights::classifyFXList(m_name.str(), traits);
 		m_lightProfileReady = TRUE;
+		// GeneralsX @bugfix Claude 16/10/2026 With -perf, say once per FXList how it was classified, so a battle
+		// log shows which effects light up and which do not (and why the lights stay dark, if they do).
+		static Int s_loggedFXLists = 0;
+		if (PerfStats::isEnabled() && s_loggedFXLists < 200)
+		{
+			++s_loggedFXLists;
+			fprintf(stderr, "[LIGHTS] fx %s -> %s (pulse=%d r=%.0f shake=%d scorch=%.0f ps=%d fireball=%d flame=%d muzzle=%d)\n",
+				m_name.str(), EffectLights::kindName(m_lightProfile.kind), traits.hasLightPulse ? 1 : 0, traits.pulseRadius,
+				traits.strongestShake, traits.scorchRadius, traits.particleSystems, traits.fireballParticles,
+				traits.flameParticles, traits.muzzleParticles);
+			fflush(stderr);
+		}
 	}
 
 	if (m_lightProfile.kind != EffectLights::KIND_NONE)
