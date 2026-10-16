@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Export candidate 4x upscalers for the safe textures to ONNX, for `hdpack --lab`.
+"""Export the gentle Real-ESRGAN Compact upscalers to ONNX: general-dn50 for the pack's safe
+ground and water textures (bundled next to hdpack.exe), general-x4v3 for `hdpack --lab`.
 
 Runs in CI with PyTorch and spandrel (which knows the architectures); the weights
 are pinned by SHA-256. Each model is checked against PyTorch on an odd-sized input
 before it is kept, so a graph that only works at the export size is dropped.
 
-- general-x4v3, general-dn50: Real-ESRGAN Compact (BSD-3-Clause); dn50 blends the
-  plain and the denoise weights half and half, as Real-ESRGAN's --denoise_strength 0.5.
-- pbrify-rplksrd-v3, pbrify-v4: Kim2091's PBRify texture upscalers (CC0-1.0), trained
-  on PolyHaven, ambientCG and FreePBR material textures.
+Both are Real-ESRGAN Compact (BSD-3-Clause); dn50 blends the plain and the denoise weights
+half and half, as Real-ESRGAN's --denoise_strength 0.5. The PBRify texture models were tried
+too: RPLKSRd did not export and the DAT2 one does not run on DirectML.
 """
 
-# GeneralsX @feature sav-labs 16/10/2026 Candidate texture upscalers for the HD pack lab.
+# GeneralsX @feature sav-labs 16/10/2026 Gentle texture upscalers for the HD pack safe textures and lab.
 
 import argparse
 import hashlib
@@ -24,17 +24,11 @@ WEIGHTS = {
                      "8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292"),
     "general-wdn-x4v3": ("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth",
                          "1641f8c4464b9f097c9fdda5589273713f67cf59f3d909e0bd688f0cee269dca"),
-    "pbrify-rplksrd-v3": ("https://github.com/Kim2091/Kim2091-Models/releases/download/4x-PBRify_RPLKSRd_V3/4x-PBRify_RPLKSRd_V3.pth",
-                          "1325a08842ebfc18aea90e71594aa9b9e82b9c7e16321dccf5b757884a22daf1"),
-    "pbrify-v4": ("https://github.com/Kim2091/Kim2091-Models/releases/download/4x-PBRify_UpscalerV4/4x-PBRify_UpscalerV4.pth",
-                  "82db39e31e01da6816a9814c0553a8dcdb7bd2d655353e67075c9295068cb789"),
 }
 # name: [(weights, share)]
 MODELS = {
     "general-x4v3": [("general-x4v3", 1.0)],
     "general-dn50": [("general-x4v3", 0.5), ("general-wdn-x4v3", 0.5)],
-    "pbrify-rplksrd-v3": [("pbrify-rplksrd-v3", 1.0)],
-    "pbrify-v4": [("pbrify-v4", 1.0)],
 }
 
 

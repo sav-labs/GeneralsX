@@ -205,6 +205,15 @@ def main():
         # Listed textures (lettering) skip the AI model.
         report = json.loads(Path(tmp, "!HDTexturesOnnx.report.json").read_text())
         assert report["safe_upscaled"] == ["avhouse"], report["safe_upscaled"]
+        # Safe ground textures go through the gentle model when it is there.
+        game3 = Path(tmp, "game3")
+        game3.mkdir()
+        hdpack.write_big(game3 / "Textures.big", [("Art\\Textures\\TRDirtRoad.tga", tga((64, 64), (150, 120, 80, 255)))])
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game3), "--out", str(Path(tmp, "!Soft.big")),
+                        "--upscaler", "onnx", "--onnx", str(model), "--soft-onnx", str(model), "--tile", "32"],
+                       check=True, capture_output=True)
+        report = json.loads(Path(tmp, "!Soft.report.json").read_text())
+        assert report["soft_upscaled"] == ["trdirtroad"] and report["safe_upscaled"] == [], report
     print("hdpack self-test passed")
 
 

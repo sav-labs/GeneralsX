@@ -42,6 +42,7 @@ jobs:
   hdpack:
     name: HD pack tool (Win64)
     runs-on: windows-2022
+    needs: lab-models
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -91,6 +92,12 @@ jobs:
           Copy-Item (Join-Path $dir.FullName "upscayl-bin.exe") dist/
           Copy-Item (Join-Path $dir.FullName "LICENSE") dist/LICENSE-upscayl-bin.txt
 
+      - name: Bundle the gentle model for safe ground and water textures
+        uses: actions/download-artifact@v5
+        with:
+          name: hdpack-lab-models
+          path: dist/
+
       - name: Check the bundle runs
         shell: pwsh
         run: |
@@ -108,8 +115,9 @@ jobs:
           path: dist/
 
   lab-models:
-    # Candidate upscalers for the safe textures, compared on the player's machine with
-    # `hdpack --lab`; not part of the pack build. Weights are pinned in export_lab_models.py.
+    # Gentle Real-ESRGAN Compact models: general-dn50 is bundled with hdpack.exe for the safe
+    # ground and water textures, general-x4v3 is for `hdpack --lab`. Weights are pinned in
+    # export_lab_models.py.
     name: HD pack lab models
     runs-on: ubuntu-24.04
     steps:

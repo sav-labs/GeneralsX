@@ -76,6 +76,13 @@ SAFE_PATTERNS = (
     # invented patterns
     "pmgrruin*", "cbnsubst_vent*", "ciburn", "atdiaplate", "pmcement*", "pmropecoil",
 )
+# Safe textures of ground and water that the gentler Real-ESRGAN Compact model (general-x4v3
+# blended half and half with its denoise twin, "general-dn50") upscales without repainting them:
+# on the Windows lab run (16/10/2026) it kept caustics soft, grass, dirt and concrete grain close to
+# the source and cement plain, where x4plus drew cells, flat paint and dot patterns. Lettering,
+# flags, night maps, noise and the patterned tray tiles still get Lanczos.
+SOFT_PATTERNS = ("caust*", "traygrass*", "traydirt*", "trayconcrete*", "trgrass*", "trdirt*", "pmcement*")
+
 MAX_OUTPUT_SIZE = 2048
 
 
@@ -548,8 +555,13 @@ def lab(src_dir, out_dir, models, tile, scale):
         rgb = img.convert("RGB")
         tiles = tile_axes(rgb)
         results = {"lanczos": upscale_safe(rgb, size, tiles)}
-        for name, session in models.items():
-            up = upscale_rgb_onnx({stem: rgb}, session, tile, {stem: tiles})[stem]
+        for name, session in list(models.items()):
+            try:
+                up = upscale_rgb_onnx({stem: rgb}, session, tile, {stem: tiles})[stem]
+            except Exception as e:  # e.g. an op the GPU provider cannot run; ORT messages may not be UTF-8
+                print(f"  {name} dropped on {stem}: {type(e).__name__}", file=sys.stderr)
+                del models[name]
+                continue
             results[name] = up.resize(size, Image.Resampling.LANCZOS) if up.size != size else up
         entry = {"texture": stem, "tiles": tiles}
         for name, v in results.items():
@@ -594,6 +606,11 @@ def default_onnx():
     return base / "realesrgan_x4plus.onnx"
 
 
+def default_soft_onnx():
+    """general-dn50.onnx next to hdpack.exe or hdpack.py (built by export_lab_models.py)."""
+    return default_onnx().with_name("general-dn50.onnx")
+
+
 def default_esrgan():
     """The packaged hdpack.exe ships realesrgan-ncnn-vulkan.exe next to itself."""
     if getattr(sys, "frozen", False):
@@ -617,6 +634,9 @@ def main():
                     default="onnx" if default_onnx().is_file() else "esrgan",
                     help="onnx: Real-ESRGAN via ONNX Runtime (DirectML/CPU); esrgan: ncnn Vulkan binary; lanczos: plain resize")
     ap.add_argument("--onnx", default=str(default_onnx()), help="Real-ESRGAN x4plus ONNX model")
+    ap.add_argument("--soft-onnx", default=str(default_soft_onnx()),
+                    help="Gentle 4x ONNX model for safe ground and water textures (SOFT_PATTERNS); "
+                         "without it they get Lanczos like the other safe textures")
     ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan or upscayl-bin")
     ap.add_argument("--model", default="realesrgan-x4plus", help="Real-ESRGAN model name")
     ap.add_argument("--scale", type=int, choices=(2, 4), default=4)
@@ -704,6 +724,8 @@ def main():
     if args.limit:
         keys = keys[:args.limit]
     safe = {k for k in keys if matches(k, safe_patterns)} if args.upscaler != "lanczos" else set()
+    soft = {k for k in safe if matches(k, SOFT_PATTERNS)} if Path(args.soft_onnx).is_file() else set()
+    soft_settings = cache_settings("soft", Path(args.soft_onnx).stem, args.scale, args.max_size, mode)
     print(f"{len(archives)} archive entries, {len(ui_textures)} UI textures skipped, {len(keys)} to upscale")
 
     if args.review_dir:
@@ -716,6 +738,7 @@ def main():
     output = []
     pairs = []
     session = None
+    soft_session = None
     cached = 0
     skipped = {"too_small": [], "already_max_size": [], "unreadable": []}
     started = time.monotonic()
@@ -726,7 +749,7 @@ def main():
             name = original[:original.rfind(".")] + out_ext
             data = read_entry(sources[stem])
             # Cache key: source bytes plus every setting that changes the result.
-            key_settings = safe_settings if stem in safe else settings
+            key_settings = soft_settings if stem in soft else safe_settings if stem in safe else settings
             cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + key_settings).hexdigest()[:16]}{out_ext}"
             if cache_file.is_file():
                 output.append((name, cache_file))
@@ -752,7 +775,12 @@ def main():
         rgb = {k: v[0].convert("RGB") for k, v in batch.items() if k not in safe}
         tiles = {k: tile_axes(v[0]) for k, v in batch.items() if k in safe}
         up_rgb = {k: upscale_safe(batch[k][0].convert("RGB"), target_size(*batch[k][0].size, args.scale), t)
-                  for k, t in tiles.items()}
+                  for k, t in tiles.items() if k not in soft}
+        soft_rgb = {k: batch[k][0].convert("RGB") for k in tiles if k in soft}
+        if soft_rgb:
+            if soft_session is None:
+                soft_session = onnx_session(args.soft_onnx)
+            up_rgb |= upscale_rgb_onnx(soft_rgb, soft_session, args.tile, tiles)
         if rgb and args.upscaler == "onnx":
             if session is None:
                 session = onnx_session(args.onnx)
@@ -789,6 +817,7 @@ def main():
     paths = write_big_parts(args.out, output, args.part_size)
     if args.preview_dir:
         comparison_sheets(pairs, args.preview_dir)
+    written = {Path(n.replace("\\", "/")).stem.lower() for n, _ in output}
     report = {
         "textures_written": len(output),
         "reused_from_cache": cached,
@@ -800,7 +829,8 @@ def main():
         "ui_textures_excluded": len(ui_textures),
         "tree_textures_excluded": len(excluded - ui_textures - content_textures) if args.terrain else 0,
         "content_pack_textures_excluded": sorted(content_textures),
-        "safe_upscaled": sorted(safe & {Path(n.replace("\\", "/")).stem.lower() for n, _ in output}),  # Lanczos, no AI
+        "safe_upscaled": sorted((safe - soft) & written),  # Lanczos, no AI
+        "soft_upscaled": sorted(soft & written),  # gentle model
         "written_files": sorted(name for name, _ in output),  # names only, for exclude lists
         "parts": {str(p): p.stat().st_size for p in paths},
         "total_bytes": sum(p.stat().st_size for p in paths),

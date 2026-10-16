@@ -62,7 +62,11 @@ hdpack.exe --lab <folder> --lab-out <sheets folder> --lab-model pbrify=<models>\
 
 Each row of `lab_001.jpg`, ... shows the source (4x nearest), Lanczos (the current safe path) and each `--lab-model` (default: the bundled x4plus). `lab.json` holds per method the drift (lower is closer to the source) and the sharpness (mean absolute Laplacian, higher is crisper). Models run with wrap-around context on tiling axes, like the pack.
 
-Candidate models come from the `hdpack-lab-models` artifact of the same workflow, exported by `export_lab_models.py` (PyTorch and spandrel, weights pinned by SHA-256): Real-ESRGAN Compact `general-x4v3` and its half-denoised blend `general-dn50` (BSD-3-Clause), and the PBRify texture upscalers `pbrify-rplksrd-v3` and `pbrify-v4` (CC0-1.0).
+Extra models come from the `hdpack-lab-models` artifact of the same workflow, exported by `export_lab_models.py` (PyTorch and spandrel, weights pinned by SHA-256): Real-ESRGAN Compact `general-x4v3` and its half-denoised blend `general-dn50` (BSD-3-Clause).
+
+## Gentle model for ground and water
+
+`general-dn50.onnx` ships next to `hdpack.exe` (`--soft-onnx` to point elsewhere). Safe textures matching `SOFT_PATTERNS` (water caustics, grass, dirt and concrete strips, dirt roads, cement) go through it instead of Lanczos, with wrap-around context; the report lists them under `soft_upscaled`. On the Windows lab run it kept caustics soft and grain close to the source where x4plus drew cells and flat paint. Lettering, flags, night maps, noise and the patterned tray tiles stay on Lanczos, because dn50 still alters them. Without the file every safe texture gets Lanczos.
 
 - Tiling is detected per axis (`tile_axes`): the jump from the last column or row to the first is compared with the jumps inside. Tiling textures are resized and upscaled with wrap-around context, so they stay seamless.
 - The pack uses the seamless Lanczos for safe textures that tile (colour and alpha). A blend of x4plus detail over Lanczos was tried and dropped: no visible gain, and faint ghosts of invented detail came through.
