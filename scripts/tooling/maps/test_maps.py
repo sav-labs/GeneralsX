@@ -55,9 +55,10 @@ def check(layout):
     ids = [o["props"]["uniqueID"] for o in m["objects"]]
     assert len(ids) == len(set(ids)), "duplicate uniqueID"
     border = m["height_map"]["border"] * mapgen.CELL
-    size = (m["height_map"]["width"] - 2 * m["height_map"]["border"]) * mapgen.CELL
+    size_x = (m["height_map"]["width"] - 2 * m["height_map"]["border"]) * mapgen.CELL
+    size_y = (m["height_map"]["height"] - 2 * m["height_map"]["border"]) * mapgen.CELL
     for o in m["objects"]:
-        assert -border <= o["x"] <= size + border and -border <= o["y"] <= size + border, o["name"]
+        assert -border <= o["x"] <= size_x + border and -border <= o["y"] <= size_y + border, o["name"]
 
     path = os.path.join(REPO, "content", "Maps", layout.NAME, layout.NAME + ".map")
     with open(path, "rb") as f:
