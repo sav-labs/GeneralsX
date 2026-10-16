@@ -61,6 +61,17 @@ def load(path, spec):
     for o in objs:
         o.data.transform(m)
         o.data.update()
+    if spec.get("weld"):
+        # Sources exported as loose triangles (every face its own island) fall apart under decimation and
+        # split into thousands of single faces: weld coincident vertices first (UVs live on the corners,
+        # so they survive).
+        for o in objs:
+            bm = bmesh.new()
+            bm.from_mesh(o.data)
+            bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=spec["weld"])
+            bm.to_mesh(o.data)
+            bm.free()
+            o.data.update()
     return objs
 
 

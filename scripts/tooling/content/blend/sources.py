@@ -13,7 +13,9 @@ UNITS = {
     # faces; "transmin" is one object per wheel, "track" the static track and its upper run, replaced by
     # our scrolling band. The whip antennas would stand 20 units tall and are dropped.
     "crusader": {
-        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 15000, "split": "abram",
+        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 15000, "split": "abram", "weld": 0.002,
+        # Low contrast: the source's dark chevrons and number plates should not show through the repaint.
+        "contrast": 0.25,
         "parents": {"BARREL": "TURRET"},
         # The retail Crusader's Draw module fires from TurretMS and recoils Barrel.
         "muzzles": {"TURRETMS": "BARREL", "TURRETFX": "BARREL"},
