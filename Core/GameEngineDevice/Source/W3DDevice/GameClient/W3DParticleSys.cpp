@@ -37,6 +37,7 @@
 #include "WW3D2/camera.h"
 #include "WW3D2/sortingrenderer.h"
 
+#include <map>
 #include <set>
 
 
@@ -314,6 +315,23 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 						frame = frameCount - 1;
 				}
 				frameArray[pointCount] = (uint8)frame;
+
+				// GeneralsX @feature Claude 16/10/2026 Trace the first particle of each flipbook system through its life.
+				{
+					static std::map<AsciiString, UnsignedInt> traced;
+					const AsciiString &name = sys->getTemplate()->getName();
+					std::map<AsciiString, UnsignedInt>::iterator it = traced.find(name);
+					if (it == traced.end() && traced.size() < 64)
+						it = traced.insert(std::make_pair(name, p->getPersonality())).first;
+					const UnsignedInt elapsed = p->getElapsedFrames();
+					if (it != traced.end() && it->second == p->getPersonality() && elapsed % 8 == 0 && elapsed <= 96)
+					{
+						fprintf(stderr, "[FX] trace %s age=%u/%u frame=%u size=%.2f alpha=%.2f rgb=%.2f,%.2f,%.2f pos=%.1f,%.1f,%.1f\n",
+							name.str(), elapsed, p->getLifetime(), frame, psize, p->getAlpha(),
+							color->red, color->green, color->blue, pos->x, pos->y, pos->z);
+						fflush(stderr);
+					}
+				}
 			}
 			else
 			{
