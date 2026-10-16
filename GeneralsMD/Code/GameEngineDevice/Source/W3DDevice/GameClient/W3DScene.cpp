@@ -38,6 +38,7 @@
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
+#include "Common/PerfStats.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "GameLogic/Object.h"
@@ -855,9 +856,17 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	//don't draw shadows in this mode because they interfere with destination alpha or are invisible (wireframe)
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		// GeneralsX @performance Claude 16/10/2026 Shadow time for the frame profiler.
+		PERF_STATS_SCOPE(SECTION_SHADOWS);
 		DoShadows(rinfo, false);	//draw all non-stencil shadows (decals) since they fall under other objects.
+	}
 
-	TheDX8MeshRenderer.Flush();	//draw all non-translucent objects.
+	{
+		// GeneralsX @performance Claude 16/10/2026 Opaque mesh flush time (includes CPU skinning) for the frame profiler.
+		PERF_STATS_SCOPE(SECTION_MESH_FLUSH);
+		TheDX8MeshRenderer.Flush();	//draw all non-translucent objects.
+	}
 
 	//draw all non-translucent objects which were separated because they are hidden and need custom rendering.
 #ifdef USE_NON_STENCIL_OCCLUSION
@@ -884,7 +893,11 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	//don't draw shadows in this mode because they interfere with destination alpha
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		// GeneralsX @performance Claude 16/10/2026 Shadow volume time for the frame profiler.
+		PERF_STATS_SCOPE(SECTION_SHADOWS);
 		DoShadows(rinfo, true);	//draw all stencil shadows
+	}
 
 	WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
 
@@ -899,6 +912,8 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	{
 		//USE_PERF_TIMER(translucentRender)
+		// GeneralsX @performance Claude 16/10/2026 Particle and sorted translucent flush time for the frame profiler.
+		PERF_STATS_SCOPE(SECTION_PARTICLE_RENDER);
 
 		//don't draw transparent in this mode because they interfere with destination alpha
 		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)

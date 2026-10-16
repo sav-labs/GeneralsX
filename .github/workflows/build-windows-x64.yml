@@ -230,6 +230,14 @@ jobs:
           set DXVK_FXAA=1
           start "" "%~dp0GeneralsXZH.exe" -upscale %*
           "@ | Set-Content artifacts/Play-FSR.cmd -Encoding ascii
+          # GeneralsX @performance Claude 16/10/2026 Frame profiler launcher for big battle measurements.
+          @"
+          @echo off
+          rem Frame profiler: a [PERF] summary every 5 s goes to perf-log.txt next to the game, and a per frame CSV
+          rem of 300 s of the next match, starting 60 s after the match begins, goes to the capture folder.
+          rem Extra arguments are passed on, for example: Perf.cmd -skirmish "Maps\<map>\<map>.map" 7
+          "%~dp0GeneralsXZH.exe" -perf -perfdump 300 60 %* 2> "%~dp0perf-log.txt"
+          "@ | Set-Content artifacts/Perf.cmd -Encoding ascii
           @"
           Experimental 64-bit build. Copy these files into a separate copy of a licensed
           Zero Hour installation. Audio uses MiniAudio and videos use FFmpeg, because the
@@ -274,6 +282,20 @@ jobs:
           pixel FSR 2 treats as an effect shows in red; a blue tint means no mask that frame. Remove the line to
           play normally. DXVK_FSR2_REACTIVE_THRESHOLD (default 0.05) is the smallest change that counts.
           FidelityFX-FSR2-LICENSE.txt is the MIT license of AMD FidelityFX FSR 2, built into d3d9.dll.
+          Performance measurement (big battles): Perf.cmd starts the game with the frame profiler. Every 5 seconds
+          perf-log.txt gets a [PERF] line: fps, frame time (avg/max), game logic, client update, draw, 3D scene,
+          meshes (includes CPU skinning), shadows, particles and present in ms per frame, draw calls, triangles,
+          skinned meshes and vertices, skin cache hits, shadow volume rebuilds, particles and texture memory.
+          -perfdump <seconds> [delay] writes one CSV row per frame for <seconds> of the next match, starting
+          [delay] seconds after it begins, as perf_<date>_<time>.csv into the capture folder (CapturePath).
+          -perf alone only writes the [PERF] lines (-perf 2 every 2 seconds). PerfOverlay = yes in Options.ini
+          prints them too and shows three lines of numbers in the top left corner; PerfInterval = 5 sets the period.
+          Big battle switches in Options.ini (render only, the game itself is unchanged):
+          SkinCache = no turns off the skinned vertex cache (default yes; for before/after comparisons).
+          ShadowVolumeHighPolyTriangles = 4000 and ShadowVolumeHighPolyAngle = 3: shadow casting parts with at least
+          that many triangles rebuild their shadow after 3 degrees of turning instead of 0.2 (0 turns this off).
+          ShadowVolumeMaxTriangles = 0: models with more shadow casting triangles than this get a round ground
+          shadow instead of a shadow volume (0 = never).
           "@ | Set-Content artifacts/INSTALL.txt
           # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
           @"
