@@ -1291,7 +1291,13 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
      // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
      m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
-@@ -853,26 +868,41 @@ namespace dxvk {
+@@ -850,31 +865,46 @@ namespace dxvk {
+     bool useFsr = m_fsrEnabled
+-      && (dstRect.extent != srcRect.extent || m_fsr2Enabled)
++      && (dstRect.extent != srcRect.extent || m_fsr2Enabled || m_fsr3Enabled)
+       && dstRect.extent.width >= srcRect.extent.width
+       && dstRect.extent.height >= srcRect.extent.height;
+
      // GeneralsX: FSR 2 needs the scene inputs of this frame at the size of
      // the back buffer. The game jitters its projection while FSR 2 is
      // active, which it reads back through GeneralsX_UpscalerSubmitFrame.

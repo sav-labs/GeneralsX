@@ -1519,7 +1519,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
      // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
      m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
-@@ -808,10 +837,40 @@
+@@ -808,10 +837,42 @@
      else
        destroyHudImage();
  
@@ -1531,8 +1531,10 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +
 +    // With FSR, EASU upscales into an intermediate image first, and the
 +    // final blit sharpens that image with RCAS at a 1:1 scale.
++    // GeneralsX: FSR 2 also runs when the game renders at the output size
++    // (RenderScale 100), as native anti-aliasing; EASU is then a 1:1 pass.
 +    bool useFsr = m_fsrEnabled
-+      && dstRect.extent != srcRect.extent
++      && (dstRect.extent != srcRect.extent || m_fsr2Enabled)
 +      && dstRect.extent.width >= srcRect.extent.width
 +      && dstRect.extent.height >= srcRect.extent.height;
 +
@@ -1561,7 +1563,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
       && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
       && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
        renderFxaa(ctx, srcView, srcRect);
-@@ -823,29 +882,18 @@
+@@ -823,29 +884,18 @@
        m_fxaaView = nullptr;
      }
  
@@ -1593,7 +1595,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
        m_presentLogSamples = srcSamples;
        m_presentLogSrc = srcRect.extent;
        m_presentLogDst = dstRect.extent;
-@@ -857,7 +905,8 @@
+@@ -857,7 +907,8 @@
        Logger::info(str::format("Swap chain: present ", srcRect.extent.width, "x", srcRect.extent.height,
          " ", msaa, " to ", dstRect.extent.width, "x", dstRect.extent.height,
          useFsr ? (srcSamples != VK_SAMPLE_COUNT_1_BIT ? ", FSR 1.0 active (MSAA resolved before EASU)" : ", FSR 1.0 active")
@@ -1603,7 +1605,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      }
  
      // EASU and the post-processing passes read single-sampled texels, so a
-@@ -877,15 +926,32 @@
+@@ -877,15 +928,32 @@
      }
  
      if (useFsr) {
@@ -1636,7 +1638,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      // Post-processing runs in the RCAS pass, which reads its source 1:1,
      // so it needs a single-sampled source at the output size.
      m_postActive = m_postEnabled
-@@ -1530,6 +1596,13 @@
+@@ -1530,6 +1598,13 @@
    }
  
  
