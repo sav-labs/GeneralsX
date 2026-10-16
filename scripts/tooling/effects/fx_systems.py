@@ -507,3 +507,9 @@ def write_ini():
         "Data\\INI\\GeneralsX\\EffectsParticles.ini": systems,
         "Data\\INI\\GeneralsX\\EffectsFXList.ini": fx,
     }
+
+# Most China vehicles (Battlemaster, Gattling tank) and the Humvee die through these retail lists,
+# which have the same nuggets as FX_GenericTankDeathExplosion apart from the light, so they get the
+# same explosion and burning wreck.
+FXLISTS["FX_BattleMasterExplosionOneFinal"] = FXLISTS["FX_GenericTankDeathExplosion"]
+FXLISTS["FX_GattlingExplosionOneFinal"] = FXLISTS["FX_GenericTankDeathExplosion"]
