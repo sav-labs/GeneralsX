@@ -408,8 +408,6 @@ void GameEngine::init()
 		fprintf(stderr, "INFO: GameEngine::init() - About to initialize TheWritableGlobalData\n");
 		initSubsystem(TheWritableGlobalData, "TheWritableGlobalData", TheWritableGlobalData, &xferCRC, "Data\\INI\\Default\\GameData", "Data\\INI\\GameData");
 		fprintf(stderr, "INFO: GameEngine::init() - TheWritableGlobalData initialized\n");
-		TheWritableGlobalData->parseCustomDefinition();
-		fprintf(stderr, "INFO: GameEngine::init() - TheWritableGlobalData parseCustomDefinition complete\n");
 
 	// GeneralsX @feature felipebraz 08/06/2026 Auto-create SagePatch.ini in user data dir with defaults.
 	{
@@ -502,6 +500,14 @@ void GameEngine::init()
 		// If we're in Debug, load the Debug settings as well.
 		ini.loadFileDirectory( "Data\\INI\\GameDataDebug", INI_LOAD_OVERWRITE, nullptr );
 	#endif
+
+		// GeneralsX @bugfix Claude 16/10/2026 Custom definitions go after SagePatch.ini and the loose GameData.ini:
+		// every GameData block re-reads Options.ini Resolution (GlobalData::parseGameDataDefinition), so the
+		// RenderScale resolution set here before them was overwritten and the device used the full Resolution.
+		TheWritableGlobalData->parseCustomDefinition();
+		fprintf(stderr, "[DISPLAY] game resolution %dx%d after GameData, SagePatch.ini and RenderScale\n",
+			TheGlobalData->m_xResolution, TheGlobalData->m_yResolution);
+		fflush(stderr);
 
 		// special-case: parse command-line parameters after loading global data
 		CommandLine::parseCommandLineForEngineInit();

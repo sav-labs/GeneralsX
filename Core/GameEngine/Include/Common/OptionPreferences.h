@@ -86,7 +86,9 @@ public:
 		UPSCALER_QUALITY_SCALE = 67,
 		UPSCALER_BALANCED_SCALE = 59,
 		UPSCALER_PERFORMANCE_SCALE = 50,
-		UPSCALER_ULTRA_PERFORMANCE_SCALE = 33
+		UPSCALER_ULTRA_PERFORMANCE_SCALE = 33,
+		// GeneralsX @feature Claude 16/10/2026 Native: FSR 2 / FSR 3 render at the output size as anti-aliasing
+		UPSCALER_NATIVE_SCALE = 100
 	};
 
 	Bool loadFromIniFile();
@@ -179,6 +181,11 @@ public:
 	// GeneralsX @feature Claude 14/10/2026 FSR render scale (Options.ini RenderScale, 100 = off)
 	Int getRenderScale() const;
 	static Bool getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres);
+	// GeneralsX @bugfix Claude 16/10/2026 Whether Options.ini sets Resolution at all
+	Bool hasResolution() const;
+	// GeneralsX @bugfix Claude 16/10/2026 The largest rectangle of the aspect ratio of width x height that fits in
+	// displayWidth x displayHeight, with the rounding of fitAspectRatio in DXVK patch 0001 (the image DXVK presents)
+	static void fitToDisplay(Int width, Int height, Int displayWidth, Int displayHeight, Int *fitWidth, Int *fitHeight);
 	// GeneralsX @feature Claude 15/10/2026 FSR RCAS sharpening in stops (Options.ini FSRSharpness, 0 = sharpest)
 	Real getFSRSharpness() const;
 	// GeneralsX @feature Claude 16/10/2026 Whether Options.ini sets RenderScale at all
@@ -188,7 +195,7 @@ public:
 	static UpscalerType parseUpscaler(const char *name);
 	static const char *getUpscalerName(UpscalerType upscaler);
 	// GeneralsX @feature Claude 16/10/2026 Render scale of Options.ini UpscalerQuality
-	// (Quality | Balanced | Performance | UltraPerformance, default Quality)
+	// (Quality | Balanced | Performance | UltraPerformance | Native, default Quality)
 	Int getUpscalerQualityScale() const;
 	AsciiString getUpscalerQualityName() const;
 	// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask strength for particles and other alpha-blended
