@@ -40,11 +40,14 @@ Useful options:
 - `--limit 30`: stop after N textures
 - `--preview-dir previews`: write `<name>_before.png` / `<name>_after.png` pairs and `compare_001.jpg`, `compare_002.jpg`, ... (40 textures per sheet, 1:1 crops, bicubic on the left, pack on the right)
 - `--exclude-list keep.txt`: texture names that keep the original (one per line)
+- `--safe-list safe.txt`: texture names or globs (one per line, `#` comments) upscaled with Lanczos and a light unsharp mask instead of the AI model, for lettering the model would warp. Names with sign, text, logo, letter, number, digit, font, billboard, poster, banner or decal always take this path. The report lists them under `safe_upscaled`.
+- `--check <pack>`: check a built pack (repeat for each `_01`, `_02` part) without building. Lists tree textures (magenta trees), UI textures and GeneralsX content pack textures in it and exits 1 if there are any. Needs `--game-dir` only.
 - `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
 - `--scale 2`: 2x instead of 4x
 - `--esrgan-args "-g 0 -j 1:1:1"`: extra upscaler arguments (GPU id, thread counts)
 - `--cache-dir <dir>`: where upscaled `.dds` files are kept (default `<out name>.cache` next to the output). A rerun only upscales textures that are not cached yet, so an interrupted full run resumes instead of starting over.
 - `--max-size 1024`: cap the output size (default 2048) to keep the pack and video memory smaller
 - GeneralsX content packs (`GeneralsX*.big`, e.g. `GeneralsXContent.big`) are never read, and their texture names are left out of the HD pack, so the pack's `.dds` copies (mod priority) cannot hide new or updated content art. The report lists them under `content_pack_textures_excluded`.
+- `--review-dir <dir>`: check quality before shipping. Ranks the cached results by how much the model changed them compared with a plain Lanczos upscale (8 px blocks, 99th percentile), and writes `compare_NNN.jpg` (left: plain upscale with name and score, right: pack result) and `review.json` for the worst `--review-count` (default 200). No pack is written. Bad ones go into `--exclude-list`.
 - `--terrain`: build a terrain pack instead (`--out "<game>\!HDTerrain.big"`): Art/Terrain/ tiles are upscaled to exactly 4x (2x when 4x would pass `--max-size`) and written as RLE TGA under their original names, which the HD terrain loader picks up. Only sheets that `Data/INI/Terrain.ini` uses as terrain textures are upscaled; tree textures (`TextureName` of W3DTreeDraw) stay retail, because the tree atlas reads them as 64 px cells and an upscaled sheet makes every tree render magenta. Use its own `--cache-dir` or the default next to the output.
 - `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)

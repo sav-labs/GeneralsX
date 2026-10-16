@@ -162,6 +162,7 @@ MeshClass::MeshClass() :
 	LightEnvironment(nullptr),
 	BaseVertexOffset(0),
 	NextVisibleSkin(nullptr),
+	SkinCache(nullptr),
 	IsDisabledByDebugger(false),
 	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
@@ -191,6 +192,7 @@ MeshClass::MeshClass(const MeshClass & that) :
 	LightEnvironment(nullptr),
 	BaseVertexOffset(that.BaseVertexOffset),
 	NextVisibleSkin(nullptr),
+	SkinCache(nullptr),
 	IsDisabledByDebugger(false),
 	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
@@ -221,6 +223,8 @@ MeshClass & MeshClass::operator = (const MeshClass & that)
 
 		REF_PTR_SET(Model,that.Model);				// mesh instances share models by default
 		BaseVertexOffset = that.BaseVertexOffset;
+		// GeneralsX @performance Claude 16/10/2026 The skin cache belongs to the old model and pose.
+		Invalidate_Skin_Cache();
 
 		// just dont copy the decals or light environment
 		REF_PTR_RELEASE(DecalMesh);
@@ -286,6 +290,9 @@ void MeshClass::Free()
 {
 	REF_PTR_RELEASE(Model);
 	REF_PTR_RELEASE(DecalMesh);
+	// GeneralsX @performance Claude 16/10/2026 Release the skinned vertices of the last pose.
+	delete SkinCache;
+	SkinCache = nullptr;
 }
 
 
@@ -442,6 +449,8 @@ void MeshClass::Scale(float scale)
 	Make_Unique();
 	Model->Make_Geometry_Unique();
 	Model->Scale(sc);
+	// GeneralsX @performance Claude 16/10/2026 Scaling changes the source vertices of the skin cache.
+	Invalidate_Skin_Cache();
 
    Invalidate_Cached_Bounding_Volumes();
 
@@ -474,6 +483,8 @@ void MeshClass::Scale(float scalex, float scaley, float scalez)
 	Make_Unique();
 	Model->Make_Geometry_Unique();
 	Model->Scale(sc);
+	// GeneralsX @performance Claude 16/10/2026 Scaling changes the source vertices of the skin cache.
+	Invalidate_Skin_Cache();
 
    Invalidate_Cached_Bounding_Volumes();
 
@@ -498,7 +509,66 @@ void MeshClass::Scale(float scalex, float scaley, float scalez)
 void	MeshClass::Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm)
 {
 	WWASSERT(Model->Get_Flag(MeshGeometryClass::SKIN));
-	Model->get_deformed_vertices(dst_vert,dst_norm,Container->Get_HTree());
+	// GeneralsX @performance Claude 16/10/2026 Copy from the skin cache when the bones did not move.
+	const Vector3 *verts = nullptr;
+	const Vector3 *norms = nullptr;
+	Get_Deformed_Vertices_Cached(dst_vert, dst_norm, verts, norms);
+	if (verts != dst_vert) {
+		const int vertex_count = Model->Get_Vertex_Count();
+		memcpy(dst_vert, verts, sizeof(Vector3) * vertex_count);
+		memcpy(dst_norm, norms, sizeof(Vector3) * vertex_count);
+	}
+}
+
+// GeneralsX @performance Claude 16/10/2026 Skin cache switch (Options.ini SkinCache, default on).
+bool MeshClass::SkinCacheEnabled = true;
+
+/***********************************************************************************************
+ * MeshClass::Get_Deformed_Vertices_Cached -- deformed vertices of a skin, from the skin cache  *
+ *                                                                                             *
+ * The skin cache of this instance keeps the vertices and normals of the last pose with the    *
+ * transforms of the bones its vertices use. While those transforms are bit-for-bit the same,  *
+ * the stored vertices are exactly what skinning would produce again, so it is skipped.        *
+ *                                                                                             *
+ * INPUT: scratch arrays used only when the cache is off (at least Get_Vertex_Count() long).   *
+ *        With null scratch arrays and no cache, out_vert is null and nothing is computed.     *
+ *                                                                                             *
+ * OUTPUT: out_vert, out_norm point at the vertices to use; true when the cache was valid      *
+ *                                                                                             *
+ * HISTORY:                                                                                    *
+ *   16/10/2026 Claude: Created.                                                               *
+ *=============================================================================================*/
+bool MeshClass::Get_Deformed_Vertices_Cached(Vector3 *scratch_vert, Vector3 *scratch_norm,
+	const Vector3 *&out_vert, const Vector3 *&out_norm)
+{
+	WWASSERT(Model->Get_Flag(MeshGeometryClass::SKIN));
+	const HTreeClass *htree = Container ? Container->Get_HTree() : nullptr;
+	const uint16 *bone_links = Model->Get_Vertex_Bone_Links();
+
+	if (SkinCacheEnabled && htree != nullptr && bone_links != nullptr) {
+		if (SkinCache == nullptr) {
+			SkinCache = new SkinPoseCacheClass;
+		}
+		SkinCache->Bind(Model, bone_links, Model->Get_Vertex_Count());
+		if (SkinCache->Is_Bound()) {
+			const bool hit = SkinCache->Matches(htree, *htree, true);
+			if (!hit) {
+				Model->get_deformed_vertices(SkinCache->Peek_Vertices(), SkinCache->Peek_Normals(), htree);
+				SkinCache->Store_Pose(htree, *htree, true);
+			}
+			out_vert = SkinCache->Peek_Vertices();
+			out_norm = SkinCache->Peek_Normals();
+			return hit;
+		}
+	}
+
+	// No cache for this mesh: skin into the scratch arrays, or let the caller provide them first.
+	out_vert = scratch_vert;
+	out_norm = scratch_norm;
+	if (scratch_vert != nullptr && scratch_norm != nullptr) {
+		Model->get_deformed_vertices(scratch_vert, scratch_norm, htree);
+	}
+	return false;
 }
 
 
@@ -520,7 +590,14 @@ void MeshClass::Get_Deformed_Vertices(Vector3 *dst_vert)
 	WWASSERT(Container != nullptr);
 	WWASSERT(Container->Get_HTree() != nullptr);
 
-	Model->get_deformed_vertices(dst_vert,Container->Get_HTree());
+	// GeneralsX @performance Claude 16/10/2026 Positions only (decals, visibility): reuse the skin cache
+	// when its pose is current, otherwise skin as before without touching the cache.
+	const HTreeClass *htree = Container->Get_HTree();
+	if (SkinCacheEnabled && SkinCache != nullptr && SkinCache->Is_Bound() && SkinCache->Matches(htree, *htree, false)) {
+		memcpy(dst_vert, SkinCache->Peek_Vertices(), sizeof(Vector3) * Model->Get_Vertex_Count());
+		return;
+	}
+	Model->get_deformed_vertices(dst_vert,htree);
 }
 
 /***********************************************************************************************

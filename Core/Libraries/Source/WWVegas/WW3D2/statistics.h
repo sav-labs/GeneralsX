@@ -56,6 +56,9 @@ namespace Debug_Statistics
 	int Get_DX8_Skin_Renders();
 	int Get_DX8_Skin_Polygons();
 	int Get_DX8_Skin_Vertices();
+	// GeneralsX @performance Claude 16/10/2026 Skinned meshes whose vertices came unchanged from the skin cache.
+	void Record_DX8_Skin_Cache_Hit();
+	int Get_DX8_Skin_Cache_Hits();
 	int Get_Sorting_Polygons();
 	int Get_Sorting_Vertices();
 	int Get_Draw_Calls();

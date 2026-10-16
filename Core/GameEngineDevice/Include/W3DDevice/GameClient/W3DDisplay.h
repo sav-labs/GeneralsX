@@ -217,6 +217,12 @@ protected:
 	DisplayString *m_displayStrings[DisplayStringCount];
 	DisplayString *m_benchmarkDisplayString;
 
+	// GeneralsX @performance Claude 16/10/2026 Frame profiler overlay (Options.ini PerfOverlay).
+	enum { PerfDisplayStringCount = 3 };
+	DisplayString *m_perfDisplayStrings[PerfDisplayStringCount];
+	void drawPerfOverlay();
+	void recordPerfCounters();
+
 	W3DDebugDisplay *m_nativeDebugDisplay;		///< W3D specific debug display interface
 
 };

@@ -32,6 +32,7 @@
 
 #include "Common/ArchiveFileSystem.h"
 #include "Common/CommandLine.h"
+#include "Common/PerfStats.h"
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
 #include "Common/OptionPreferences.h"
@@ -147,6 +148,25 @@ Int parseRenderScale(char *args[], int num)
 		Int scale = atoi(args[1]);
 		if (scale > 0)
 			TheWritableGlobalData->m_renderScale = clamp((Int)OptionPreferences::RENDER_SCALE_MIN, scale, (Int)OptionPreferences::RENDER_SCALE_OFF);
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 16/10/2026 -upscaler fsr2|fsr1|off overrides Options.ini Upscaler, so the upscalers
+// can be compared on the same machine without editing Options.ini. dlss is accepted and falls back to FSR 2.
+Int parseUpscaler(char *args[], int num)
+{
+	if (num > 1)
+	{
+		OptionPreferences::UpscalerType upscaler = OptionPreferences::parseUpscaler(args[1]);
+		if (upscaler != OptionPreferences::UPSCALER_DEFAULT)
+			TheWritableGlobalData->m_upscaler = upscaler;
+		else
+		{
+			fprintf(stderr, "[FSR2] unknown -upscaler value '%s', expected fsr2, fsr1 or off\n", args[1]);
+			fflush(stderr);
+		}
 		return 2;
 	}
 	return 1;
@@ -877,6 +897,43 @@ Int parseCameraTestClose(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @performance Claude 16/10/2026 -perf [seconds]: print a [PERF] frame profile to stderr every few
+// seconds (default 5, or Options.ini PerfInterval). Release builds included; render and client timing only.
+Int parsePerf(char *args[], int num)
+{
+	Real seconds = 0.0f;
+	Int consumed = 1;
+	if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
+	{
+		seconds = (Real)atof(args[consumed]);
+		++consumed;
+	}
+	PerfStats::enableFromCommandLine(seconds);
+	return consumed;
+}
+
+// GeneralsX @performance Claude 16/10/2026 -perfdump <seconds> [delay]: like -perf, and writes one CSV row per
+// frame for the given seconds of the next match, starting delay seconds after the match begins, into the
+// capture folder (Options.ini CapturePath) as perf_<date>_<time>.csv.
+Int parsePerfDump(char *args[], int num)
+{
+	Int consumed = 1;
+	Real seconds = 60.0f;
+	Real delay = 0.0f;
+	if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
+	{
+		seconds = (Real)atof(args[consumed]);
+		++consumed;
+		if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
+		{
+			delay = (Real)atof(args[consumed]);
+			++consumed;
+		}
+	}
+	PerfStats::enableDump(seconds, delay);
+	return consumed;
+}
+
 Int parseLoadReplay(char *args[], int num)
 {
 	if (num > 1)
@@ -1313,6 +1370,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-win", parseWin },
 	{ "-upscale", parseUpscale },
 	{ "-renderscale", parseRenderScale },
+	{ "-upscaler", parseUpscaler },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
@@ -1378,6 +1436,9 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-camtest", parseCameraTest },
 	// GeneralsX @feature Claude 15/10/2026 Close-up variant of the -camtest flight.
 	{ "-camclose", parseCameraTestClose },
+	// GeneralsX @performance Claude 16/10/2026 Frame profiler: stderr summary and per frame CSV.
+	{ "-perf", parsePerf },
+	{ "-perfdump", parsePerfDump },
 
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },

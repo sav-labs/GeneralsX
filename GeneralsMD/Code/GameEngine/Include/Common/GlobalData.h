@@ -140,6 +140,9 @@ public:
 	Int m_renderScale;
 	Int m_renderScaleDisplayWidth;
 	Int m_renderScaleDisplayHeight;
+	// GeneralsX @feature Claude 16/10/2026 Upscaler from -upscaler, OptionPreferences::UpscalerType (0 = read Options.ini
+	// Upscaler). After start-up it holds the upscaler in use; the 3D view jitters its camera for UPSCALER_FSR2.
+	Int m_upscaler;
 	Int m_xResolution;
 	Int m_yResolution;
 	Int m_maxShellScreens;  ///< this many shells layouts can be loaded at once

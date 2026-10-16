@@ -42,6 +42,7 @@
 #include "WWLib/bittype.h"
 #include "WW3D2/w3derr.h"
 #include "lightenvironment.h"	//added for 'Generals'
+#include "WW3D2/skinposecache.h"
 
 class MeshBuilderClass;
 class HModelClass;
@@ -136,6 +137,14 @@ public:
 	void								Get_Deformed_Vertices(Vector3 *dst_vert, Vector3 *dst_norm);
 	void								Get_Deformed_Vertices(Vector3 *dst_vert);
 
+	// GeneralsX @performance Claude 16/10/2026 Deformed vertices for the skin renderer: points out_vert and
+	// out_norm at this instance's skin cache, refreshed only when a bone used by the mesh moved, or at the
+	// scratch arrays (filled) when the cache is off. Returns true when the cache supplied them unchanged.
+	bool								Get_Deformed_Vertices_Cached(Vector3 *scratch_vert, Vector3 *scratch_norm,
+											const Vector3 *&out_vert, const Vector3 *&out_norm);
+	static void						Set_Skin_Cache_Enabled(bool onoff) { SkinCacheEnabled = onoff; }
+	static bool						Is_Skin_Cache_Enabled() { return SkinCacheEnabled; }
+
 	void								Set_Lighting_Environment(LightEnvironmentClass * light_env) { if (light_env) {m_localLightEnv=*light_env;LightEnvironment = &m_localLightEnv;} else {LightEnvironment = nullptr;} }
 	LightEnvironmentClass *		Get_Lighting_Environment() { return LightEnvironment; }
 	float	Get_Alpha_Override() { return m_alphaOverride;}
@@ -182,6 +191,12 @@ protected:
 
 	unsigned							MeshDebugId;
 	bool								IsDisabledByDebugger;
+
+	// GeneralsX @performance Claude 16/10/2026 Skinned vertices of the last pose, see skinposecache.h.
+	typedef SkinPoseCacheT<Matrix3D, Vector3> SkinPoseCacheClass;
+	SkinPoseCacheClass *			SkinCache;
+	static bool						SkinCacheEnabled;
+	void								Invalidate_Skin_Cache() { if (SkinCache) SkinCache->Invalidate(); }
 
 	friend class MeshBuilderClass;
 };

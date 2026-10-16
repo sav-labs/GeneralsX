@@ -1350,18 +1350,26 @@ void DX8SkinFVFCategoryContainer::Render()
 		WWASSERT((vertex_offset+mesh_vertex_count)<=VisibleVertexCount);
 			DX8_RECORD_SKIN_RENDER(mesh->Get_Num_Polys(),mesh_vertex_count);
 
-				if (_TempVertexBuffer.Length() < mesh_vertex_count) _TempVertexBuffer.Resize(mesh_vertex_count);
-				if (_TempNormalBuffer.Length() < mesh_vertex_count) _TempNormalBuffer.Resize(mesh_vertex_count);
-
-				Vector3* loc=&(_TempVertexBuffer[0]);
-				Vector3* norm=&(_TempNormalBuffer[0]);
+				// GeneralsX @performance Claude 16/10/2026 Take the deformed vertices from the mesh's skin cache
+				// (skinning is skipped while its bones did not move); the scratch buffers are only used with
+				// the cache off. The written vertices are unchanged.
+				const Vector3* loc=nullptr;
+				const Vector3* norm=nullptr;
+				if (MeshClass::Is_Skin_Cache_Enabled()) {
+					if (mesh->Get_Deformed_Vertices_Cached(nullptr,nullptr,loc,norm)) {
+						Debug_Statistics::Record_DX8_Skin_Cache_Hit();
+					}
+				}
+				if (loc == nullptr) {
+					if (_TempVertexBuffer.Length() < mesh_vertex_count) _TempVertexBuffer.Resize(mesh_vertex_count);
+					if (_TempNormalBuffer.Length() < mesh_vertex_count) _TempNormalBuffer.Resize(mesh_vertex_count);
+					mesh->Get_Deformed_Vertices_Cached(&(_TempVertexBuffer[0]),&(_TempNormalBuffer[0]),loc,norm);
+				}
 				const Vector2* uv0=mmc->Get_UV_Array_By_Index(0);
 				const Vector2* uv1=mmc->Get_UV_Array_By_Index(1);
 				const unsigned* diffuse=mmc->Get_Color_Array(0,false);
 
 				VertexFormatXYZNDUV2* verts=dest_verts+vertex_offset;
-
-				mesh->Get_Deformed_Vertices(loc,norm);
 
 				for (int v=0;v<mesh_vertex_count;++v) {
 					verts[v].x=(*loc)[0];
