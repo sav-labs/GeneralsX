@@ -2,8 +2,8 @@
 """Self-test for the map generator.
 
 GeneralsX @feature Claude 16/10/2026 Regenerates every layout, parses it with the strict reader
-in mapfile.py (the engine's rules), checks what the skirmish menu and AI need (8 start
-waypoints, perimeters, approach paths, scripts on the civilian side, named script targets) and
+in mapfile.py (the engine's rules), checks what the skirmish menu and AI need (a start
+waypoint per player, perimeters, approach paths, scripts on the civilian side, named script targets) and
 that the committed map in content/Maps matches the generator byte for byte.
 """
 
@@ -24,10 +24,11 @@ def check(layout):
     m = mapfile.read_map(data)
     names = {o["props"].get("waypointName") for o in m["objects"] if o["name"] == "*Waypoints/Waypoint"}
     starts = [n for n in names if n and n.startswith("Player_") and n.endswith("_Start")]
-    assert len(starts) == 8, starts
+    players = layout.PLAYERS
+    assert len(starts) == players, starts
     triggers = {t["name"] for t in m["triggers"]}
     labels = {o["props"].get("waypointPathLabel1") for o in m["objects"] if o["name"] == "*Waypoints/Waypoint"}
-    for n in range(1, 9):
+    for n in range(1, players + 1):
         assert f"InnerPerimeter{n}" in triggers and f"OuterPerimeter{n}" in triggers, n
         for path in ("Center", "Flank", "Backdoor"):
             assert f"{path}{n}" in labels, (path, n)

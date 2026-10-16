@@ -40,6 +40,14 @@ TEXTURE_WIDTH = {
     "CliffMediumType1": 4,
     "CliffLargeType1": 6,
     "RocksType2": 2,
+    "SandLargeType3Light": 6,
+    "SandLargeType4": 6,
+    "SandMediumType13d": 4,
+    "CliffMediumType16": 4,
+    "CliffLargeType8": 6,
+    "ConcreteType1": 2,
+    "SnowType2": 2,
+    "GrassMediumType15": 4,
 }
 
 # Script templates: (enum value, internal name) from ScriptEngine.cpp. The reader re-matches by

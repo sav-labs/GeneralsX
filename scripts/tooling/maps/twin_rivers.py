@@ -25,6 +25,7 @@ import mapgen
 NAME = "GX Twin Rivers Fortress"
 NAME_TAG = "MAP:GXTwinRiversFortress"
 DISPLAY_NAME = "Twin Rivers Fortress"
+PLAYERS = 8
 SEED = 1610
 
 SIZE = 3400.0  # playable world units per side

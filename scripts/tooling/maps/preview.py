@@ -16,6 +16,9 @@ CLASS_COLOURS = {
     "GrassMediumType31": (60, 86, 44), "DirtMediumType5": (128, 110, 80), "SandMediumType9": (150, 138, 104),
     "SandLargeType3": (176, 160, 120), "ConcreteMediumType1": (150, 150, 146), "AsphaltType1": (70, 70, 72),
     "CliffMediumType1": (112, 100, 86), "CliffLargeType1": (104, 94, 82), "RocksType2": (120, 116, 110),
+    "SnowType2": (226, 230, 234), "GrassMediumType15": (96, 112, 64), "CliffMediumType16": (118, 108, 96),
+    "SandLargeType3Light": (204, 184, 140), "SandLargeType4": (190, 164, 118), "SandMediumType13d": (170, 140, 100),
+    "CliffLargeType8": (150, 112, 80), "ConcreteType1": (160, 156, 148),
 }
 WATER = np.array((52, 92, 120), dtype=np.float64)
 
@@ -55,7 +58,7 @@ def category(template):
         return "supply"
     if template.startswith("Tech"):
         return "tech"
-    if template.startswith("Tree"):
+    if template.startswith("Tree") or template.startswith("DesertShrub"):
         return "tree"
     if template.startswith("Rock"):
         return "rock"
