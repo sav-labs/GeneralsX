@@ -87,6 +87,7 @@
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DView.h"
+#include "W3DDevice/GameClient/W3DUpscaler.h"
 #include "d3dx8math.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
@@ -1886,6 +1887,9 @@ void W3DView::draw()
 		}
 	}
 
+	// GeneralsX @feature Claude 16/10/2026 FSR 2 sub-pixel jitter of the 3D camera, render only
+	W3DUpscaler::beginScene(m_3DCamera);
+
 	if (!skipRender)
 	{
 		// Render 3D scene from our camera
@@ -1944,6 +1948,10 @@ void W3DView::draw()
 		Coord2D deltaScroll;
 		W3DShaderManager::filterPostRender(m_viewFilter, m_viewFilterMode, deltaScroll, doExtraRender);
 	}
+
+	// GeneralsX @feature Claude 16/10/2026 The 3D scene is complete: drop the jitter and let DXVK copy the scene
+	// colour and depth for FSR 2 before debug lines, the interface and the mouse are drawn over it.
+	W3DUpscaler::endScene(m_3DCamera);
 
 	if( TheGlobalData->m_debugAI )
 	{

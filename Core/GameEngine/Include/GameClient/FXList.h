@@ -33,6 +33,7 @@
 #include "Common/GameMemory.h"
 #include "Common/NameKeyGenerator.h"
 #include "Common/STLTypedefs.h"
+#include "GameClient/EffectLights.h"
 
 // FORWARD REFERENCES /////////////////////////////////////////////////////////////////////////////
 class FXNugget;
@@ -86,6 +87,10 @@ public:
 		Note that primary and/or secondary can be null, so you must check for this.
 	*/
 	virtual void doFXObj(const Object* primary, const Object* secondary = nullptr) const;
+
+	// GeneralsX @feature Claude 16/10/2026 Describes what this nugget does for the effect light classification
+	// (camera shake, scorch, particle system names). Nuggets that do not matter for the light add nothing.
+	virtual void addLightTraits(EffectLights::FXTraits &traits) const { (void)traits; }
 
 private:
 
@@ -174,11 +179,22 @@ protected:
 	*/
 	void doFXObj(const Object* primary, const Object* secondary = nullptr) const;
 
+	// GeneralsX @feature Claude 16/10/2026 Asks the display for an automatic light when this FXList has no LightPulse.
+	void addEffectLight(const Coord3D *pos, Real objectRadius) const;
+
 private:
+
+	friend class FXListStore;
 
 	typedef std::list< FXNugget* > FXNuggetList;
 
 	FXNuggetList m_nuggets;
+
+	// GeneralsX @feature Claude 16/10/2026 Name (for the light classification) and the light profile, worked out on
+	// first use because particle system templates may be parsed after the FXLists.
+	AsciiString m_name;
+	mutable EffectLights::Profile m_lightProfile;
+	mutable Bool m_lightProfileReady;
 
 };
 

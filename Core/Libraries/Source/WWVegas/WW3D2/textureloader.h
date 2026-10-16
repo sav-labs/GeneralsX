@@ -89,6 +89,12 @@ public:
 
 	static void Set_Texture_Inactive_Override_Time(int time_ms) {TextureInactiveOverrideTime = time_ms;}
 
+	// GeneralsX @performance Claude 16/10/2026 Running totals of the texture loads that ran to completion on the
+	// main thread (foreground loads and immediate surface loads), for the frame profiler's hitch lines.
+	static unsigned Get_Sync_Load_Count() { return SyncLoadCount; }
+	static double Get_Sync_Load_Ms() { return SyncLoadMs; }
+	static void Add_Sync_Load(double ms) { ++SyncLoadCount; SyncLoadMs += ms; }
+
 private:
 	static void Process_Foreground_Load			(TextureLoadTaskClass *task);
 	static void Process_Foreground_Thumbnail	(TextureLoadTaskClass *task);
@@ -101,6 +107,9 @@ private:
 	// The time in ms before a texture is thrown out.
 	// The default is zero.  The scripted movies set this to reduce texture stalls in movies.
 	static int	TextureInactiveOverrideTime;
+
+	static unsigned SyncLoadCount;
+	static double SyncLoadMs;
 };
 
 class TextureLoadTaskListNodeClass

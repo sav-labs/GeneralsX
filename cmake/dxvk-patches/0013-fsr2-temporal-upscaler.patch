@@ -1,0 +1,1805 @@
+GeneralsX: AMD FidelityFX FSR 2 temporal upscaler in the swap chain blitter.
+DXVK_UPSCALER=fsr2 upscales the 3D scene with FSR 2 (v2.2.1, MIT) and
+composites the FSR 1.0 EASU image wherever the interface was drawn.
+The FidelityFX sources are copied to src/dxvk/fsr2/ffx-fsr2-api by the
+build; without them DXVK builds as before and FSR 2 reports unavailable.
+
+diff --git a/src/dxvk/dxvk_cmdlist.h b/src/dxvk/dxvk_cmdlist.h
+--- a/src/dxvk/dxvk_cmdlist.h
++++ b/src/dxvk/dxvk_cmdlist.h
+@@ -423,6 +423,19 @@
+      */
+     void reset();
+     
++    /**
++     * \brief GeneralsX: execution command buffer for external code
++     *
++     * Lets a library record its own commands, such as the FidelityFX
++     * FSR 2 Vulkan backend. The caller restores any state it relies on.
++     * \returns Execution command buffer
++     */
++    VkCommandBuffer getExecCommandBuffer() {
++      m_cmd.execCommands = true;
++      return getCmdBuffer(DxvkCmdBuffer::ExecBuffer);
++    }
++
++
+     void updateDescriptorSets(
+             uint32_t                      descriptorWriteCount,
+       const VkWriteDescriptorSet*         pDescriptorWrites) {
+diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/dxvk_fsr2.cpp
+@@ -0,0 +1,664 @@
++#include "dxvk_fsr2.h"
++
++#include <cmath>
++#include <cstring>
++
++#include <dxvk_fsr2_prepare.h>
++#include <dxvk_fsr2_composite.h>
++
++#ifdef DXVK_GENERALSX_FSR2
++#include "fsr2/dxvk_fsr2_ffx_table.h"
++#include "fsr2/ffx-fsr2-api/ffx_fsr2.h"
++#include "fsr2/ffx-fsr2-api/vk/ffx_fsr2_vk.h"
++#endif
++
++namespace dxvk {
++
++  std::atomic<bool> DxvkFsr2::s_temporalActive = { false };
++
++
++  DxvkFsr2::DxvkFsr2(const Rc<DxvkDevice>& device)
++  : m_device(device) {
++    if (!isAvailable()) {
++      fail("FidelityFX FSR 2 is not part of this DXVK build");
++      return;
++    }
++
++    createPipelines();
++
++    DxvkSamplerKey samplerKey = { };
++    samplerKey.setFilter(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST);
++    samplerKey.setAddressModes(
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
++    m_pointSampler = m_device->createSampler(samplerKey);
++
++    samplerKey.setFilter(VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST);
++    m_linearSampler = m_device->createSampler(samplerKey);
++  }
++
++
++  DxvkFsr2::~DxvkFsr2() {
++    destroyContext();
++
++    auto vk = m_device->vkd();
++
++    vk->vkDestroyPipeline(vk->device(), m_preparePipeline, nullptr);
++    vk->vkDestroyPipelineLayout(vk->device(), m_preparePipelineLayout, nullptr);
++    vk->vkDestroyDescriptorSetLayout(vk->device(), m_prepareSetLayout, nullptr);
++
++    vk->vkDestroyPipeline(vk->device(), m_compositePipeline, nullptr);
++    vk->vkDestroyPipelineLayout(vk->device(), m_compositePipelineLayout, nullptr);
++    vk->vkDestroyDescriptorSetLayout(vk->device(), m_compositeSetLayout, nullptr);
++  }
++
++
++  bool DxvkFsr2::isAvailable() {
++#ifdef DXVK_GENERALSX_FSR2
++    return true;
++#else
++    return false;
++#endif
++  }
++
++
++  Rc<DxvkImageView> DxvkFsr2::render(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++    const Rc<DxvkImageView>&          finalView,
++          VkRect2D                    finalRect,
++    const Rc<DxvkImageView>&          spatialView,
++          VkExtent2D                  extent) {
++    if (m_failed || inputs.color == nullptr || inputs.depth == nullptr)
++      return nullptr;
++
++    VkExtent3D colorExtent = inputs.color->mipLevelExtent(0u);
++    VkExtent2D renderExtent = { colorExtent.width, colorExtent.height };
++
++    if (renderExtent != m_renderExtent || extent != m_displayExtent || !m_contextValid) {
++      // Resources of the old context may still be in use by earlier frames
++      if (m_contextValid)
++        m_device->waitForIdle();
++
++      destroyContext();
++
++      if (!createContext(renderExtent, extent))
++        return nullptr;
++
++      createImages(renderExtent, extent);
++      m_havePrev = false;
++    }
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture))) {
++      ctx.cmd->cmdBeginDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer,
++        vk::makeLabel(0xdcc0f0, "FSR 2"));
++    }
++
++    // Everything written before, the scene copies by the D3D9 device, the
++    // EASU pass and the back buffer, is read by the compute passes below.
++    VkMemoryBarrier2 memBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    memBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++    memBarrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
++    memBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    memBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.memoryBarrierCount = 1;
++    depInfo.pMemoryBarriers = &memBarrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    preparePass(ctx, inputs);
++
++    bool success = dispatchFsr2(ctx, inputs);
++
++    if (success)
++      compositePass(ctx, inputs, finalView, finalRect, spatialView);
++
++    // DXVK does not know about the compute reads above, so make sure that
++    // later writes to the back buffer and the scene copies wait for them.
++    VkMemoryBarrier2 readBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    readBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    readBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++
++    depInfo.pMemoryBarriers = &readBarrier;
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
++      ctx.cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
++
++    ctx.cmd->track(inputs.color->image(), DxvkAccess::Read);
++    ctx.cmd->track(inputs.depth->image(), DxvkAccess::Read);
++    ctx.cmd->track(finalView->image(), DxvkAccess::Read);
++    ctx.cmd->track(spatialView->image(), DxvkAccess::Read);
++    ctx.cmd->track(m_depthImage, DxvkAccess::Write);
++    ctx.cmd->track(m_motionImage, DxvkAccess::Write);
++    ctx.cmd->track(m_outputImage, DxvkAccess::Write);
++    ctx.cmd->track(m_compositeImage, DxvkAccess::Write);
++    ctx.cmd->track(m_pointSampler);
++    ctx.cmd->track(m_linearSampler);
++
++    if (!success)
++      return nullptr;
++
++    m_prevViewProj = inputs.viewProj;
++    m_havePrev = true;
++    m_frameCount += 1u;
++
++    if (m_frameCount == 1u || !(m_frameCount % 600u)) {
++      Logger::info(str::format("FSR2: frame ", m_frameCount, ", ",
++        renderExtent.width, "x", renderExtent.height, " to ", extent.width, "x", extent.height,
++        ", jitter ", inputs.jitter[0], " ", inputs.jitter[1],
++        ", near ", inputs.cameraNear, ", far ", inputs.cameraFar,
++        ", frame time ", inputs.frameTimeMs, " ms"));
++    }
++
++    return m_compositeView;
++  }
++
++
++  bool DxvkFsr2::createContext(VkExtent2D renderExtent, VkExtent2D displayExtent) {
++#ifdef DXVK_GENERALSX_FSR2
++    auto vki = m_device->vki();
++
++    PFN_vkGetDeviceProcAddr getDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
++      vki->getLoaderProc()(vki->instance(), "vkGetDeviceProcAddr"));
++
++    if (!getDeviceProcAddr) {
++      fail("vkGetDeviceProcAddr not found");
++      return false;
++    }
++
++    g_dxvkFsr2Vk.enumerateDeviceExtensionProperties = vki->vkEnumerateDeviceExtensionProperties;
++    g_dxvkFsr2Vk.getPhysicalDeviceMemoryProperties  = vki->vkGetPhysicalDeviceMemoryProperties;
++    g_dxvkFsr2Vk.getPhysicalDeviceProperties        = vki->vkGetPhysicalDeviceProperties;
++    g_dxvkFsr2Vk.getPhysicalDeviceProperties2       = vki->vkGetPhysicalDeviceProperties2;
++    g_dxvkFsr2Vk.getPhysicalDeviceFeatures2         = vki->vkGetPhysicalDeviceFeatures2;
++    g_dxvkFsr2Vk.getDeviceProcAddr                  = getDeviceProcAddr;
++
++    VkPhysicalDevice adapter = m_device->adapter()->handle();
++
++    m_scratch.resize(ffxFsr2GetScratchMemorySizeVK(adapter));
++    std::memset(m_scratch.data(), 0, m_scratch.size());
++
++    FfxFsr2ContextDescription desc = { };
++    FfxErrorCode error = ffxFsr2GetInterfaceVK(&desc.callbacks,
++      m_scratch.data(), m_scratch.size(), adapter, getDeviceProcAddr);
++
++    if (error != FFX_OK) {
++      fail(str::format("ffxFsr2GetInterfaceVK failed: ", error));
++      return false;
++    }
++
++    // The game renders LDR colour without an exposure value. Motion vectors
++    // are at render resolution and computed without jitter.
++    desc.flags = FFX_FSR2_ENABLE_AUTO_EXPOSURE;
++    desc.maxRenderSize = { renderExtent.width, renderExtent.height };
++    desc.displaySize = { displayExtent.width, displayExtent.height };
++    desc.device = ffxGetDeviceVK(m_device->handle());
++
++    m_context = std::make_unique<uint8_t[]>(sizeof(FfxFsr2Context));
++    std::memset(m_context.get(), 0, sizeof(FfxFsr2Context));
++
++    error = ffxFsr2ContextCreate(reinterpret_cast<FfxFsr2Context*>(m_context.get()), &desc);
++
++    if (error != FFX_OK) {
++      m_context = nullptr;
++      fail(str::format("ffxFsr2ContextCreate failed: ", error));
++      return false;
++    }
++
++    m_contextValid = true;
++    m_renderExtent = renderExtent;
++    m_displayExtent = displayExtent;
++
++    Logger::info(str::format("FSR2: context created, render ", renderExtent.width, "x", renderExtent.height,
++      ", display ", displayExtent.width, "x", displayExtent.height,
++      ", FidelityFX FSR ", FFX_FSR2_VERSION_MAJOR, ".", FFX_FSR2_VERSION_MINOR, ".", FFX_FSR2_VERSION_PATCH));
++    return true;
++#else
++    return false;
++#endif
++  }
++
++
++  void DxvkFsr2::destroyContext() {
++#ifdef DXVK_GENERALSX_FSR2
++    if (m_contextValid) {
++      m_device->waitForIdle();
++      ffxFsr2ContextDestroy(reinterpret_cast<FfxFsr2Context*>(m_context.get()));
++    }
++#endif
++
++    m_contextValid = false;
++    m_context = nullptr;
++    m_renderExtent = { 0u, 0u };
++    m_displayExtent = { 0u, 0u };
++  }
++
++
++  void DxvkFsr2::createPipelines() {
++    auto vk = m_device->vkd();
++
++    // Prepare pass: depth in, linear depth copy and motion vectors out
++    std::array<VkDescriptorSetLayoutBinding, 3> prepareBindings = {{
++      { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++    }};
++
++    // Composite pass: FSR 2 output, EASU output, final and scene images,
++    // composited output
++    std::array<VkDescriptorSetLayoutBinding, 5> compositeBindings = {{
++      { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++    }};
++
++    auto createLayouts = [&] (const VkDescriptorSetLayoutBinding* bindings, uint32_t count,
++        uint32_t pushSize, VkDescriptorSetLayout& setLayout, VkPipelineLayout& pipelineLayout) {
++      VkDescriptorSetLayoutCreateInfo setInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
++      setInfo.bindingCount = count;
++      setInfo.pBindings = bindings;
++
++      VkResult vr = vk->vkCreateDescriptorSetLayout(vk->device(), &setInfo, nullptr, &setLayout);
++
++      if (vr != VK_SUCCESS)
++        throw DxvkError(str::format("FSR2: failed to create descriptor set layout: ", vr));
++
++      VkPushConstantRange pushConst = { };
++      pushConst.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
++      pushConst.size = pushSize;
++
++      VkPipelineLayoutCreateInfo layoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
++      layoutInfo.setLayoutCount = 1;
++      layoutInfo.pSetLayouts = &setLayout;
++      layoutInfo.pushConstantRangeCount = 1;
++      layoutInfo.pPushConstantRanges = &pushConst;
++
++      vr = vk->vkCreatePipelineLayout(vk->device(), &layoutInfo, nullptr, &pipelineLayout);
++
++      if (vr != VK_SUCCESS)
++        throw DxvkError(str::format("FSR2: failed to create pipeline layout: ", vr));
++    };
++
++    createLayouts(prepareBindings.data(), prepareBindings.size(), sizeof(PreparePushConstants),
++      m_prepareSetLayout, m_preparePipelineLayout);
++    createLayouts(compositeBindings.data(), compositeBindings.size(), sizeof(CompositePushConstants),
++      m_compositeSetLayout, m_compositePipelineLayout);
++
++    m_preparePipeline = createComputePipeline(m_preparePipelineLayout,
++      sizeof(dxvk_fsr2_prepare), dxvk_fsr2_prepare);
++    m_compositePipeline = createComputePipeline(m_compositePipelineLayout,
++      sizeof(dxvk_fsr2_composite), dxvk_fsr2_composite);
++  }
++
++
++  VkPipeline DxvkFsr2::createComputePipeline(
++          VkPipelineLayout            layout,
++          size_t                      codeSize,
++    const uint32_t*                   code) {
++    auto vk = m_device->vkd();
++
++    VkShaderModuleCreateInfo moduleInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
++    moduleInfo.codeSize = codeSize;
++    moduleInfo.pCode = code;
++
++    VkShaderModule module = VK_NULL_HANDLE;
++    VkResult vr = vk->vkCreateShaderModule(vk->device(), &moduleInfo, nullptr, &module);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("FSR2: failed to create shader module: ", vr));
++
++    VkComputePipelineCreateInfo info = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
++    info.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
++    info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
++    info.stage.module = module;
++    info.stage.pName = "main";
++    info.layout = layout;
++    info.basePipelineIndex = -1;
++
++    VkPipeline pipeline = VK_NULL_HANDLE;
++    vr = vk->vkCreateComputePipelines(vk->device(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
++
++    vk->vkDestroyShaderModule(vk->device(), module, nullptr);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("FSR2: failed to create compute pipeline: ", vr));
++
++    return pipeline;
++  }
++
++
++  Rc<DxvkImage> DxvkFsr2::createImage(
++          VkExtent2D                  extent,
++          VkFormat                    format,
++    const char*                       name,
++          Rc<DxvkImageView>&          view) {
++    DxvkImageCreateInfo imageInfo = { };
++    imageInfo.type          = VK_IMAGE_TYPE_2D;
++    imageInfo.format        = format;
++    imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++    imageInfo.extent        = { extent.width, extent.height, 1u };
++    imageInfo.mipLevels     = 1;
++    imageInfo.numLayers     = 1;
++    imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    imageInfo.stages        = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
++                            | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++    imageInfo.access        = VK_ACCESS_SHADER_READ_BIT
++                            | VK_ACCESS_SHADER_WRITE_BIT;
++    imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++    imageInfo.layout        = VK_IMAGE_LAYOUT_GENERAL;
++    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    imageInfo.colorSpace    = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++    imageInfo.debugName     = name;
++
++    Rc<DxvkImage> image = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++    DxvkImageViewKey viewInfo = { };
++    viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++    viewInfo.usage          = VK_IMAGE_USAGE_STORAGE_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    viewInfo.format         = format;
++    viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++    viewInfo.mipIndex       = 0u;
++    viewInfo.mipCount       = 1u;
++    viewInfo.layerIndex     = 0u;
++    viewInfo.layerCount     = 1u;
++
++    view = image->createView(viewInfo);
++    return image;
++  }
++
++
++  void DxvkFsr2::createImages(VkExtent2D renderExtent, VkExtent2D displayExtent) {
++    m_depthImage     = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR2 depth",       m_depthView);
++    m_motionImage    = createImage(renderExtent,  VK_FORMAT_R16G16_SFLOAT,       "FSR2 motion",      m_motionView);
++    m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 output",      m_outputView);
++    m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 composite",   m_compositeView);
++  }
++
++
++  void DxvkFsr2::preparePass(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs) {
++    // The previous frame's FSR 2 passes may still read the images, which
++    // are fully overwritten, so their contents are discarded.
++    std::array<VkImageMemoryBarrier2, 2> barriers = { };
++
++    for (uint32_t i = 0; i < barriers.size(); i++) {
++      const Rc<DxvkImageView>& view = i ? m_motionView : m_depthView;
++
++      barriers[i] = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++      barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++      barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++      barriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++      barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barriers[i].image = view->image()->handle();
++      barriers[i].subresourceRange = view->imageSubresources();
++    }
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = barriers.size();
++    depInfo.pImageMemoryBarriers = barriers.data();
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkDescriptorSet set = ctx.descriptorPool->alloc(m_prepareSetLayout);
++
++    VkDescriptorImageInfo depthInfo = { };
++    depthInfo.sampler = m_pointSampler->handle();
++    depthInfo.imageView = inputs.depth->handle();
++    depthInfo.imageLayout = inputs.depth->image()->info().layout;
++
++    VkDescriptorImageInfo depthOutInfo = { };
++    depthOutInfo.imageView = m_depthView->handle();
++    depthOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    VkDescriptorImageInfo motionOutInfo = { };
++    motionOutInfo.imageView = m_motionView->handle();
++    motionOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    std::array<VkWriteDescriptorSet, 3> writes = {{
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &depthOutInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &motionOutInfo },
++    }};
++
++    ctx.cmd->updateDescriptorSets(writes.size(), writes.data());
++
++    // Reprojection from the current to the previous frame's clip space:
++    // inverse(current view projection) times previous view projection in
++    // the D3D row vector convention. DXVK's Matrix4 keeps D3D rows as its
++    // columns, so the product is written in the opposite order.
++    Matrix4 prevViewProj = m_havePrev && !inputs.reset ? m_prevViewProj : inputs.viewProj;
++    Matrix4 reproject = prevViewProj * inverse(inputs.viewProj);
++
++    // The camera projects into the game's 3D viewport, which leaves out
++    // the control bar at the bottom of the screen
++    float viewport[4] = { 0.0f, 0.0f, float(m_renderExtent.width), float(m_renderExtent.height) };
++
++    if (inputs.viewport[2] >= 1.0f && inputs.viewport[3] >= 1.0f)
++      std::memcpy(viewport, inputs.viewport, sizeof(viewport));
++
++    PreparePushConstants push = { };
++    std::memcpy(push.reproject, &reproject, sizeof(push.reproject));
++    push.jitterNdc[0] =  2.0f * inputs.jitter[0] / viewport[2];
++    push.jitterNdc[1] = -2.0f * inputs.jitter[1] / viewport[3];
++    push.extent[0] = m_renderExtent.width;
++    push.extent[1] = m_renderExtent.height;
++    std::memcpy(push.viewport, viewport, sizeof(push.viewport));
++
++    ctx.cmd->cmdBindPipeline(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_preparePipeline);
++    ctx.cmd->cmdBindDescriptorSet(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_preparePipelineLayout, set, 0, nullptr);
++    ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer, m_preparePipelineLayout,
++      VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
++    ctx.cmd->cmdDispatch(DxvkCmdBuffer::ExecBuffer,
++      (m_renderExtent.width + 7u) / 8u, (m_renderExtent.height + 7u) / 8u, 1u);
++
++    // FSR 2 samples both images in SHADER_READ_ONLY_OPTIMAL layout, which
++    // is the state they are registered with.
++    for (auto& barrier : barriers) {
++      barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++      barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++      barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++      barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    }
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++  }
++
++
++  bool DxvkFsr2::dispatchFsr2(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs) {
++#ifdef DXVK_GENERALSX_FSR2
++    // FSR 2 writes every output pixel; the composite pass of the previous
++    // frame may still read the image.
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_outputImage->handle();
++    barrier.subresourceRange = m_outputView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    FfxFsr2Context* context = reinterpret_cast<FfxFsr2Context*>(m_context.get());
++    VkCommandBuffer cmdBuffer = ctx.cmd->getExecCommandBuffer();
++
++    VkExtent3D colorExtent = inputs.color->mipLevelExtent(0u);
++
++    FfxFsr2DispatchDescription desc = { };
++    desc.commandList = ffxGetCommandListVK(cmdBuffer);
++    desc.color = ffxGetTextureResourceVK(context, inputs.color->image()->handle(), inputs.color->handle(),
++      colorExtent.width, colorExtent.height, inputs.color->info().format, L"FSR2 color", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.depth = ffxGetTextureResourceVK(context, m_depthImage->handle(), m_depthView->handle(),
++      m_renderExtent.width, m_renderExtent.height, VK_FORMAT_R32_SFLOAT, L"FSR2 depth", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.motionVectors = ffxGetTextureResourceVK(context, m_motionImage->handle(), m_motionView->handle(),
++      m_renderExtent.width, m_renderExtent.height, VK_FORMAT_R16G16_SFLOAT, L"FSR2 motion", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.output = ffxGetTextureResourceVK(context, m_outputImage->handle(), m_outputView->handle(),
++      m_displayExtent.width, m_displayExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT, L"FSR2 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++    desc.jitterOffset.x = inputs.jitter[0];
++    desc.jitterOffset.y = inputs.jitter[1];
++    // The motion vectors are in UV units of the render size
++    desc.motionVectorScale.x = float(m_renderExtent.width);
++    desc.motionVectorScale.y = float(m_renderExtent.height);
++    desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
++    // The swap chain blitter sharpens the composited image with RCAS
++    desc.enableSharpening = false;
++    desc.sharpness = 0.0f;
++    desc.frameTimeDelta = std::clamp(inputs.frameTimeMs, 1.0f, 200.0f);
++    desc.preExposure = 1.0f;
++    desc.reset = inputs.reset || !m_havePrev;
++    desc.cameraNear = inputs.cameraNear;
++    desc.cameraFar = inputs.cameraFar;
++    desc.cameraFovAngleVertical = inputs.fovY;
++    // Zero Hour world units are roughly feet
++    desc.viewSpaceToMetersFactor = 0.3048f;
++
++    FfxErrorCode error = ffxFsr2ContextDispatch(context, &desc);
++
++    if (error != FFX_OK) {
++      fail(str::format("ffxFsr2ContextDispatch failed: ", error));
++      return false;
++    }
++
++    return true;
++#else
++    return false;
++#endif
++  }
++
++
++  void DxvkFsr2::compositePass(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++    const Rc<DxvkImageView>&          finalView,
++          VkRect2D                    finalRect,
++    const Rc<DxvkImageView>&          spatialView) {
++    // The last FSR 2 pass wrote the output image in GENERAL layout. The
++    // composite image is fully overwritten; the previous frame's final
++    // blit may still read it.
++    std::array<VkImageMemoryBarrier2, 2> barriers = { };
++    barriers[0] = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[0].image = m_outputImage->handle();
++    barriers[0].subresourceRange = m_outputView->imageSubresources();
++
++    barriers[1] = barriers[0];
++    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barriers[1].srcAccessMask = 0;
++    barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[1].image = m_compositeImage->handle();
++    barriers[1].subresourceRange = m_compositeView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = barriers.size();
++    depInfo.pImageMemoryBarriers = barriers.data();
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkDescriptorSet set = ctx.descriptorPool->alloc(m_compositeSetLayout);
++
++    VkDescriptorImageInfo fsr2Info = { };
++    fsr2Info.sampler = m_linearSampler->handle();
++    fsr2Info.imageView = m_outputView->handle();
++    fsr2Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    VkDescriptorImageInfo spatialInfo = { };
++    spatialInfo.sampler = m_linearSampler->handle();
++    spatialInfo.imageView = spatialView->handle();
++    spatialInfo.imageLayout = spatialView->image()->info().layout;
++
++    VkDescriptorImageInfo finalInfo = { };
++    finalInfo.sampler = m_pointSampler->handle();
++    finalInfo.imageView = finalView->handle();
++    finalInfo.imageLayout = finalView->image()->info().layout;
++
++    VkDescriptorImageInfo sceneInfo = { };
++    sceneInfo.sampler = m_pointSampler->handle();
++    sceneInfo.imageView = inputs.color->handle();
++    sceneInfo.imageLayout = inputs.color->image()->info().layout;
++
++    VkDescriptorImageInfo outInfo = { };
++    outInfo.imageView = m_compositeView->handle();
++    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    std::array<VkWriteDescriptorSet, 5> writes = {{
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fsr2Info },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &spatialInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &finalInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 3, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &sceneInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outInfo },
++    }};
++
++    ctx.cmd->updateDescriptorSets(writes.size(), writes.data());
++
++    CompositePushConstants push = { };
++    push.invOutputExtent[0] = 1.0f / float(m_displayExtent.width);
++    push.invOutputExtent[1] = 1.0f / float(m_displayExtent.height);
++    push.inputExtent[0] = finalRect.extent.width;
++    push.inputExtent[1] = finalRect.extent.height;
++    push.threshold = 1.5f / 255.0f;
++
++    ctx.cmd->cmdBindPipeline(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipeline);
++    ctx.cmd->cmdBindDescriptorSet(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipelineLayout, set, 0, nullptr);
++    ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer, m_compositePipelineLayout,
++      VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
++    ctx.cmd->cmdDispatch(DxvkCmdBuffer::ExecBuffer,
++      (m_displayExtent.width + 7u) / 8u, (m_displayExtent.height + 7u) / 8u, 1u);
++
++    // The final blit samples the composited image in GENERAL layout
++    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barriers[1];
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++  }
++
++
++  void DxvkFsr2::fail(const std::string& message) {
++    if (!m_failed)
++      Logger::err(str::format("FSR2: ", message, "; falling back to FSR 1.0"));
++
++    m_failed = true;
++    setTemporalActive(false);
++  }
++
++}
+diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/dxvk_fsr2.h
+@@ -0,0 +1,198 @@
++#pragma once
++
++#include <atomic>
++#include <memory>
++#include <vector>
++
++#include "../util/util_matrix.h"
++
++#include "dxvk_device.h"
++#include "dxvk_context.h"
++
++namespace dxvk {
++
++  /**
++   * \brief GeneralsX: inputs of the temporal upscaler for one frame
++   *
++   * Captured by the D3D9 device when the game signals that its 3D scene
++   * is complete, before the interface is drawn, and handed to the swap
++   * chain blitter with the next present.
++   */
++  struct DxvkTemporalUpscaleInputs {
++    /// Scene colour at render size, before the interface. Sampled
++    /// view in SHADER_READ_ONLY_OPTIMAL layout.
++    Rc<DxvkImageView> color;
++    /// Scene depth at render size, depth aspect view in the image's
++    /// default layout.
++    Rc<DxvkImageView> depth;
++    /// Sub-pixel jitter the game applied to its projection, in render
++    /// pixels, with y pointing down the image
++    float     jitter[2] = { 0.0f, 0.0f };
++    /// Time since the previous frame in milliseconds
++    float     frameTimeMs = 16.6f;
++    /// Area of the image the 3D scene was drawn to, in render pixels:
++    /// x, y, width, height. A zero width means the whole image.
++    float     viewport[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
++    /// Camera clip planes and vertical field of view in radians
++    float     cameraNear = 1.0f;
++    float     cameraFar = 1000.0f;
++    float     fovY = 1.0f;
++    /// View times projection, without jitter, in the D3D row vector
++    /// convention as DXVK stores D3D matrices
++    Matrix4   viewProj;
++    /// The game asks to drop the history (camera cut)
++    bool      reset = false;
++  };
++
++
++  /**
++   * \brief GeneralsX: AMD FidelityFX FSR 2 temporal upscaler
++   *
++   * Runs in the swap chain blitter at present. Generates camera motion
++   * vectors from the scene depth and the current and previous view
++   * projection, upscales the scene colour with FSR 2 and composites the
++   * result with a spatially upscaled copy of the final image wherever the
++   * interface was drawn over the scene.
++   */
++  class DxvkFsr2 {
++
++  public:
++
++    DxvkFsr2(const Rc<DxvkDevice>& device);
++
++    ~DxvkFsr2();
++
++    /**
++     * \brief Whether FSR 2 is compiled into this build
++     */
++    static bool isAvailable();
++
++    /**
++     * \brief Whether the game should jitter its projection
++     *
++     * True while the swap chain upscales with FSR 2, or would as soon
++     * as the game provides scene inputs.
++     */
++    static bool isTemporalActive() {
++      return s_temporalActive.load();
++    }
++
++    static void setTemporalActive(bool active) {
++      s_temporalActive.store(active);
++    }
++
++    /**
++     * \brief Upscales one frame
++     *
++     * \param [in] ctx Context objects
++     * \param [in] inputs Scene inputs of the frame
++     * \param [in] finalView Final image at render size, single-sampled
++     * \param [in] finalRect Area of the final image
++     * \param [in] spatialView Final image upscaled with FSR 1 EASU
++     * \param [in] extent Output size
++     * \returns Composited output in GENERAL layout, or \c nullptr
++     *    if FSR 2 failed and the caller should use \c spatialView
++     */
++    Rc<DxvkImageView> render(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++      const Rc<DxvkImageView>&          finalView,
++            VkRect2D                    finalRect,
++      const Rc<DxvkImageView>&          spatialView,
++            VkExtent2D                  extent);
++
++    bool failed() const {
++      return m_failed;
++    }
++
++  private:
++
++    struct PreparePushConstants {
++      float     reproject[16];
++      float     jitterNdc[2];
++      uint32_t  extent[2];
++      float     viewport[4];
++    };
++
++    struct CompositePushConstants {
++      float     invOutputExtent[2];
++      uint32_t  inputExtent[2];
++      float     threshold;
++      float     reserved[3];
++    };
++
++    Rc<DxvkDevice>          m_device;
++
++    bool                    m_failed = false;
++    bool                    m_contextValid = false;
++    std::vector<uint8_t>    m_scratch;
++    std::unique_ptr<uint8_t[]> m_context;
++
++    VkExtent2D              m_renderExtent  = { 0u, 0u };
++    VkExtent2D              m_displayExtent = { 0u, 0u };
++
++    VkDescriptorSetLayout   m_prepareSetLayout       = VK_NULL_HANDLE;
++    VkPipelineLayout        m_preparePipelineLayout  = VK_NULL_HANDLE;
++    VkPipeline              m_preparePipeline        = VK_NULL_HANDLE;
++
++    VkDescriptorSetLayout   m_compositeSetLayout      = VK_NULL_HANDLE;
++    VkPipelineLayout        m_compositePipelineLayout = VK_NULL_HANDLE;
++    VkPipeline              m_compositePipeline       = VK_NULL_HANDLE;
++
++    Rc<DxvkSampler>         m_pointSampler;
++    Rc<DxvkSampler>         m_linearSampler;
++
++    Rc<DxvkImage>           m_depthImage;
++    Rc<DxvkImageView>       m_depthView;
++    Rc<DxvkImage>           m_motionImage;
++    Rc<DxvkImageView>       m_motionView;
++    Rc<DxvkImage>           m_outputImage;
++    Rc<DxvkImageView>       m_outputView;
++    Rc<DxvkImage>           m_compositeImage;
++    Rc<DxvkImageView>       m_compositeView;
++
++    Matrix4                 m_prevViewProj;
++    bool                    m_havePrev = false;
++    uint64_t                m_frameCount = 0u;
++
++    static std::atomic<bool> s_temporalActive;
++
++    bool createContext(VkExtent2D renderExtent, VkExtent2D displayExtent);
++
++    void destroyContext();
++
++    void createPipelines();
++
++    VkPipeline createComputePipeline(
++            VkPipelineLayout            layout,
++            size_t                      codeSize,
++      const uint32_t*                   code);
++
++    Rc<DxvkImage> createImage(
++            VkExtent2D                  extent,
++            VkFormat                    format,
++      const char*                       name,
++            Rc<DxvkImageView>&          view);
++
++    void createImages(VkExtent2D renderExtent, VkExtent2D displayExtent);
++
++    void preparePass(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs);
++
++    bool dispatchFsr2(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs);
++
++    void compositePass(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++      const Rc<DxvkImageView>&          finalView,
++            VkRect2D                    finalRect,
++      const Rc<DxvkImageView>&          spatialView);
++
++    void fail(const std::string& message);
++
++  };
++
++}
+diff --git a/src/dxvk/fsr2/dxvk_fsr2_ffx_shim.cpp b/src/dxvk/fsr2/dxvk_fsr2_ffx_shim.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr2/dxvk_fsr2_ffx_shim.cpp
+@@ -0,0 +1,125 @@
++// GeneralsX: instance-level Vulkan functions for the FidelityFX FSR 2
++// Vulkan backend, see dxvk_fsr2_ffx_shim.h. The function table is set by
++// DxvkFsr2 before it creates an FSR 2 context.
++
++#include "dxvk_fsr2_ffx_shim.h"
++#include "dxvk_fsr2_ffx_table.h"
++
++#include <cstring>
++#include <vector>
++
++DxvkFsr2VkTable g_dxvkFsr2Vk = { };
++
++extern "C" {
++
++  // DXVK does not enable shaderFloat16 or subgroup size control on its
++  // device, so the backend must not pick FP16 or forced wave64 pipelines.
++  // Hiding the two extensions makes it use the 32-bit default permutations.
++  static bool dxvkFsr2HiddenExtension(const char* name) {
++    return !std::strcmp(name, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
++        || !std::strcmp(name, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)
++        || !std::strcmp(name, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
++  }
++
++
++  VKAPI_ATTR VkResult VKAPI_CALL dxvk_fsr2_vkEnumerateDeviceExtensionProperties(
++          VkPhysicalDevice                  physicalDevice,
++    const char*                             pLayerName,
++          uint32_t*                         pPropertyCount,
++          VkExtensionProperties*            pProperties) {
++    uint32_t count = 0;
++    VkResult vr = g_dxvkFsr2Vk.enumerateDeviceExtensionProperties(physicalDevice, pLayerName, &count, nullptr);
++
++    if (vr != VK_SUCCESS)
++      return vr;
++
++    std::vector<VkExtensionProperties> all(count);
++    vr = g_dxvkFsr2Vk.enumerateDeviceExtensionProperties(physicalDevice, pLayerName, &count, all.data());
++
++    if (vr < 0)
++      return vr;
++
++    uint32_t visible = 0;
++
++    for (uint32_t i = 0; i < count; i++) {
++      if (dxvkFsr2HiddenExtension(all[i].extensionName))
++        continue;
++
++      if (pProperties) {
++        if (visible >= *pPropertyCount)
++          return VK_INCOMPLETE;
++
++        pProperties[visible] = all[i];
++      }
++
++      visible++;
++    }
++
++    *pPropertyCount = visible;
++    return VK_SUCCESS;
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr2_vkGetPhysicalDeviceMemoryProperties(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceMemoryProperties* pMemoryProperties) {
++    g_dxvkFsr2Vk.getPhysicalDeviceMemoryProperties(physicalDevice, pMemoryProperties);
++
++    // The backend only places its textures in a device-local memory type
++    // that is not host-visible. Integrated GPUs may only expose device-local
++    // memory that is also host-visible; report those types as device-local
++    // only, as long as another host-visible type remains for the constant
++    // buffers.
++    bool hasHiddenLocal = false;
++    bool hasHostOnly = false;
++
++    for (uint32_t i = 0; i < pMemoryProperties->memoryTypeCount; i++) {
++      VkMemoryPropertyFlags flags = pMemoryProperties->memoryTypes[i].propertyFlags;
++
++      if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && !(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
++        hasHiddenLocal = true;
++
++      if (!(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
++        hasHostOnly = true;
++    }
++
++    if (hasHiddenLocal || !hasHostOnly)
++      return;
++
++    for (uint32_t i = 0; i < pMemoryProperties->memoryTypeCount; i++) {
++      VkMemoryPropertyFlags& flags = pMemoryProperties->memoryTypes[i].propertyFlags;
++
++      if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
++        flags &= ~(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
++    }
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr2_vkGetPhysicalDeviceProperties(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceProperties*       pProperties) {
++    g_dxvkFsr2Vk.getPhysicalDeviceProperties(physicalDevice, pProperties);
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr2_vkGetPhysicalDeviceProperties2(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceProperties2*      pProperties) {
++    g_dxvkFsr2Vk.getPhysicalDeviceProperties2(physicalDevice, pProperties);
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr2_vkGetPhysicalDeviceFeatures2(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceFeatures2*        pFeatures) {
++    g_dxvkFsr2Vk.getPhysicalDeviceFeatures2(physicalDevice, pFeatures);
++  }
++
++
++  VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL dxvk_fsr2_vkGetDeviceProcAddr(
++          VkDevice                          device,
++    const char*                             pName) {
++    return g_dxvkFsr2Vk.getDeviceProcAddr(device, pName);
++  }
++
++}
+diff --git a/src/dxvk/fsr2/dxvk_fsr2_ffx_shim.h b/src/dxvk/fsr2/dxvk_fsr2_ffx_shim.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr2/dxvk_fsr2_ffx_shim.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++// GeneralsX: force-included into the FidelityFX FSR 2 sources.
++//
++// The FSR 2 Vulkan backend calls a few instance-level Vulkan functions
++// through the global loader symbols. DXVK loads Vulkan at run time and
++// does not link against the loader, so these calls are redirected to
++// functions that use DXVK's instance function table instead.
++
++// The Vulkan backend uses std::wstring_convert without including <locale>,
++// which MSVC provides through <codecvt> but libstdc++ does not.
++#ifdef __cplusplus
++#include <locale>
++#endif
++
++#define vkEnumerateDeviceExtensionProperties dxvk_fsr2_vkEnumerateDeviceExtensionProperties
++#define vkGetPhysicalDeviceMemoryProperties  dxvk_fsr2_vkGetPhysicalDeviceMemoryProperties
++#define vkGetPhysicalDeviceProperties        dxvk_fsr2_vkGetPhysicalDeviceProperties
++#define vkGetPhysicalDeviceProperties2       dxvk_fsr2_vkGetPhysicalDeviceProperties2
++#define vkGetPhysicalDeviceFeatures2         dxvk_fsr2_vkGetPhysicalDeviceFeatures2
++#define vkGetDeviceProcAddr                  dxvk_fsr2_vkGetDeviceProcAddr
+diff --git a/src/dxvk/fsr2/dxvk_fsr2_ffx_table.h b/src/dxvk/fsr2/dxvk_fsr2_ffx_table.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr2/dxvk_fsr2_ffx_table.h
+@@ -0,0 +1,18 @@
++#pragma once
++
++// GeneralsX: Vulkan functions used by the FidelityFX FSR 2 backend shim.
++// Plain Vulkan types only, so that both the FSR 2 sources and DXVK can
++// include it.
++
++#include <vulkan/vulkan.h>
++
++struct DxvkFsr2VkTable {
++  PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensionProperties;
++  PFN_vkGetPhysicalDeviceMemoryProperties  getPhysicalDeviceMemoryProperties;
++  PFN_vkGetPhysicalDeviceProperties        getPhysicalDeviceProperties;
++  PFN_vkGetPhysicalDeviceProperties2       getPhysicalDeviceProperties2;
++  PFN_vkGetPhysicalDeviceFeatures2         getPhysicalDeviceFeatures2;
++  PFN_vkGetDeviceProcAddr                  getDeviceProcAddr;
++};
++
++extern DxvkFsr2VkTable g_dxvkFsr2Vk;
+diff --git a/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp b/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp
+@@ -0,0 +1,266 @@
++// GeneralsX: SPIR-V permutations of the FidelityFX FSR 2 passes.
++//
++// Replaces ffx_fsr2_shaders_vk.cpp, whose tables are generated by AMD's
++// Windows-only FidelityFX_SC tool. The passes are compiled with glslang at
++// build time (see meson.build) for the options DXVK uses: LDR colour,
++// render-resolution motion vectors without jitter, standard depth and
++// 32-bit maths. Only the reprojection Lanczos type and, for the accumulate
++// pass, the sharpening switch vary. The resource names and bindings the
++// backend needs are read from the SPIR-V itself.
++
++#include "ffx-fsr2-api/vk/shaders/ffx_fsr2_shaders_vk.h"
++
++#include <array>
++#include <mutex>
++#include <string>
++#include <vector>
++
++#include <dxvk_fsr2_accumulate_l0_s0.h>
++#include <dxvk_fsr2_accumulate_l0_s1.h>
++#include <dxvk_fsr2_accumulate_l1_s0.h>
++#include <dxvk_fsr2_accumulate_l1_s1.h>
++#include <dxvk_fsr2_autogen_reactive_l0_s0.h>
++#include <dxvk_fsr2_autogen_reactive_l1_s0.h>
++#include <dxvk_fsr2_compute_luminance_pyramid_l0_s0.h>
++#include <dxvk_fsr2_compute_luminance_pyramid_l1_s0.h>
++#include <dxvk_fsr2_depth_clip_l0_s0.h>
++#include <dxvk_fsr2_depth_clip_l1_s0.h>
++#include <dxvk_fsr2_lock_l0_s0.h>
++#include <dxvk_fsr2_lock_l1_s0.h>
++#include <dxvk_fsr2_rcas_l0_s0.h>
++#include <dxvk_fsr2_rcas_l1_s0.h>
++#include <dxvk_fsr2_reconstruct_previous_depth_l0_s0.h>
++#include <dxvk_fsr2_reconstruct_previous_depth_l1_s0.h>
++#include <dxvk_fsr2_tcr_autogen_l0_s0.h>
++#include <dxvk_fsr2_tcr_autogen_l1_s0.h>
++
++namespace {
++
++  struct Fsr2SpirvCode {
++    const uint32_t* code;
++    size_t          size;
++  };
++
++  struct Fsr2ReflectedBlob {
++    std::vector<std::string>  names[3];
++    std::vector<const char*>  namePtrs[3];
++    std::vector<uint32_t>     bindings[3];
++    Fsr2ShaderBlobVK          blob = { };
++    bool                      valid = false;
++  };
++
++  enum Fsr2ResourceKind : uint32_t {
++    Fsr2StorageImage  = 0,
++    Fsr2SampledImage  = 1,
++    Fsr2UniformBuffer = 2,
++  };
++
++  constexpr uint32_t SpvOpName          = 5;
++  constexpr uint32_t SpvOpTypeImage     = 25;
++  constexpr uint32_t SpvOpTypeStruct    = 30;
++  constexpr uint32_t SpvOpTypePointer   = 32;
++  constexpr uint32_t SpvOpVariable      = 59;
++  constexpr uint32_t SpvOpDecorate      = 71;
++
++  constexpr uint32_t SpvDecorationBinding       = 33;
++  constexpr uint32_t SpvDecorationDescriptorSet = 34;
++
++  constexpr uint32_t SpvStorageClassUniformConstant = 0;
++  constexpr uint32_t SpvStorageClassUniform         = 2;
++
++  /**
++   * \brief Lists the descriptor set 1 resources of a pass
++   *
++   * Set 0 holds the two samplers the backend binds itself.
++   */
++  void reflectSpirv(const Fsr2SpirvCode& spirv, Fsr2ReflectedBlob& out) {
++    const uint32_t* words = spirv.code;
++    size_t count = spirv.size / sizeof(uint32_t);
++
++    if (count < 5u)
++      return;
++
++    uint32_t bound = words[3];
++
++    std::vector<std::string> names(bound);
++    std::vector<int32_t>     bindings(bound, -1);
++    std::vector<int32_t>     sets(bound, -1);
++    std::vector<int32_t>     imageSampled(bound, -1);
++    std::vector<bool>        isStruct(bound, false);
++    std::vector<uint32_t>    pointee(bound, 0u);
++
++    struct Variable {
++      uint32_t id;
++      uint32_t type;
++      uint32_t storageClass;
++    };
++
++    std::vector<Variable> variables;
++
++    for (size_t i = 5u; i < count; ) {
++      uint32_t opcode = words[i] & 0xffffu;
++      uint32_t length = words[i] >> 16u;
++
++      if (!length || i + length > count)
++        return;
++
++      const uint32_t* ins = &words[i];
++
++      switch (opcode) {
++        case SpvOpName:
++          if (length > 2u && ins[1] < bound)
++            names[ins[1]] = reinterpret_cast<const char*>(&ins[2]);
++          break;
++
++        case SpvOpDecorate:
++          if (length > 3u && ins[1] < bound) {
++            if (ins[2] == SpvDecorationBinding)
++              bindings[ins[1]] = int32_t(ins[3]);
++            else if (ins[2] == SpvDecorationDescriptorSet)
++              sets[ins[1]] = int32_t(ins[3]);
++          }
++          break;
++
++        case SpvOpTypeImage:
++          if (length > 7u && ins[1] < bound)
++            imageSampled[ins[1]] = int32_t(ins[7]);
++          break;
++
++        case SpvOpTypeStruct:
++          if (length > 1u && ins[1] < bound)
++            isStruct[ins[1]] = true;
++          break;
++
++        case SpvOpTypePointer:
++          if (length > 3u && ins[1] < bound)
++            pointee[ins[1]] = ins[3];
++          break;
++
++        case SpvOpVariable:
++          if (length > 3u && ins[2] < bound)
++            variables.push_back({ ins[2], ins[1], ins[3] });
++          break;
++
++        default:
++          break;
++      }
++
++      i += length;
++    }
++
++    for (const auto& var : variables) {
++      if (sets[var.id] != 1 || bindings[var.id] < 0 || var.type >= bound)
++        continue;
++
++      uint32_t type = pointee[var.type];
++
++      if (type >= bound)
++        continue;
++
++      int32_t kind = -1;
++
++      if (var.storageClass == SpvStorageClassUniformConstant && imageSampled[type] == 2)
++        kind = Fsr2StorageImage;
++      else if (var.storageClass == SpvStorageClassUniformConstant && imageSampled[type] == 1)
++        kind = Fsr2SampledImage;
++      else if (var.storageClass == SpvStorageClassUniform && isStruct[type])
++        kind = Fsr2UniformBuffer;
++
++      if (kind < 0)
++        continue;
++
++      out.names[kind].push_back(names[var.id]);
++      out.bindings[kind].push_back(uint32_t(bindings[var.id]));
++    }
++
++    for (uint32_t k = 0; k < 3u; k++) {
++      for (const auto& name : out.names[k])
++        out.namePtrs[k].push_back(name.c_str());
++    }
++
++    out.blob.data = reinterpret_cast<const uint8_t*>(spirv.code);
++    out.blob.size = uint32_t(spirv.size);
++    out.blob.storageImageCount  = uint32_t(out.names[Fsr2StorageImage].size());
++    out.blob.sampledImageCount  = uint32_t(out.names[Fsr2SampledImage].size());
++    out.blob.uniformBufferCount = uint32_t(out.names[Fsr2UniformBuffer].size());
++    out.blob.boundStorageImageNames     = out.namePtrs[Fsr2StorageImage].data();
++    out.blob.boundStorageImageBindings  = out.bindings[Fsr2StorageImage].data();
++    out.blob.boundSampledImageNames     = out.namePtrs[Fsr2SampledImage].data();
++    out.blob.boundSampledImageBindings  = out.bindings[Fsr2SampledImage].data();
++    out.blob.boundUniformBufferNames    = out.namePtrs[Fsr2UniformBuffer].data();
++    out.blob.boundUniformBufferBindings = out.bindings[Fsr2UniformBuffer].data();
++    out.valid = true;
++  }
++
++
++  /// Index of a permutation: pass, Lanczos type, sharpening
++  uint32_t getPermutationIndex(uint32_t pass, bool lanczos, bool sharpen) {
++    return pass * 4u + (lanczos ? 2u : 0u) + (sharpen ? 1u : 0u);
++  }
++
++
++  Fsr2SpirvCode getSpirv(FfxFsr2Pass pass, bool lanczos, bool sharpen) {
++#define DXVK_FSR2_SPIRV(name) Fsr2SpirvCode { name, sizeof(name) }
++    switch (pass) {
++      case FFX_FSR2_PASS_DEPTH_CLIP:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_depth_clip_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_depth_clip_l0_s0);
++      case FFX_FSR2_PASS_RECONSTRUCT_PREVIOUS_DEPTH:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_reconstruct_previous_depth_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_reconstruct_previous_depth_l0_s0);
++      case FFX_FSR2_PASS_LOCK:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_lock_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_lock_l0_s0);
++      case FFX_FSR2_PASS_ACCUMULATE:
++      case FFX_FSR2_PASS_ACCUMULATE_SHARPEN:
++        if (sharpen)
++          return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_accumulate_l1_s1)
++                         : DXVK_FSR2_SPIRV(dxvk_fsr2_accumulate_l0_s1);
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_accumulate_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_accumulate_l0_s0);
++      case FFX_FSR2_PASS_RCAS:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_rcas_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_rcas_l0_s0);
++      case FFX_FSR2_PASS_COMPUTE_LUMINANCE_PYRAMID:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_compute_luminance_pyramid_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_compute_luminance_pyramid_l0_s0);
++      case FFX_FSR2_PASS_GENERATE_REACTIVE:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_autogen_reactive_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_autogen_reactive_l0_s0);
++      case FFX_FSR2_PASS_TCR_AUTOGENERATE:
++        return lanczos ? DXVK_FSR2_SPIRV(dxvk_fsr2_tcr_autogen_l1_s0)
++                       : DXVK_FSR2_SPIRV(dxvk_fsr2_tcr_autogen_l0_s0);
++      default:
++        return Fsr2SpirvCode { nullptr, 0u };
++    }
++#undef DXVK_FSR2_SPIRV
++  }
++
++}
++
++
++Fsr2ShaderBlobVK fsr2GetPermutationBlobByIndexVK(FfxFsr2Pass passId, uint32_t permutationOptions) {
++  static std::mutex s_mutex;
++  static std::array<Fsr2ReflectedBlob, FFX_FSR2_PASS_COUNT * 4u> s_blobs;
++
++  bool lanczos = (permutationOptions & FSR2_SHADER_PERMUTATION_REPROJECT_USE_LANCZOS_TYPE) != 0u;
++  bool sharpen = (permutationOptions & FSR2_SHADER_PERMUTATION_ENABLE_SHARPENING) != 0u;
++
++  if (uint32_t(passId) >= uint32_t(FFX_FSR2_PASS_COUNT))
++    return Fsr2ShaderBlobVK { };
++
++  std::lock_guard lock(s_mutex);
++
++  Fsr2ReflectedBlob& entry = s_blobs[getPermutationIndex(uint32_t(passId), lanczos, sharpen)];
++
++  if (!entry.valid) {
++    Fsr2SpirvCode spirv = getSpirv(passId, lanczos, sharpen);
++
++    if (!spirv.code)
++      return Fsr2ShaderBlobVK { };
++
++    reflectSpirv(spirv, entry);
++  }
++
++  return entry.blob;
++}
+diff --git a/src/dxvk/shaders/dxvk_fsr2_composite.comp b/src/dxvk/shaders/dxvk_fsr2_composite.comp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_fsr2_composite.comp
+@@ -0,0 +1,59 @@
++#version 450
++
++// GeneralsX: composites the FSR 2 output of the 3D scene with the final
++// image. Pixels where the final image differs from the scene copy taken
++// before the interface was drawn belong to the interface; they come from
++// the spatially (FSR 1 EASU) upscaled final image, so the interface is
++// never part of the temporal history and does not ghost.
++
++layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
++
++layout(set = 0, binding = 0) uniform sampler2D s_fsr2;
++layout(set = 0, binding = 1) uniform sampler2D s_spatial;
++layout(set = 0, binding = 2) uniform sampler2D s_final;
++layout(set = 0, binding = 3) uniform sampler2D s_scene;
++layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D o_color;
++
++layout(push_constant)
++uniform push_t {
++  vec2  inv_output_extent;
++  uvec2 input_extent;
++  float threshold;
++};
++
++float interfaceWeight(ivec2 coord) {
++  coord = clamp(coord, ivec2(0), ivec2(input_extent) - 1);
++
++  vec3 final_color = texelFetch(s_final, coord, 0).rgb;
++  vec3 scene_color = texelFetch(s_scene, coord, 0).rgb;
++  vec3 diff = abs(final_color - scene_color);
++
++  return smoothstep(threshold, 4.0f * threshold, max(diff.r, max(diff.g, diff.b)));
++}
++
++void main() {
++  ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
++  ivec2 size = imageSize(o_color);
++
++  if (any(greaterThanEqual(coord, size)))
++    return;
++
++  vec2 uv = (vec2(coord) + 0.5f) * inv_output_extent;
++
++  // Interface mask at render size, bilinearly interpolated
++  vec2 pos = uv * vec2(input_extent) - 0.5f;
++  ivec2 base = ivec2(floor(pos));
++  vec2 f = pos - vec2(base);
++
++  float w00 = interfaceWeight(base);
++  float w10 = interfaceWeight(base + ivec2(1, 0));
++  float w01 = interfaceWeight(base + ivec2(0, 1));
++  float w11 = interfaceWeight(base + ivec2(1, 1));
++
++  float ui = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
++
++  vec4 temporal = textureLod(s_fsr2, uv, 0.0f);
++  vec4 spatial = textureLod(s_spatial, uv, 0.0f);
++
++  imageStore(o_color, coord, vec4(mix(temporal.rgb, spatial.rgb, ui), 1.0f));
++}
+diff --git a/src/dxvk/shaders/dxvk_fsr2_prepare.comp b/src/dxvk/shaders/dxvk_fsr2_prepare.comp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/shaders/dxvk_fsr2_prepare.comp
+@@ -0,0 +1,53 @@
++#version 450
++
++// GeneralsX: FSR 2 inputs from the scene depth. Copies the depth into a
++// colour image and computes camera motion vectors by reprojecting every
++// pixel into the previous frame. Moving objects only get the camera's
++// motion; FSR 2 handles the rest with its locks and depth clipping.
++
++layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
++
++layout(set = 0, binding = 0) uniform sampler2D s_depth;
++layout(set = 0, binding = 1, r32f)  writeonly uniform image2D o_depth;
++layout(set = 0, binding = 2, rg16f) writeonly uniform image2D o_motion;
++
++layout(push_constant)
++uniform push_t {
++  // Current to previous clip space, see DxvkFsr2::preparePass
++  mat4  reproject;
++  // Jitter of the current frame in normalized device coordinates
++  vec2  jitter_ndc;
++  uvec2 extent;
++  // 3D viewport in pixels: x, y, width, height
++  vec4  viewport;
++};
++
++void main() {
++  uvec2 coord = gl_GlobalInvocationID.xy;
++
++  if (any(greaterThanEqual(coord, extent)))
++    return;
++
++  float depth = texelFetch(s_depth, ivec2(coord), 0).r;
++
++  // D3D clip space has y pointing up, the image has row 0 at the top.
++  // Removing the jitter gives the position the unjittered camera sees.
++  vec2 uv = (vec2(coord) + 0.5f - viewport.xy) / viewport.zw;
++  vec2 ndc = vec2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f) - jitter_ndc;
++
++  vec4 prev = reproject * vec4(ndc, depth, 1.0f);
++  vec2 motion = vec2(0.0f);
++
++  bool inside = all(greaterThanEqual(uv, vec2(0.0f))) && all(lessThanEqual(uv, vec2(1.0f)));
++
++  if (inside && prev.w > 1.0e-6f) {
++    vec2 prev_ndc = prev.xy / prev.w;
++    // FSR 2 adds the vector to the current UV of the whole image to find
++    // the previous one, so the viewport's share of the image scales it
++    motion = vec2(prev_ndc.x - ndc.x, ndc.y - prev_ndc.y) * 0.5f
++           * viewport.zw / vec2(extent);
++  }
++
++  imageStore(o_depth, ivec2(coord), vec4(depth, 0.0f, 0.0f, 0.0f));
++  imageStore(o_motion, ivec2(coord), vec4(motion, 0.0f, 0.0f));
++}
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -1,5 +1,7 @@
+ #include "dxvk_swapchain_blitter.h"
+ 
++#include <cctype>
++
+ #include <dxvk_cursor_frag.h>
+ #include <dxvk_cursor_vert.h>
+ #include <dxvk_present_frag.h>
+@@ -603,9 +605,36 @@
+     if (!sharpness.empty())
+       m_fsrSharpness = std::clamp(std::strtof(sharpness.c_str(), nullptr), 0.0f, 2.0f);
+ 
++    // GeneralsX: DXVK_UPSCALER=fsr2 upscales the 3D scene with FSR 2 when
++    // the game provides its scene colour, depth and camera through the D3D9
++    // device, see GeneralsX_UpscalerSubmitFrame. FSR 1.0 stays enabled: it
++    // upscales the interface and every frame FSR 2 cannot handle.
++    std::string upscaler = env::getEnvVar("DXVK_UPSCALER");
++
++    for (auto& c : upscaler)
++      c = std::tolower(static_cast<unsigned char>(c));
++
++    if (upscaler == "dlss") {
++      Logger::warn("Swap chain: DLSS is not available, using FSR 2");
++      upscaler = "fsr2";
++    }
++
++    if (upscaler == "fsr2") {
++      if (DxvkFsr2::isAvailable()) {
++        m_fsr2Enabled = true;
++        m_fsrEnabled = true;
++      } else {
++        Logger::warn("Swap chain: FSR 2 is not part of this build, using FSR 1.0");
++        m_fsrEnabled = true;
++      }
++    }
++
+     if (m_fsrEnabled)
+       Logger::info(str::format("Swap chain: FSR 1.0 upscaling enabled, sharpness ", m_fsrSharpness));
+ 
++    if (m_fsr2Enabled)
++      Logger::info("Swap chain: FSR 2 temporal upscaling enabled");
++
+     // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
+     // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
+     m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
+@@ -808,10 +837,40 @@
+     else
+       destroyHudImage();
+ 
++    // With FSR, keep the aspect ratio of the back buffer and center it in
++    // the window. The area outside is cleared to black. GeneralsX maps
++    // mouse input with the same rounding, see Win32Mouse.cpp.
++    if (m_fsrEnabled && dstRect.extent != srcRect.extent)
++      dstRect = fitAspectRatio(dstRect, srcRect.extent);
++
++    // With FSR, EASU upscales into an intermediate image first, and the
++    // final blit sharpens that image with RCAS at a 1:1 scale.
++    bool useFsr = m_fsrEnabled
++      && dstRect.extent != srcRect.extent
++      && dstRect.extent.width >= srcRect.extent.width
++      && dstRect.extent.height >= srcRect.extent.height;
++
++    // GeneralsX: FSR 2 needs the scene inputs of this frame at the size of
++    // the back buffer. The game jitters its projection while FSR 2 is
++    // active, which it reads back through GeneralsX_UpscalerSubmitFrame.
++    if (m_fsr2Enabled && useFsr && !m_fsr2)
++      m_fsr2 = std::make_unique<DxvkFsr2>(m_device);
++
++    bool fsr2Usable = m_fsr2Enabled && useFsr && m_fsr2 && !m_fsr2->failed();
++    DxvkFsr2::setTemporalActive(fsr2Usable);
++
++    bool useFsr2 = fsr2Usable
++      && m_fsr2Inputs.color != nullptr
++      && m_fsr2Inputs.depth != nullptr
++      && srcRect.offset.x == 0 && srcRect.offset.y == 0
++      && m_fsr2Inputs.color->mipLevelExtent(0u) == VkExtent3D { srcRect.extent.width, srcRect.extent.height, 1u }
++      && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++
+     // FXAA runs first, at the size of the game image, so that FSR and
+     // post-processing work on the smoothed image. It replaces MSAA when the
+     // game renders without it, so a multisampled image is left as is.
+-    if (m_fxaaEnabled
++    // FSR 2 does its own anti-aliasing, so FXAA is skipped with it.
++    if (m_fxaaEnabled && !useFsr2
+      && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
+      && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+       renderFxaa(ctx, srcView, srcRect);
+@@ -823,29 +882,18 @@
+       m_fxaaView = nullptr;
+     }
+ 
+-    // With FSR, keep the aspect ratio of the back buffer and center it in
+-    // the window. The area outside is cleared to black. GeneralsX maps
+-    // mouse input with the same rounding, see Win32Mouse.cpp.
+-    if (m_fsrEnabled && dstRect.extent != srcRect.extent)
+-      dstRect = fitAspectRatio(dstRect, srcRect.extent);
+-
+-    // With FSR, EASU upscales into an intermediate image first, and the
+-    // final blit sharpens that image with RCAS at a 1:1 scale.
+-    bool useFsr = m_fsrEnabled
+-      && dstRect.extent != srcRect.extent
+-      && dstRect.extent.width >= srcRect.extent.width
+-      && dstRect.extent.height >= srcRect.extent.height;
+-
+     // GeneralsX: log the present path once per change of FSR state, sizes or
+     // back buffer sample count, so the log shows whether FSR runs and whether
+     // it resolves a multisampled (D3D MultiSampleType) back buffer first.
+     VkSampleCountFlagBits srcSamples = srcView->image()->info().sampleCount;
+ 
+     if (useFsr != m_presentLogFsr
++     || useFsr2 != m_presentLogFsr2
+      || srcSamples != m_presentLogSamples
+      || srcRect.extent != m_presentLogSrc
+      || dstRect.extent != m_presentLogDst) {
+       m_presentLogFsr = useFsr;
++      m_presentLogFsr2 = useFsr2;
+       m_presentLogSamples = srcSamples;
+       m_presentLogSrc = srcRect.extent;
+       m_presentLogDst = dstRect.extent;
+@@ -857,7 +905,8 @@
+       Logger::info(str::format("Swap chain: present ", srcRect.extent.width, "x", srcRect.extent.height,
+         " ", msaa, " to ", dstRect.extent.width, "x", dstRect.extent.height,
+         useFsr ? (srcSamples != VK_SAMPLE_COUNT_1_BIT ? ", FSR 1.0 active (MSAA resolved before EASU)" : ", FSR 1.0 active")
+-               : (m_fsrEnabled ? ", FSR 1.0 enabled but inactive (no upscale)" : ", FSR 1.0 off")));
++               : (m_fsrEnabled ? ", FSR 1.0 enabled but inactive (no upscale)" : ", FSR 1.0 off"),
++        useFsr2 ? ", FSR 2 active" : (m_fsr2Enabled ? ", FSR 2 enabled, waiting for scene inputs" : "")));
+     }
+ 
+     // EASU and the post-processing passes read single-sampled texels, so a
+@@ -877,15 +926,32 @@
+     }
+ 
+     if (useFsr) {
++      Rc<DxvkImageView> finalView = blitView;
++      VkRect2D finalRect = blitRect;
++
+       renderFsrEasu(ctx, blitView, blitRect, dstRect.extent);
+ 
+       blitView = m_fsrView;
+       blitRect = { { 0, 0 }, dstRect.extent };
++
++      // GeneralsX: FSR 2 upscales the scene, and the EASU image fills in
++      // wherever the interface was drawn over it
++      if (useFsr2) {
++        Rc<DxvkImageView> temporalView = m_fsr2->render(ctx, m_fsr2Inputs,
++          finalView, finalRect, m_fsrView, dstRect.extent);
++
++        if (temporalView != nullptr)
++          blitView = temporalView;
++        else if (m_fsr2->failed())
++          DxvkFsr2::setTemporalActive(false);
++      }
+     } else {
+       m_fsrImage = nullptr;
+       m_fsrView = nullptr;
+     }
+ 
++    m_fsr2Inputs = DxvkTemporalUpscaleInputs();
++
+     // Post-processing runs in the RCAS pass, which reads its source 1:1,
+     // so it needs a single-sampled source at the output size.
+     m_postActive = m_postEnabled
+@@ -1530,6 +1596,13 @@
+   }
+ 
+ 
++  void DxvkSwapchainBlitter::setTemporalInputs(
++    const DxvkTemporalUpscaleInputs& inputs) {
++    std::unique_lock lock(m_mutex);
++    m_fsr2Inputs = inputs;
++  }
++
++
+   void DxvkSwapchainBlitter::renderFsrEasu(
+     const DxvkContextObjects&         ctx,
+     const Rc<DxvkImageView>&          srcView,
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -13,6 +13,7 @@
+ 
+ #include "../dxvk/dxvk_device.h"
+ #include "../dxvk/dxvk_context.h"
++#include "../dxvk/dxvk_fsr2.h"
+ 
+ namespace dxvk {
+ 
+@@ -226,6 +227,17 @@
+     void setVideoSignal(
+             uint32_t            level);
+ 
++    /**
++     * \brief GeneralsX: sets the temporal upscaler inputs of the next present
++     *
++     * Called on the CS thread right before \ref present with the scene
++     * captured by the D3D9 device. Without inputs, the frame is upscaled
++     * with FSR 1.0 even when FSR 2 is enabled.
++     * \param [in] inputs Scene colour, depth and camera of the frame
++     */
++    void setTemporalInputs(
++      const DxvkTemporalUpscaleInputs& inputs);
++
+   private:
+ 
+     struct SpecConstants {
+@@ -287,6 +299,13 @@
+     bool                m_fsrEnabled = false;
+     float               m_fsrSharpness = 0.2f;
+ 
++    // GeneralsX: FSR 2 temporal upscaling, DXVK_UPSCALER=fsr2. Falls back
++    // to FSR 1.0 for frames without scene inputs and when FSR 2 fails.
++    bool                       m_fsr2Enabled = false;
++    std::unique_ptr<DxvkFsr2>  m_fsr2;
++    DxvkTemporalUpscaleInputs  m_fsr2Inputs;
++    bool                       m_presentLogFsr2 = false;
++
+     bool                  m_presentLogFsr = false;
+     VkSampleCountFlagBits m_presentLogSamples = VkSampleCountFlagBits(0);
+     VkExtent2D            m_presentLogSrc = { };
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -40,6 +40,9 @@
+   'shaders/dxvk_image_to_buffer_ds.comp',
+   'shaders/dxvk_image_to_buffer_f.comp',
+ 
++  'shaders/dxvk_fsr2_composite.comp',
++  'shaders/dxvk_fsr2_prepare.comp',
++
+   'shaders/dxvk_present_frag.frag',
+   'shaders/dxvk_present_frag_blit.frag',
+   'shaders/dxvk_present_frag_bloom_blur_h.frag',
+@@ -89,6 +92,7 @@
+   'dxvk_extensions.cpp',
+   'dxvk_fence.cpp',
+   'dxvk_format.cpp',
++  'dxvk_fsr2.cpp',
+   'dxvk_framebuffer.cpp',
+   'dxvk_gpu_event.cpp',
+   'dxvk_gpu_query.cpp',
+@@ -140,8 +144,87 @@
+   dxvk_extra_deps += [ cpp.find_library('dl', required: false) ]
+ endif
+ 
++# GeneralsX: AMD FidelityFX FSR 2 (MIT). The build copies the FSR 2 API
++# sources of a pinned release into fsr2/ffx-fsr2-api; without them the
++# temporal upscaler is left out and DXVK_UPSCALER=fsr2 falls back to FSR 1.
++fsr2_api_dir = 'fsr2/ffx-fsr2-api'
++dxvk_fsr2_libs = []
++
++if fs.is_file(fsr2_api_dir / 'ffx_fsr2.cpp')
++  fsr2_shader_dir = meson.current_source_dir() / fsr2_api_dir / 'shaders'
++
++  fsr2_glsl_args = [
++    '--quiet',
++    '--target-env', 'vulkan1.1',
++    '-S', 'comp',
++    '-I' + fsr2_shader_dir,
++    '-DFFX_GLSL=1',
++    '-DFFX_GPU=1',
++    '-DFFX_HALF=0',
++    '-DFFX_FSR2_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FSR2_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FSR2_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1',
++    '-DFFX_FSR2_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FSR2_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2',
++    '-DFFX_FSR2_OPTION_HDR_COLOR_INPUT=0',
++    '-DFFX_FSR2_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1',
++    '-DFFX_FSR2_OPTION_JITTERED_MOTION_VECTORS=0',
++    '-DFFX_FSR2_OPTION_INVERTED_DEPTH=0',
++  ]
++
++  fsr2_shaders = []
++
++  foreach pass : [ 'accumulate', 'autogen_reactive', 'compute_luminance_pyramid', 'depth_clip',
++                   'lock', 'rcas', 'reconstruct_previous_depth', 'tcr_autogen' ]
++    foreach lanczos : [ '0', '1' ]
++      foreach sharpen : (pass == 'accumulate' ? [ '0', '1' ] : [ '0' ])
++        fsr2_name = 'dxvk_fsr2_' + pass + '_l' + lanczos + '_s' + sharpen
++        fsr2_shaders += custom_target(fsr2_name,
++          input   : files(fsr2_api_dir / 'shaders' / 'ffx_fsr2_' + pass + '_pass.glsl'),
++          output  : fsr2_name + '.h',
++          command : [ glsl_compiler ] + fsr2_glsl_args + [
++            '-DFFX_FSR2_OPTION_REPROJECT_USE_LANCZOS_TYPE=' + lanczos,
++            '-DFFX_FSR2_OPTION_APPLY_SHARPENING=' + sharpen,
++            '--vn', fsr2_name, '@INPUT@', '-o', '@OUTPUT@' ])
++      endforeach
++    endforeach
++  endforeach
++
++  fsr2_cpp_args = [
++    '-include', meson.current_source_dir() / 'fsr2' / 'dxvk_fsr2_ffx_shim.h',
++  ] + cpp.get_supported_arguments([
++    '-DFFX_GCC',
++    '-DUNICODE',
++    '-D_UNICODE',
++    '-Wno-unused-variable',
++    '-Wno-unused-but-set-variable',
++    '-Wno-unused-function',
++    '-Wno-sign-compare',
++    '-Wno-deprecated-declarations',
++    '-Wno-missing-field-initializers',
++    '-Wno-implicit-fallthrough',
++    '-Wno-type-limits',
++    '-Wno-switch',
++    '-Wno-class-memaccess',
++  ])
++
++  dxvk_fsr2_lib = static_library('dxvk_fsr2', [
++      fsr2_api_dir / 'ffx_assert.cpp',
++      fsr2_api_dir / 'ffx_fsr2.cpp',
++      fsr2_api_dir / 'vk' / 'ffx_fsr2_vk.cpp',
++      'fsr2/dxvk_fsr2_ffx_shim.cpp',
++      'fsr2/dxvk_fsr2_shaders.cpp',
++    ] + fsr2_shaders,
++    include_directories : [ dxvk_include_path ],
++    cpp_args            : fsr2_cpp_args,
++  )
++
++  dxvk_fsr2_libs += [ dxvk_fsr2_lib ]
++endif
++
+ dxvk_lib = static_library('dxvk', dxvk_src, glsl_generator.process(dxvk_shaders), dxvk_version,
+-  link_with           : [ util_lib, spirv_lib, wsi_lib ],
++  link_with           : [ util_lib, spirv_lib, wsi_lib ] + dxvk_fsr2_libs,
++  cpp_args            : dxvk_fsr2_libs.length() > 0 ? [ '-DDXVK_GENERALSX_FSR2=1' ] : [],
+   dependencies        : [ vkcommon_dep ] + dxvk_extra_deps,
+   include_directories : [ dxvk_include_path ],
+ )

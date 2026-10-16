@@ -59,9 +59,35 @@
 #include "ddsfile.h"
 #include "bitmaphandler.h"
 #include "WWDebug/wwprofile.h"
+#include <chrono>
 
 bool TextureLoader::TextureLoadSuspended;
 int TextureLoader::TextureInactiveOverrideTime = 0;
+unsigned TextureLoader::SyncLoadCount = 0;
+double TextureLoader::SyncLoadMs = 0.0;
+
+// GeneralsX @performance Claude 16/10/2026 Times a texture load that runs to completion on the main thread.
+// Only the outermost load of a nested call is counted.
+namespace
+{
+	int s_syncLoadDepth = 0;
+
+	class SyncTextureLoadTimer
+	{
+	public:
+		SyncTextureLoadTimer() : m_start(std::chrono::steady_clock::now()) { ++s_syncLoadDepth; }
+		~SyncTextureLoadTimer()
+		{
+			if (--s_syncLoadDepth == 0)
+			{
+				const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - m_start;
+				TextureLoader::Add_Sync_Load(elapsed.count());
+			}
+		}
+	private:
+		std::chrono::steady_clock::time_point m_start;
+	};
+}
 
 #define USE_MANAGED_TEXTURES
 
@@ -551,6 +577,7 @@ IDirect3DSurface8* TextureLoader::Load_Surface_Immediate(
 	bool allow_compression)
 {
 	WWASSERT(Is_DX8_Thread());
+	SyncTextureLoadTimer syncLoadTimer;
 
 	bool compressed=Is_Format_Compressed(texture_format,allow_compression);
 
@@ -1289,6 +1316,7 @@ void TextureLoadTaskClass::End_Load()
 
 void TextureLoadTaskClass::Finish_Load()
 {
+	SyncTextureLoadTimer syncLoadTimer;
 	switch (State) {
 		// NOTE: fall-through below is intentional.
 

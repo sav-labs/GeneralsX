@@ -115,8 +115,14 @@ def check_w3d(name, data):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        extra = sys.argv[1:]  # e.g. --hd <build_hd.py output>, as CI passes to build_content.py
-        subprocess.run([sys.executable, os.path.join(HERE, "build_content.py"), REPO, tmp] + extra, check=True)
+        # The shipped pack carries no procedural models; the generators are still checked through --art.
+        # --hd <build_src.py output> (as CI passes to build_content.py) adds the reviewed detailed models.
+        extra = sys.argv[1:]
+        subprocess.run([sys.executable, os.path.join(HERE, "build_content.py"), REPO, os.path.join(tmp, "ship")] + extra,
+                       check=True)
+        shipped = read_big(os.path.join(tmp, "ship", "GeneralsXContent.big"))
+        assert extra or not any(n.endswith(".w3d") for n in shipped), "the shipped pack must not carry models"
+        subprocess.run([sys.executable, os.path.join(HERE, "build_content.py"), REPO, tmp, "--art"] + extra, check=True)
         files = read_big(os.path.join(tmp, "GeneralsXContent.big"))
 
     models = [n for n in files if n.endswith(".w3d")]

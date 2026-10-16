@@ -123,6 +123,73 @@ public:
 
 	void replaceSkyboxTexture(const AsciiString& oldTexName, const AsciiString& newTextName);
 
+	// GeneralsX @feature Claude 16/10/2026 Modern water effects for standing water and rivers (W3DWaterEffects.cpp):
+	// planar reflections of the sky and the scene, shoreline foam and a soft shoreline, and animated wave
+	// distortion. Render only. Options.ini WaterReflections, WaterReflectionScale, ShoreFoam and WaterWaves.
+	enum WaterReflectionMode
+	{
+		WATER_REFLECTIONS_OFF = 0,	///< retail look, no reflection pass
+		WATER_REFLECTIONS_SKY,		///< reflect the sky only
+		WATER_REFLECTIONS_FULL,		///< reflect the sky, terrain, buildings, units and trees
+	};
+
+	/// True while the scene is drawn into the reflection of the water effects (the scene then mirrors every
+	/// drawable and skips particles).
+	static Bool isDrawingEffectReflection() { return s_drawingEffectReflection; }
+
+protected:
+	static Bool s_drawingEffectReflection;
+
+	struct WaterEffectSettings
+	{
+		Int reflections;			///< WaterReflectionMode
+		Real reflectionScale;		///< reflection texture size as a fraction of the 3D view, 0.25 to 1
+		Bool shoreFoam;				///< foam band and soft shoreline from the water depth
+		Bool waves;					///< animated wave distortion of reflections and foam
+	};
+
+	enum { WATER_WAVE_FRAMES = 32 };	///< frames of the looping wave distortion animation
+
+	WaterEffectSettings m_effects;			///< options read when the water is created
+	Bool m_effectsSupported;				///< the device has enough texture stages and formats
+	TextureClass *m_effectReflectionTexture;	///< reflection render target of standing water and rivers
+	Int m_effectReflectionWidth;
+	Int m_effectReflectionHeight;
+	Bool m_effectReflectionValid;			///< the reflection texture holds the current view
+	Real m_effectReflectionLevel;			///< height of the water plane the reflection was rendered for
+	Matrix3D m_effectReflectionCamera;		///< camera transform of the last reflection render
+	Int m_effectReflectionAge;				///< frames since the reflection was last rendered
+	LPDIRECT3DTEXTURE8 m_effectFresnelTexture;	///< reflection strength over the cosine of the view angle
+	LPDIRECT3DTEXTURE8 m_effectFoamTexture;		///< tiling foam pattern with mip maps
+	LPDIRECT3DTEXTURE8 m_effectWaveTexture[WATER_WAVE_FRAMES];	///< du/dv wave animation
+	LPDIRECT3DTEXTURE8 m_effectShoreTexture;	///< alpha: soft shoreline, rgb: foam band, from the water depth
+	Int m_effectShoreWidth;
+	Int m_effectShoreHeight;
+	Real m_effectShoreOriginX;				///< world position of the shore texture's first texel edge
+	Real m_effectShoreOriginY;
+	Real m_effectShoreSizeX;				///< world size covered by the shore texture
+	Real m_effectShoreSizeY;
+	UnsignedInt m_effectShoreSignature;		///< hash of the map and water polygons the shore texture was built for
+	Int m_effectShoreBuildTime;				///< time of the last shore texture build
+	Real m_effectTime;						///< seconds of water animation, follows the logic time scale
+	Bool m_effectLayer;						///< the current water draw is the top feather layer
+
+	void initWaterEffects();			///< read the options and create the effect textures
+	void releaseWaterEffects();			///< free all effect textures
+	void releaseWaterEffectTargets();	///< free the device dependent reflection target
+	Bool createWaterEffectTextures();
+	Bool findWaterReflectionPlane(CameraClass *cam, Real *level, Vector2 *ndcMin, Vector2 *ndcMax);
+	void renderWaterReflection(CameraClass *cam);	///< draw the reflected scene for standing water and rivers
+	void renderWaterReflectionSky(const Vector3 &cameraPos, Real level);
+	void updateShoreTexture();			///< rebuild the shore texture when the map or the water changed
+	Bool shoreEffectsActive() const;
+	Bool reflectionEffectsActive() const;
+	void setWorldTexGen(Int stage, Real scaleX, Real scaleY, Real offsetX, Real offsetY, Real rotation);
+	void beginSoftShore(Int stage);		///< fade the base water pass out in shallow water
+	void endSoftShore(Int stage);
+	void drawWaterEffectPasses(Int vertexCount, Int polygonCount, Real waterZ);	///< reflection and foam over the bound water polygons
+	void resetWaterEffectStages(Int lastStage);
+
 protected:
 	DX8IndexBufferClass			*m_indexBuffer;	///<indices defining quad
 	SceneClass							*m_parentScene;	///<scene to be reflected

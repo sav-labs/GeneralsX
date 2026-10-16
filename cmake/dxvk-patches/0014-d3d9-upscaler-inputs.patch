@@ -1,0 +1,418 @@
+GeneralsX: FSR 2 inputs from the D3D9 device. The game passes its camera
+through the exported GeneralsX_UpscalerSubmitFrame and sets render state
+252 after its 3D scene; the device copies colour and depth there and the
+swap chain hands them to the blitter with the next present.
+
+diff --git a/src/d3d9/d3d9.def b/src/d3d9/d3d9.def
+--- a/src/d3d9/d3d9.def
++++ b/src/d3d9/d3d9.def
+@@ -21,6 +21,8 @@
+   Direct3DCreate9 @37
+   Direct3DCreate9Ex @38
+ 
++  GeneralsX_UpscalerSubmitFrame
++
+   DXVK_RegisterAnnotation @28257 NONAME
+   DXVK_UnRegisterAnnotation @28258 NONAME
+ 
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -2278,6 +2278,13 @@
+       return D3D_OK;
+     }
+ 
++    // GeneralsX: private end-of-scene marker for FSR 2, never part of a state block.
++    if (unlikely(State == D3D9UpscalerSceneRenderState)) {
++      if (Value != 0u)
++        CaptureUpscalerInputs();
++      return D3D_OK;
++    }
++
+     if (unlikely(ShouldRecord()))
+       return m_recorder->SetRenderState(State, Value);
+ 
+@@ -8307,6 +8314,245 @@
+   }
+ 
+ 
++  // GeneralsX: the camera of the frame the game is drawing, submitted
++  // through GeneralsX_UpscalerSubmitFrame and consumed when the game sets
++  // render state 252. The export has no device argument; the game only
++  // ever draws its scene with one device.
++  static dxvk::mutex        g_upscalerFrameMutex;
++  static D3D9UpscalerFrame  g_upscalerFrame = { };
++  static bool               g_upscalerFrameValid = false;
++
++
++  bool D3D9DeviceEx::SubmitUpscalerFrame(const void* pFrame) {
++    if (pFrame == nullptr)
++      return DxvkFsr2::isTemporalActive();
++
++    uint32_t size = 0u;
++    std::memcpy(&size, pFrame, sizeof(size));
++
++    if (size != sizeof(D3D9UpscalerFrame)) {
++      static std::atomic<bool> s_errorShown = { false };
++
++      if (!s_errorShown.exchange(true)) {
++        Logger::err(str::format("FSR2: frame data has ", size,
++          " bytes, expected ", sizeof(D3D9UpscalerFrame), "; game and DXVK do not match"));
++      }
++
++      return false;
++    }
++
++    std::lock_guard lock(g_upscalerFrameMutex);
++    std::memcpy(&g_upscalerFrame, pFrame, sizeof(g_upscalerFrame));
++    g_upscalerFrameValid = true;
++
++    return DxvkFsr2::isTemporalActive();
++  }
++
++
++  // GeneralsX: copies render target 0 and the depth buffer at the end of
++  // the 3D scene, before the interface is drawn, together with the camera
++  // the game submitted. The swap chain hands them to FSR 2 at present.
++  void D3D9DeviceEx::CaptureUpscalerInputs() {
++    D3D9UpscalerFrame frame;
++
++    { std::lock_guard lock(g_upscalerFrameMutex);
++
++      if (!g_upscalerFrameValid)
++        return;
++
++      frame = g_upscalerFrame;
++      g_upscalerFrameValid = false;
++    }
++
++    D3D9Surface* rt = m_state.renderTargets[0].ptr();
++    D3D9Surface* ds = m_state.depthStencil.ptr();
++
++    if (rt == nullptr || ds == nullptr)
++      return;
++
++    Rc<DxvkImage> colorSrc = rt->GetCommonTexture()->GetImage();
++    Rc<DxvkImage> depthSrc = ds->GetCommonTexture()->GetImage();
++
++    if (colorSrc == nullptr || depthSrc == nullptr)
++      return;
++
++    const DxvkImageCreateInfo& colorInfo = colorSrc->info();
++    const DxvkImageCreateInfo& depthInfo = depthSrc->info();
++
++    VkExtent3D colorExtent = colorSrc->mipLevelExtent(rt->GetMipLevel());
++    VkExtent3D depthExtent = depthSrc->mipLevelExtent(ds->GetMipLevel());
++
++    if (colorExtent.width != depthExtent.width || colorExtent.height != depthExtent.height) {
++      if (!std::exchange(m_upscalerLogged, true)) {
++        Logger::warn(str::format("FSR2: render target ", colorExtent.width, "x", colorExtent.height,
++          " and depth buffer ", depthExtent.width, "x", depthExtent.height, " differ, not capturing"));
++      }
++      return;
++    }
++
++    VkExtent3D extent = { colorExtent.width, colorExtent.height, 1u };
++
++    if (m_upscalerColorImage == nullptr
++     || m_upscalerColorImage->info().format != colorInfo.format
++     || m_upscalerColorImage->info().colorSpace != colorInfo.colorSpace
++     || m_upscalerColorImage->info().extent != extent) {
++      DxvkImageCreateInfo info = { };
++      info.type        = VK_IMAGE_TYPE_2D;
++      info.format      = colorInfo.format;
++      info.sampleCount = VK_SAMPLE_COUNT_1_BIT;
++      info.extent      = extent;
++      info.numLayers   = 1;
++      info.mipLevels   = 1;
++      info.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT
++                       | VK_IMAGE_USAGE_SAMPLED_BIT
++                       | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++      info.stages      = VK_PIPELINE_STAGE_TRANSFER_BIT
++                       | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
++                       | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
++                       | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
++      info.access      = VK_ACCESS_TRANSFER_WRITE_BIT
++                       | VK_ACCESS_SHADER_READ_BIT
++                       | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
++      info.tiling      = VK_IMAGE_TILING_OPTIMAL;
++      info.layout      = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++      info.colorSpace  = colorInfo.colorSpace;
++      info.debugName   = "FSR2 scene colour";
++
++      m_upscalerColorImage = m_dxvkDevice->createImage(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++      DxvkImageViewKey viewKey = { };
++      viewKey.viewType   = VK_IMAGE_VIEW_TYPE_2D;
++      viewKey.format     = colorInfo.format;
++      viewKey.usage      = VK_IMAGE_USAGE_SAMPLED_BIT;
++      viewKey.aspects    = VK_IMAGE_ASPECT_COLOR_BIT;
++      viewKey.mipIndex   = 0;
++      viewKey.mipCount   = 1;
++      viewKey.layerIndex = 0;
++      viewKey.layerCount = 1;
++
++      m_upscalerColorView = m_upscalerColorImage->createView(viewKey);
++    }
++
++    if (m_upscalerDepthImage == nullptr
++     || m_upscalerDepthImage->info().format != depthInfo.format
++     || m_upscalerDepthImage->info().extent != extent) {
++      DxvkImageCreateInfo info = { };
++      info.type        = VK_IMAGE_TYPE_2D;
++      info.format      = depthInfo.format;
++      info.sampleCount = VK_SAMPLE_COUNT_1_BIT;
++      info.extent      = extent;
++      info.numLayers   = 1;
++      info.mipLevels   = 1;
++      info.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT
++                       | VK_IMAGE_USAGE_SAMPLED_BIT
++                       | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
++      info.stages      = VK_PIPELINE_STAGE_TRANSFER_BIT
++                       | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
++                       | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
++                       | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
++                       | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
++      info.access      = VK_ACCESS_TRANSFER_WRITE_BIT
++                       | VK_ACCESS_SHADER_READ_BIT
++                       | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
++                       | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
++      info.tiling      = VK_IMAGE_TILING_OPTIMAL;
++      info.layout      = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
++      info.debugName   = "FSR2 scene depth";
++
++      m_upscalerDepthImage = m_dxvkDevice->createImage(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++      DxvkImageViewKey viewKey = { };
++      viewKey.viewType   = VK_IMAGE_VIEW_TYPE_2D;
++      viewKey.format     = depthInfo.format;
++      viewKey.usage      = VK_IMAGE_USAGE_SAMPLED_BIT;
++      viewKey.aspects    = VK_IMAGE_ASPECT_DEPTH_BIT;
++      viewKey.mipIndex   = 0;
++      viewKey.mipCount   = 1;
++      viewKey.layerIndex = 0;
++      viewKey.layerCount = 1;
++
++      m_upscalerDepthView = m_upscalerDepthImage->createView(viewKey);
++
++      Logger::info(str::format("FSR2: capturing scene colour and depth at ",
++        extent.width, "x", extent.height, " (", colorInfo.sampleCount, " samples)"));
++    }
++
++    VkImageSubresourceLayers colorSrcLayers = { };
++    colorSrcLayers.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
++    colorSrcLayers.mipLevel       = rt->GetMipLevel();
++    colorSrcLayers.baseArrayLayer = rt->GetFace();
++    colorSrcLayers.layerCount     = 1;
++
++    VkImageSubresourceLayers depthSrcLayers = { };
++    depthSrcLayers.aspectMask     = lookupFormatInfo(depthInfo.format)->aspectMask;
++    depthSrcLayers.mipLevel       = ds->GetMipLevel();
++    depthSrcLayers.baseArrayLayer = ds->GetFace();
++    depthSrcLayers.layerCount     = 1;
++
++    EmitCs([
++      cColorDst    = m_upscalerColorImage,
++      cColorSrc    = colorSrc,
++      cColorLayers = colorSrcLayers,
++      cDepthDst    = m_upscalerDepthImage,
++      cDepthSrc    = depthSrc,
++      cDepthLayers = depthSrcLayers,
++      cExtent      = extent
++    ] (DxvkContext* ctx) {
++      auto copy = [ctx, &cExtent] (
++        const Rc<DxvkImage>& dst, const Rc<DxvkImage>& src,
++        VkImageSubresourceLayers srcLayers, VkResolveModeFlagBits mode) {
++        VkImageSubresourceLayers dstLayers = srcLayers;
++        dstLayers.mipLevel       = 0;
++        dstLayers.baseArrayLayer = 0;
++
++        if (src->info().sampleCount != VK_SAMPLE_COUNT_1_BIT) {
++          VkImageResolve region;
++          region.srcSubresource = srcLayers;
++          region.srcOffset      = VkOffset3D { 0, 0, 0 };
++          region.dstSubresource = dstLayers;
++          region.dstOffset      = VkOffset3D { 0, 0, 0 };
++          region.extent         = cExtent;
++
++          ctx->resolveImage(dst, src, region, src->info().format, mode, mode);
++        } else {
++          ctx->copyImage(dst, dstLayers, VkOffset3D { 0, 0, 0 },
++            src, srcLayers, VkOffset3D { 0, 0, 0 }, cExtent);
++        }
++      };
++
++      copy(cColorDst, cColorSrc, cColorLayers, VK_RESOLVE_MODE_AVERAGE_BIT);
++      copy(cDepthDst, cDepthSrc, cDepthLayers, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
++    });
++
++    Matrix4 view;
++    Matrix4 projection;
++    std::memcpy(&view, frame.view, sizeof(view));
++    std::memcpy(&projection, frame.projection, sizeof(projection));
++
++    DxvkTemporalUpscaleInputs inputs;
++    inputs.color       = m_upscalerColorView;
++    inputs.depth       = m_upscalerDepthView;
++    inputs.jitter[0]   = frame.jitterX;
++    inputs.jitter[1]   = frame.jitterY;
++    inputs.frameTimeMs = frame.frameTimeMs;
++    inputs.cameraNear  = frame.cameraNear;
++    inputs.cameraFar   = frame.cameraFar;
++    inputs.fovY        = frame.fovY;
++    std::memcpy(inputs.viewport, frame.viewport, sizeof(inputs.viewport));
++    // D3D row vectors: v * View * Proj, which is Proj * View in DXVK's
++    // column storage of D3D matrices
++    inputs.viewProj    = projection * view;
++    inputs.reset       = (frame.flags & D3D9UpscalerFrameReset) != 0u;
++
++    m_upscalerInputs = std::move(inputs);
++  }
++
++
++  DxvkTemporalUpscaleInputs D3D9DeviceEx::TakeUpscalerInputs() {
++    return std::exchange(m_upscalerInputs, DxvkTemporalUpscaleInputs());
++  }
++
++
+   void D3D9DeviceEx::BindSoftParticleDepth() {
+     uint32_t slot = computeResourceSlotId(DxsoProgramType::PixelShader,
+       DxsoBindingType::Image, 7u);
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -3,6 +3,7 @@
+ #include "../dxvk/dxvk_device.h"
+ #include "../dxvk/dxvk_cs.h"
+ #include "../dxvk/dxvk_staging.h"
++#include "../dxvk/dxvk_fsr2.h"
+ 
+ #include "d3d9_include.h"
+ #include "d3d9_cursor.h"
+@@ -51,6 +52,45 @@
+   // current render target. D3D9 does not define render state 253.
+   constexpr D3DRENDERSTATETYPE D3D9AmbientOcclusionRenderState = D3DRENDERSTATETYPE(253);
+ 
++  // GeneralsX: private render state that marks the end of the 3D scene,
++  // before the interface is drawn. The device copies render target 0 and
++  // the depth buffer for the FSR 2 temporal upscaler at this point.
++  // D3D9 does not define render state 252.
++  constexpr D3DRENDERSTATETYPE D3D9UpscalerSceneRenderState = D3DRENDERSTATETYPE(252);
++
++  /**
++   * \brief GeneralsX: camera of the frame for the temporal upscaler
++   *
++   * Passed by the game to the exported GeneralsX_UpscalerSubmitFrame
++   * function before it sets \ref D3D9UpscalerSceneRenderState. The
++   * layout is shared with the game, see W3DUpscaler.h, and checked
++   * with the size field.
++   */
++  struct D3D9UpscalerFrame {
++    /// sizeof(D3D9UpscalerFrame)
++    uint32_t size;
++    /// Bit 0: drop the history, the camera cut to a new place
++    uint32_t flags;
++    /// Jitter added to the projection, in render pixels, y down
++    float    jitterX;
++    float    jitterY;
++    /// Time since the previous frame in milliseconds
++    float    frameTimeMs;
++    /// Camera clip planes and vertical field of view in radians
++    float    cameraNear;
++    float    cameraFar;
++    float    fovY;
++    /// 3D viewport in render pixels: x, y, width, height
++    float    viewport[4];
++    /// D3D view and projection matrices, without jitter, row major
++    float    view[16];
++    float    projection[16];
++  };
++
++  static_assert(sizeof(D3D9UpscalerFrame) == 176u);
++
++  constexpr uint32_t D3D9UpscalerFrameReset = 0x1u;
++
+   class D3D9InterfaceEx;
+   class D3D9SwapChainEx;
+   class D3D9CommonTexture;
+@@ -1388,6 +1428,27 @@
+     // GeneralsX: screen space ambient occlusion
+     void ApplyAmbientOcclusion();
+ 
++    // GeneralsX: FSR 2 scene capture, see D3D9UpscalerSceneRenderState
++    void CaptureUpscalerInputs();
++
++  public:
++
++    /**
++     * \brief GeneralsX: stores the camera of the frame the game draws
++     *
++     * \param [in] pFrame Frame data, \ref D3D9UpscalerFrame
++     * \returns Whether the swap chain upscales with FSR 2, in which
++     *    case the game jitters its projection
++     */
++    static bool SubmitUpscalerFrame(const void* pFrame);
++
++    /**
++     * \brief GeneralsX: takes the scene inputs captured for the next present
++     */
++    DxvkTemporalUpscaleInputs TakeUpscalerInputs();
++
++  private:
++
+     void ApplyPrimitiveType(
+       DxvkContext*      pContext,
+       D3DPRIMITIVETYPE  PrimType);
+@@ -1605,6 +1666,15 @@
+     float                           m_ssaoStrength = 0.6f;
+     float                           m_ssaoRadius   = 12.0f;
+     std::shared_ptr<D3D9Ssao>       m_ssao;
++
++    // GeneralsX: FSR 2 scene copies. The game sets render state 252 after
++    // its 3D scene; see CaptureUpscalerInputs.
++    Rc<DxvkImage>                   m_upscalerColorImage;
++    Rc<DxvkImageView>               m_upscalerColorView;
++    Rc<DxvkImage>                   m_upscalerDepthImage;
++    Rc<DxvkImageView>               m_upscalerDepthView;
++    DxvkTemporalUpscaleInputs       m_upscalerInputs;
++    bool                            m_upscalerLogged = false;
+     
+     VkImageLayout                   m_hazardLayout = VK_IMAGE_LAYOUT_GENERAL;
+ 
+diff --git a/src/d3d9/d3d9_main.cpp b/src/d3d9/d3d9_main.cpp
+--- a/src/d3d9/d3d9_main.cpp
++++ b/src/d3d9/d3d9_main.cpp
+@@ -37,6 +37,12 @@
+     return dxvk::CreateD3D9(true, ppDirect3D9Ex);
+   }
+ 
++  // GeneralsX: camera of the frame for the FSR 2 temporal upscaler, see
++  // D3D9UpscalerFrame. Returns whether the game should jitter its projection.
++  DLLEXPORT BOOL __stdcall GeneralsX_UpscalerSubmitFrame(const void* pFrame) {
++    return dxvk::D3D9DeviceEx::SubmitUpscalerFrame(pFrame) ? TRUE : FALSE;
++  }
++
+   DLLEXPORT int __stdcall D3DPERF_BeginEvent(D3DCOLOR col, LPCWSTR wszName) {
+     return dxvk::D3D9GlobalAnnotationList::Instance().BeginEvent(col, wszName);
+   }
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -876,7 +876,8 @@
+         cDstRect        = dstRect,
+         cSync           = sync,
+         cFrameId        = m_wctx->frameId,
+-        cLatency        = m_latencyTracker
++        cLatency        = m_latencyTracker,
++        cUpscaler       = m_parent->TakeUpscalerInputs()
+       ] (DxvkContext* ctx) {
+         // Update back buffer color space as necessary
+         if (cSrcView->image()->info().colorSpace != cColorSpace) {
+@@ -890,6 +891,7 @@
+         auto contextObjects = ctx->beginExternalRendering();
+ 
+         cBlitter->setVideoSignal(cVideoSignal);
++        cBlitter->setTemporalInputs(cUpscaler);
+         cBlitter->present(contextObjects,
+           cDstView, cDstRect, cSrcView, cSrcRect);
+ 

@@ -1051,6 +1051,131 @@ Real OptionPreferences::getFSRSharpness() const
 	return clamp(0.0f, sharpness, 2.0f);
 }
 
+// GeneralsX @feature Claude 16/10/2026 True when Options.ini has a RenderScale entry. An explicit RenderScale
+// wins over the render scale of UpscalerQuality.
+Bool OptionPreferences::hasRenderScale() const
+{
+	OptionPreferences::const_iterator it = find("RenderScale");
+	return it != end() && atoi(it->second.str()) > 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Upscaler names, case insensitive. Unknown names give UPSCALER_DEFAULT.
+OptionPreferences::UpscalerType OptionPreferences::parseUpscaler(const char *name)
+{
+	if (name == nullptr)
+		return UPSCALER_DEFAULT;
+	if (stricmp(name, "FSR2") == 0)
+		return UPSCALER_FSR2;
+	// GeneralsX @feature Claude 16/10/2026 FSR 3.1 upscaler, opt-in like FSR 2
+	if (stricmp(name, "FSR3") == 0)
+		return UPSCALER_FSR3;
+	if (stricmp(name, "FSR1") == 0 || stricmp(name, "FSR") == 0)
+		return UPSCALER_FSR1;
+	if (stricmp(name, "OFF") == 0 || stricmp(name, "no") == 0 || stricmp(name, "none") == 0)
+		return UPSCALER_OFF;
+	if (stricmp(name, "DLSS") == 0)
+		return UPSCALER_DLSS;
+	return UPSCALER_DEFAULT;
+}
+
+const char *OptionPreferences::getUpscalerName(UpscalerType upscaler)
+{
+	switch (upscaler)
+	{
+		case UPSCALER_OFF: return "OFF";
+		case UPSCALER_FSR1: return "FSR1";
+		case UPSCALER_FSR2: return "FSR2";
+		case UPSCALER_DLSS: return "DLSS";
+		case UPSCALER_FSR3: return "FSR3";
+		default: return "default";
+	}
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini Upscaler. FSR 2 is opt-in until it has been compared against
+// native resolution on real hardware, so a missing entry keeps the FSR 1.0 behaviour of RenderScale.
+OptionPreferences::UpscalerType OptionPreferences::getUpscaler() const
+{
+	OptionPreferences::const_iterator it = find("Upscaler");
+	if (it == end())
+		return UPSCALER_DEFAULT;
+
+	return parseUpscaler(it->second.str());
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini UpscalerQuality picks the render scale when FSR 1.0 or FSR 2
+// is chosen with Upscaler and RenderScale is not set. Missing or unknown values give Quality.
+Int OptionPreferences::getUpscalerQualityScale() const
+{
+	AsciiString quality = getUpscalerQualityName();
+
+	if (quality.compareNoCase("Balanced") == 0)
+		return UPSCALER_BALANCED_SCALE;
+	if (quality.compareNoCase("Performance") == 0)
+		return UPSCALER_PERFORMANCE_SCALE;
+	if (quality.compareNoCase("UltraPerformance") == 0)
+		return UPSCALER_ULTRA_PERFORMANCE_SCALE;
+	return UPSCALER_QUALITY_SCALE;
+}
+
+AsciiString OptionPreferences::getUpscalerQualityName() const
+{
+	OptionPreferences::const_iterator it = find("UpscalerQuality");
+	if (it == end())
+		return AsciiString("Quality");
+
+	const char *name = it->second.str();
+	if (stricmp(name, "Balanced") == 0 || stricmp(name, "Performance") == 0 || stricmp(name, "UltraPerformance") == 0)
+		return it->second;
+	return AsciiString("Quality");
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini UpscalerReactiveScale: how strongly FSR 2 favours the current
+// frame over its history where particles, smoke, explosions and other alpha-blended effects changed the scene.
+// 0 turns the reactive mask off. The default 0.9 is the highest reactivity AMD recommends for FSR 2; it is also
+// the binary value of AMD's FSR 2 sample. Missing or invalid keys give the default.
+Real OptionPreferences::getUpscalerReactiveScale() const
+{
+	OptionPreferences::const_iterator it = find("UpscalerReactiveScale");
+	if (it == end())
+		return 0.9f;
+
+	Real scale = (Real)atof(it->second.str());
+	if (!(scale >= 0.0f))
+		return 0.9f;
+
+	return clamp(0.0f, scale, 1.0f);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini UpscalerSharpness: FSR 2's built-in RCAS pass, 0 to 1 (1 is
+// the sharpest, AMD's scale). With it, the FSR 1.0 RCAS pass of FSRSharpness only sharpens the interface, so
+// nothing is sharpened twice. 0 leaves the whole frame to FSRSharpness, as before FSR 2 had its own pass. The
+// default 0.5 is one stop below the RCAS maximum, milder than the FSR 1.0 default of 0.2 stops: FSR 2 already
+// rebuilds detail over several frames, and strong sharpening makes its sub-pixel jitter shimmer.
+Real OptionPreferences::getUpscalerSharpness() const
+{
+	OptionPreferences::const_iterator it = find("UpscalerSharpness");
+	if (it == end())
+		return 0.5f;
+
+	Real sharpness = (Real)atof(it->second.str());
+	if (!(sharpness >= 0.0f))
+		return 0.5f;
+
+	return clamp(0.0f, sharpness, 1.0f);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini FrameGeneration: FSR 3 frame generation, which presents a frame
+// interpolated between every two real frames. Off unless set to yes; it only takes effect with Upscaler = FSR3.
+// Render only: the game logic and its frame rate do not change.
+Bool OptionPreferences::getFrameGeneration() const
+{
+	OptionPreferences::const_iterator it = find("FrameGeneration");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
 // GeneralsX @feature Claude 16/10/2026 Options.ini PostEffects turns the DXVK present pass effects on or off:
 // bloom with a light colour grade, and FXAA when anti-aliasing is off. On unless set to "no".
 Bool OptionPreferences::getPostEffectsEnabled() const
@@ -1060,6 +1185,218 @@ Bool OptionPreferences::getPostEffectsEnabled() const
 		return TRUE;
 
 	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainDetail adds a tileable detail texture to the
+// ground that fades in close to the camera. On unless set to "no".
+Bool OptionPreferences::getTerrainDetailEnabled() const
+{
+	OptionPreferences::const_iterator it = find("TerrainDetail");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainDetailStrength, 0..1 (default 0.7): how strongly the
+// terrain detail texture modulates the ground colour.
+Real OptionPreferences::getTerrainDetailStrength() const
+{
+	OptionPreferences::const_iterator it = find("TerrainDetailStrength");
+	if (it == end())
+		return 0.7f;
+
+	Real strength = (Real)atof(it->second.str());
+	if (strength < 0.0f)
+		strength = 0.0f;
+	if (strength > 1.0f)
+		strength = 1.0f;
+
+	return strength;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainRelief lights the bumps of the terrain tiles with the
+// map's sun. On unless set to "no".
+Bool OptionPreferences::getTerrainReliefEnabled() const
+{
+	OptionPreferences::const_iterator it = find("TerrainRelief");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainSoftBlend breaks up the straight edges between terrain
+// textures with noise. On unless set to "no".
+Bool OptionPreferences::getTerrainSoftBlendEnabled() const
+{
+	OptionPreferences::const_iterator it = find("TerrainSoftBlend");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
+// on or off: soft darkening where units and buildings meet the ground and in creases. On unless set to "no".
+Bool OptionPreferences::getAmbientOcclusionEnabled() const
+{
+	OptionPreferences::const_iterator it = find("AmbientOcclusion");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Options.ini PerfOverlay = yes turns on the frame profiler: a [PERF]
+// summary on stderr every PerfInterval seconds and a small text overlay in the top left corner.
+Bool OptionPreferences::getPerfOverlayEnabled() const
+{
+	OptionPreferences::const_iterator it = find("PerfOverlay");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Seconds between two [PERF] summaries, 1 to 600, default 5.
+Real OptionPreferences::getPerfIntervalSeconds() const
+{
+	OptionPreferences::const_iterator it = find("PerfInterval");
+	if (it == end())
+		return 5.0f;
+
+	return clamp(1.0f, (Real)atof(it->second.str()), 600.0f);
+}
+
+// GeneralsX @performance Claude 16/10/2026 Options.ini SkinCache: keep the deformed vertices of each skinned
+// mesh and skip the CPU skinning while its bones have not moved. On unless set to "no".
+Bool OptionPreferences::getSkinCacheEnabled() const
+{
+	OptionPreferences::const_iterator it = find("SkinCache");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Map load preloads the models and textures of the map's objects (all
+// their damage and night states) and of the units the players can build, so they are not read from disk in the
+// middle of a match. everything preloads every object of every side for every time of day (slow, much memory).
+OptionPreferences::PreloadAssetsMode OptionPreferences::getPreloadAssetsMode() const
+{
+	OptionPreferences::const_iterator it = find("PreloadAssets");
+	if (it == end())
+		return PRELOAD_ASSETS_YES;
+
+	if (stricmp(it->second.str(), "no") == 0)
+		return PRELOAD_ASSETS_NO;
+	if (stricmp(it->second.str(), "everything") == 0)
+		return PRELOAD_ASSETS_EVERYTHING;
+	return PRELOAD_ASSETS_YES;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Shadow volume caster meshes with at least this many triangles rebuild
+// their silhouette only after ShadowVolumeHighPolyAngle degrees of rotation instead of 0.2. Retail models stay
+// below the default of 4000 triangles. 0 turns the throttle off.
+Int OptionPreferences::getShadowVolumeHighPolyTriangles() const
+{
+	OptionPreferences::const_iterator it = find("ShadowVolumeHighPolyTriangles");
+	if (it == end())
+		return 4000;
+
+	const Int value = atoi(it->second.str());
+	return value > 0 ? value : 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Rotation in degrees (0.2 to 30, default 3) that a high poly shadow
+// caster mesh may turn before its shadow silhouette is rebuilt.
+Real OptionPreferences::getShadowVolumeHighPolyAngle() const
+{
+	OptionPreferences::const_iterator it = find("ShadowVolumeHighPolyAngle");
+	if (it == end())
+		return 3.0f;
+
+	return clamp(0.2f, (Real)atof(it->second.str()), 30.0f);
+}
+
+// GeneralsX @performance Claude 16/10/2026 Models whose shadow volume casters have more triangles than this in
+// total get a ground decal shadow instead of a shadow volume. 0 (the default) keeps shadow volumes for all.
+Int OptionPreferences::getShadowVolumeMaxTriangles() const
+{
+	OptionPreferences::const_iterator it = find("ShadowVolumeMaxTriangles");
+	if (it == end())
+		return 0;
+
+	const Int value = atoi(it->second.str());
+	return value > 0 ? value : 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadows: how skinned models (and models over
+// ShadowVolumeMaxTriangles) cast their shadow. Projected (default): a shadow texture of the posed model drawn onto
+// the terrain. Volume: a stencil shadow volume built from the skinned vertices. Decal: the retail behaviour.
+Int OptionPreferences::getSkinnedShadowMode() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadows");
+	if (it == end())
+		return SKINNED_SHADOWS_PROJECTED;
+
+	if (stricmp(it->second.str(), "Volume") == 0)
+		return SKINNED_SHADOWS_VOLUME;
+	if (stricmp(it->second.str(), "Decal") == 0 || stricmp(it->second.str(), "no") == 0)
+		return SKINNED_SHADOWS_DECAL;
+	return SKINNED_SHADOWS_PROJECTED;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowQuality = Low | Medium | High (0, 1, 2): shadow
+// texture resolution and update rate, and the triangle budget of skinned shadow volumes. Default Medium.
+Int OptionPreferences::getSkinnedShadowQuality() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowQuality");
+	if (it == end())
+		return 1;
+
+	if (stricmp(it->second.str(), "Low") == 0)
+		return 0;
+	if (stricmp(it->second.str(), "High") == 0)
+		return 2;
+	return 1;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowDistance: camera distance in world units at which
+// skinned shadows have faded out (they fade over the last quarter). Default 1500, 0 = no limit.
+Real OptionPreferences::getSkinnedShadowDistance() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowDistance");
+	if (it == end())
+		return 1500.0f;
+
+	const Real value = (Real)atof(it->second.str());
+	return value > 0.0f ? clamp(100.0f, value, 100000.0f) : 0.0f;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowKeepDecal = yes keeps the model's retail decal
+// shadow under the new skinned shadow. Default no, so the two do not darken the ground twice.
+Bool OptionPreferences::getSkinnedShadowKeepDecal() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowKeepDecal");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowMinTriangles: a skinned model that the retail data
+// gives a decal shadow switches to the skinned shadow from this many caster triangles (default 2000, so retail
+// infantry keep their decals). Models with a shadow volume type always switch.
+Int OptionPreferences::getSkinnedShadowMinTriangles() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowMinTriangles");
+	if (it == end())
+		return 2000;
+
+	const Int value = atoi(it->second.str());
+	return value > 0 ? value : 0;
 }
 
 // GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
@@ -1104,3 +1441,81 @@ Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, In
 	return TRUE;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini DynamicLights: short coloured lights from explosions, burning
+// buildings and vehicles, muzzle flashes, missile exhausts and superweapons on the ground, units and buildings.
+// Off: only the lights the game data asks for (retail). Low: explosion, muzzle flash and superweapon lights, lit on
+// the terrain vertices like retail lights. High (default): also fires and missile exhausts, more lights at once and
+// a smooth light pool on the ground.
+Int OptionPreferences::getDynamicLightsMode() const
+{
+	OptionPreferences::const_iterator it = find("DynamicLights");
+	if (it == end())
+		return DYNAMIC_LIGHTS_HIGH;
+
+	if (stricmp(it->second.str(), "Off") == 0 || stricmp(it->second.str(), "no") == 0)
+		return DYNAMIC_LIGHTS_OFF;
+	if (stricmp(it->second.str(), "Low") == 0)
+		return DYNAMIC_LIGHTS_LOW;
+	return DYNAMIC_LIGHTS_HIGH;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini DynamicLightIntensity, 0 to 2 (default 1): brightness of the
+// effect lights. 0 leaves only the retail lights.
+Real OptionPreferences::getDynamicLightIntensity() const
+{
+	OptionPreferences::const_iterator it = find("DynamicLightIntensity");
+	if (it == end())
+		return 1.0f;
+
+	return clamp(0.0f, (Real)atof(it->second.str()), 2.0f);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini WaterReflections: Off keeps the retail water, Sky reflects the
+// sky only, Full (the default) also reflects the terrain, buildings, units and trees. Numbers 0 to 2 work too.
+Int OptionPreferences::getWaterReflections() const
+{
+	OptionPreferences::const_iterator it = find("WaterReflections");
+	if (it == end())
+		return 2;
+
+	const char *value = it->second.str();
+	if (stricmp(value, "off") == 0 || stricmp(value, "no") == 0 || stricmp(value, "0") == 0)
+		return 0;
+	if (stricmp(value, "sky") == 0 || stricmp(value, "1") == 0)
+		return 1;
+	return 2;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini WaterReflectionScale: size of the water reflection texture as
+// a fraction of the 3D view, 0.25 to 1, default 0.5.
+Real OptionPreferences::getWaterReflectionScale() const
+{
+	OptionPreferences::const_iterator it = find("WaterReflectionScale");
+	if (it == end())
+		return 0.5f;
+
+	const Real value = (Real)atof(it->second.str());
+	return value > 0.0f ? clamp(0.25f, value, 1.0f) : 0.5f;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini ShoreFoam: foam band and soft shoreline from the water depth.
+// On unless set to "no".
+Bool OptionPreferences::getShoreFoamEnabled() const
+{
+	OptionPreferences::const_iterator it = find("ShoreFoam");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini WaterWaves: animated wave distortion of the water reflection
+// and foam. On unless set to "no".
+Bool OptionPreferences::getWaterWavesEnabled() const
+{
+	OptionPreferences::const_iterator it = find("WaterWaves");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}

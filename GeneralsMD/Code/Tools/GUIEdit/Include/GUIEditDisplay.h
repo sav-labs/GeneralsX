@@ -114,6 +114,7 @@ public:
 	virtual void clearShroud() override {}
 	virtual void preloadModelAssets( AsciiString model ) override {}
 	virtual void preloadTextureAssets( AsciiString texture ) override {}
+	virtual Int createPreloadedTextures() override { return 0; }
 	virtual void toggleLetterBox() override {}
 	virtual void enableLetterBox(Bool enable) override {}
 #if defined(RTS_DEBUG)

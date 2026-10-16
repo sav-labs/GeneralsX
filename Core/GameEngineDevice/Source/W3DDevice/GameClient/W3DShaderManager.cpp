@@ -63,12 +63,15 @@
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
+// GeneralsX @feature Claude 16/10/2026 Detail terrain shader.
+#include "W3DDevice/GameClient/W3DTerrainDetail.h"
 #include "GameClient/View.h"
 #include "GameClient/CommandXlat.h"
 #include "GameClient/Display.h"
 #include "GameClient/Water.h"
 #include "GameLogic/GameLogic.h"
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "Common/GameLOD.h"
 #include "d3dx8tex.h"
 #include "WW3D2/dx8caps.h"
@@ -1566,9 +1569,20 @@ class TerrainShaderPixelShader : public W3DShaderInterface
 	virtual Int shutdown() override;			///<release resources used by shader
 } terrainShaderPixelShader;
 
+// GeneralsX @feature Claude 16/10/2026 ps.1.4 terrain shader with close-up detail, sun-lit tile relief and
+// noise-shaped layer blends (W3DTerrainDetail). Preferred when an Options.ini terrain detail option is on.
+class TerrainShaderDetail : public W3DShaderInterface
+{
+	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
+	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
+	virtual Int init() override;			///<perform any one time initialization and validation
+	virtual Int shutdown() override;			///<release resources used by shader
+} terrainShaderDetail;
+
 ///List of different terrain shader implementations in order of preference
 W3DShaderInterface *TerrainShaderList[]=
 {
+	&terrainShaderDetail,
 	&terrainShaderPixelShader,
 	&terrainShader8Stage,
 	&terrainShader2Stage,
@@ -2189,6 +2203,83 @@ void TerrainShaderPixelShader::reset()
 
 
 	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
+// GeneralsX @feature Claude 16/10/2026 Detail terrain shader, see W3DTerrainDetail.h.
+Int TerrainShaderDetail::init()
+{
+#ifdef DISABLE_PIXEL_SHADERS
+	return FALSE;
+#endif
+	//the cloud and light map texture matrices come from the 2 stage shader, so initialize it too.
+	if (!terrainShader2Stage.init() || W3DShaderManager::getChipset() < DC_GENERIC_PIXEL_SHADER_1_4)
+		return FALSE;
+	if (!W3DTerrainDetail::init())
+		return FALSE;
+
+	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE]=&terrainShaderDetail;
+	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=&terrainShaderDetail;
+	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=&terrainShaderDetail;
+	W3DShaders[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=&terrainShaderDetail;
+	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE]=1;
+	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE1]=1;
+	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE2]=1;
+	W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_BASE_NOISE12]=1;
+	return TRUE;
+}
+
+Int TerrainShaderDetail::shutdown()
+{
+	W3DTerrainDetail::shutdown();
+	return TRUE;
+}
+
+/// Cloud and light map texture matrices for camera space positions, as the retail terrain shaders use them.
+static void getTerrainNoiseMatrices(D3DXMATRIX &viewInverse, D3DXMATRIX &cloudMatrix, D3DXMATRIX &lightMapMatrix)
+{
+	Matrix4x4 curView;
+	DX8Wrapper::_Get_DX8_Transform(D3DTS_VIEW, curView);
+	float det;
+	D3DXMatrixInverse(&viewInverse, &det, (D3DXMATRIX*)&curView);
+	terrainShader2Stage.updateNoise1(&cloudMatrix, &viewInverse);
+	terrainShader2Stage.updateNoise2(&lightMapMatrix, &viewInverse);
+}
+
+Int TerrainShaderDetail::set(Int pass)
+{
+	const W3DShaderManager::ShaderTypes st = W3DShaderManager::getCurrentShader();
+	const Bool cloud = st == W3DShaderManager::ST_TERRAIN_BASE_NOISE1 || st == W3DShaderManager::ST_TERRAIN_BASE_NOISE12;
+	const Bool lightMap = st == W3DShaderManager::ST_TERRAIN_BASE_NOISE2 || st == W3DShaderManager::ST_TERRAIN_BASE_NOISE12;
+
+	D3DXMATRIX viewInverse, cloudMatrix, lightMapMatrix;
+	getTerrainNoiseMatrices(viewInverse, cloudMatrix, lightMapMatrix);
+	W3DTerrainDetail::apply(FALSE, W3DShaderManager::getShaderTexture(0),
+		cloud ? W3DShaderManager::getShaderTexture(2) : nullptr,
+		lightMap ? W3DShaderManager::getShaderTexture(3) : nullptr,
+		&cloudMatrix, &lightMapMatrix, viewInverse);
+	return TRUE;
+}
+
+void TerrainShaderDetail::reset()
+{
+	W3DTerrainDetail::reset();
+}
+
+Bool W3DShaderManager::isTerrainDetailActive()
+{
+	return W3DShaders[ST_TERRAIN_BASE] == &terrainShaderDetail && W3DTerrainDetail::isActive();
+}
+
+void W3DShaderManager::setTerrainDetailExtraBlend(TextureClass *tile, TextureClass *cloud, TextureClass *lightMap)
+{
+	D3DXMATRIX viewInverse, cloudMatrix, lightMapMatrix;
+	getTerrainNoiseMatrices(viewInverse, cloudMatrix, lightMapMatrix);
+	W3DTerrainDetail::apply(TRUE, tile, cloud, lightMap, &cloudMatrix, &lightMapMatrix, viewInverse);
+}
+
+void W3DShaderManager::resetTerrainDetailExtraBlend()
+{
+	W3DTerrainDetail::reset();
 }
 
 ///Cloud layer rendering shader - used for objects similar to terrain which only need the cloud layer.
@@ -3160,6 +3251,10 @@ HRESULT W3DShaderManager::LoadAndCreateD3DShader(const char* strFilePath, const 
 
 		// GeneralsX @bugfix BenderAI 13/02/2026 Use delete[] instead of HeapFree (fighter19 pattern)
 		delete[] pShader;
+
+		// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+		if (SUCCEEDED(hr))
+			PerfStats::addShaderCreated();
 
 		if (FAILED(hr))
 		{

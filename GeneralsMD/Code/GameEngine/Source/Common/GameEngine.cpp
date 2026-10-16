@@ -49,6 +49,7 @@
 #include "Common/LocalFileSystem.h"
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
+#include "Common/PerfStats.h"
 #include "Common/RandomValue.h"
 #include "Common/NameKeyGenerator.h"
 #include "Common/ModuleFactory.h"
@@ -1000,14 +1001,16 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 		const Real targetFrameTime = 1.0f / logicTimeScaleFps;
 		m_logicTimeAccumulator += min(TheFramePacer->getUpdateTime(), targetFrameTime);
 
-		if (m_logicTimeAccumulator >= targetFrameTime)
+		// GeneralsX @bugfix Claude 16/10/2026 The render interpolation phase follows the accumulator, so drawn
+		// motion advances by the real render step instead of jumping at logic steps (FramePacer::update).
+		const Bool step = m_logicTimeAccumulator >= targetFrameTime;
+		if (step)
 		{
 			m_logicTimeAccumulator -= targetFrameTime;
-			return true;
 		}
+		TheFramePacer->setLogicTimeAccumulatorPhase(m_logicTimeAccumulator / targetFrameTime);
+		return step;
 	}
-
-	return false;
 }
 
 /// -----------------------------------------------------------------------------------------------
@@ -1029,7 +1032,11 @@ void GameEngine::update()
 			/// @todo Move audio init, update, etc, into GameClient update
 
 			TheAudio->UPDATE();
-			TheGameClient->UPDATE();
+			{
+				// GeneralsX @performance Claude 16/10/2026 Client update time for the frame profiler (includes the draw).
+				PERF_STATS_SCOPE(SECTION_CLIENT);
+				TheGameClient->UPDATE();
+			}
 			TheMessageStream->propagateMessages();
 
 			if (TheNetwork != nullptr)
@@ -1048,7 +1055,11 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
-			TheGameLogic->UPDATE();
+			{
+				// GeneralsX @performance Claude 16/10/2026 Game logic time for the frame profiler. Only reads a clock.
+				PERF_STATS_SCOPE(SECTION_LOGIC);
+				TheGameLogic->UPDATE();
+			}
 
 			if (!TheFramePacer->isTimeFrozen())
 			{
@@ -1143,6 +1154,13 @@ void GameEngine::execute()
 			// See RenderFpsPreset::s_fpsValues in FrameRateLimit.cpp for the full explanation.
 			TheFramePacer->update();
 
+			// GeneralsX @performance Claude 16/10/2026 Close the frame for the frame profiler (-perf, PerfOverlay).
+			if (PerfStats::isEnabled())
+			{
+				const Bool inMatch = TheGameLogic->isInGame() && !TheGameLogic->isInShellGame() && !TheGameLogic->isLoadingMap();
+				PerfStats::endFrame(inMatch, TheGameLogic->getFrame());
+			}
+
 			// NOTE: TheDisplay->draw() is called via TheGameClient->UPDATE() above.
 			// GameClient::update() dispatches TheDisplay->DRAW() each frame.
 			// Do NOT add an extra draw() call here - it would double-present per frame.
@@ -1158,6 +1176,9 @@ void GameEngine::execute()
 #endif
 
 	}
+
+	// GeneralsX @performance Claude 16/10/2026 Close a -perfdump CSV that is still being written.
+	PerfStats::shutdown();
 }
 
 /** -----------------------------------------------------------------------------------------------
