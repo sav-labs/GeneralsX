@@ -65,4 +65,4 @@ Each row of `lab_001.jpg`, ... shows the source (4x nearest), Lanczos (the curre
 - Tiling is detected per axis (`tile_axes`): the jump from the last column or row to the first is compared with the jumps inside. Tiling textures are resized and upscaled with wrap-around context, so they stay seamless.
 - Guided blend (`guided_detail`): the coarse band (about one source pixel) always comes from Lanczos, so shapes stay as in the source; the model only adds fine detail, and only where its coarse band agrees with Lanczos.
 
-The lab does not change what goes into the pack.
+The pack uses the seamless Lanczos for safe textures that tile (colour and alpha). The guided blend stays in the lab only: on the Windows run over 199 safe textures it gave no visible gain over Lanczos with unsharp mask, and where the model invents fine patterns (caustic cell edges, letters in night maps, dot patterns on cement, branches in snow noise) faint ghosts of them still came through.
