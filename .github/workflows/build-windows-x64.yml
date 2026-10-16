@@ -30,6 +30,10 @@ jobs:
   # DXVK_FXAA=1 smooths edges of a single-sampled back buffer with FXAA (0007-present-fxaa.patch).
   # Soft particles (0008-d3d9-soft-particles.patch): the game marks its particle draws with render state 254 and DXVK
   # fades them where they meet the scene depth behind them. On by default, DXVK_SOFT_PARTICLES=0 turns it off.
+  # Ambient occlusion (0009-d3d9-ssao.patch): the game sets render state 253 after its opaque geometry and DXVK darkens
+  # creases and contact areas from the depth buffer. DXVK_SSAO=1 enables it; the game sets it from Options.ini
+  # AmbientOcclusion (default yes) unless it is already set. DXVK_SSAO_STRENGTH (default 0.6) and DXVK_SSAO_RADIUS
+  # (world units, default 12) tune it.
   # DXVK_CAPTURE_PATH=<file.png> saves the presented image every DXVK_CAPTURE_INTERVAL seconds (default 10).
   # DXVK_CAPTURE_VIDEO records every presented frame for DXVK_CAPTURE_VIDEO_SECONDS (default 10), starting
   # DXVK_CAPTURE_VIDEO_START seconds (default 5) after the first present, at DXVK_CAPTURE_VIDEO_SCALE percent
@@ -222,6 +226,8 @@ jobs:
           The game adds bloom and a light colour grade, and smooths edges with FXAA when anti-aliasing is off in the
           game options. PostEffects = no in Options.ini turns both off. Tune the bloom with DXVK_BLOOM=0.25,
           DXVK_SATURATION=1.1 and DXVK_CONTRAST=1.05 (1 = unchanged) in the environment or in Play-FSR.cmd.
+          Ambient occlusion adds soft shade where units and buildings meet the ground. AmbientOcclusion = no in
+          Options.ini turns it off; DXVK_SSAO_STRENGTH=0.6 and DXVK_SSAO_RADIUS=12 tune it.
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
           into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and

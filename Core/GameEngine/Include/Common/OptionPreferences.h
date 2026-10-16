@@ -158,6 +158,8 @@ public:
 	Real getFSRSharpness() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK bloom, colour grade and FXAA (Options.ini PostEffects, default yes)
 	Bool getPostEffectsEnabled() const;
+	// GeneralsX @feature Claude 16/10/2026 DXVK ambient occlusion (Options.ini AmbientOcclusion, default yes)
+	Bool getAmbientOcclusionEnabled() const;
 	// GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos (Options.ini CapturePath).
 	AsciiString getCapturePath() const;
 };

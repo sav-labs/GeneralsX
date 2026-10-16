@@ -869,6 +869,10 @@ static void applyPostEffects()
 
 	if (GetEnvironmentVariableA( "DXVK_FXAA", nullptr, 0 ) == 0)
 		SetEnvironmentVariableA( "DXVK_FXAA", value );
+
+	// GeneralsX @feature Claude 16/10/2026 Ambient occlusion, its own switch in Options.ini
+	if (GetEnvironmentVariableA( "DXVK_SSAO", nullptr, 0 ) == 0)
+		SetEnvironmentVariableA( "DXVK_SSAO", optionPref.getAmbientOcclusionEnabled() ? "1" : "0" );
 }
 
 // WinMain ====================================================================

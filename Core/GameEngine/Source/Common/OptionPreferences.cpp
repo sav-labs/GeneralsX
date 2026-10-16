@@ -1062,6 +1062,17 @@ Bool OptionPreferences::getPostEffectsEnabled() const
 	return stricmp(it->second.str(), "no") != 0;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
+// on or off: soft darkening where units and buildings meet the ground and in creases. On unless set to "no".
+Bool OptionPreferences::getAmbientOcclusionEnabled() const
+{
+	OptionPreferences::const_iterator it = find("AmbientOcclusion");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
 // GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
 // overrides the default, D:\GeneralsX\bugs on Windows. Elsewhere there is no default and the capture code
 // uses a bugs folder in the user data folder.
