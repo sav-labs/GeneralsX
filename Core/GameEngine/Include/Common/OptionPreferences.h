@@ -73,7 +73,10 @@ public:
 		UPSCALER_OFF,
 		UPSCALER_FSR1,
 		UPSCALER_FSR2,
-		UPSCALER_DLSS
+		UPSCALER_DLSS,
+		// GeneralsX @feature Claude 16/10/2026 FSR 3.1 through the patched DXVK (patches 0016 and 0017), falls
+		// back to FSR 2 when the DXVK build has no FidelityFX SDK. Appended so the other values keep theirs.
+		UPSCALER_FSR3
 	};
 
 	// GeneralsX @feature Claude 16/10/2026 Render scale of the UpscalerQuality presets, in percent of the
@@ -180,7 +183,7 @@ public:
 	Real getFSRSharpness() const;
 	// GeneralsX @feature Claude 16/10/2026 Whether Options.ini sets RenderScale at all
 	Bool hasRenderScale() const;
-	// GeneralsX @feature Claude 16/10/2026 Upscaler (Options.ini Upscaler = FSR2 | FSR1 | OFF | DLSS)
+	// GeneralsX @feature Claude 16/10/2026 Upscaler (Options.ini Upscaler = FSR3 | FSR2 | FSR1 | OFF | DLSS)
 	UpscalerType getUpscaler() const;
 	static UpscalerType parseUpscaler(const char *name);
 	static const char *getUpscalerName(UpscalerType upscaler);
@@ -194,6 +197,9 @@ public:
 	// GeneralsX @feature Claude 16/10/2026 FSR 2's own RCAS sharpening (Options.ini UpscalerSharpness, 0 to 1,
 	// 0 = leave sharpening to FSRSharpness, default 0.5)
 	Real getUpscalerSharpness() const;
+	// GeneralsX @feature Claude 16/10/2026 FSR 3 frame generation (Options.ini FrameGeneration = yes | no,
+	// default no, only with Upscaler = FSR3)
+	Bool getFrameGeneration() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK bloom, colour grade and FXAA (Options.ini PostEffects, default yes)
 	Bool getPostEffectsEnabled() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK ambient occlusion (Options.ini AmbientOcclusion, default yes)

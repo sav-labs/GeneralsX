@@ -820,6 +820,8 @@ static LONG WINAPI UnHandledExceptionFilter( struct _EXCEPTION_POINTERS* e_info 
 // before the D3D8 device exists. A DXVK_FSR value the player set already is kept.
 // GeneralsX @feature Claude 16/10/2026 Options.ini Upscaler / UpscalerQuality and -upscaler pick FSR 1.0 or
 // FSR 2 and the render scale; see OptionPreferences::getUpscaler.
+// GeneralsX @feature Claude 16/10/2026 Upscaler = FSR3 / -upscaler fsr3 picks FSR 3, and FrameGeneration = yes /
+// -framegen on adds FSR 3 frame generation (DXVK_FSR3_FRAMEGEN); both are render only.
 //=============================================================================
 static void applyRenderScale()
 {
@@ -854,7 +856,8 @@ static void applyRenderScale()
 
 	if (TheGlobalData->m_renderScale >= OptionPreferences::RENDER_SCALE_OFF)
 	{
-		if (upscaler == OptionPreferences::UPSCALER_FSR1 || upscaler == OptionPreferences::UPSCALER_FSR2)
+		if (upscaler == OptionPreferences::UPSCALER_FSR1 || upscaler == OptionPreferences::UPSCALER_FSR2
+			|| upscaler == OptionPreferences::UPSCALER_FSR3)
 		{
 			fprintf(stderr, "[FSR2] Upscaler %s needs RenderScale below 100, rendering at full resolution\n",
 				OptionPreferences::getUpscalerName(upscaler));
@@ -868,6 +871,19 @@ static void applyRenderScale()
 	}
 
 	TheWritableGlobalData->m_upscaler = upscaler;
+
+	// GeneralsX @feature Claude 16/10/2026 FSR 3 frame generation: -framegen on|off, else Options.ini
+	// FrameGeneration (default no). It needs FSR 3; with any other upscaler it stays off.
+	Bool frameGeneration = TheGlobalData->m_frameGeneration >= 0
+		? TheGlobalData->m_frameGeneration > 0
+		: optionPref.getFrameGeneration();
+	if (frameGeneration && upscaler != OptionPreferences::UPSCALER_FSR3)
+	{
+		fprintf(stderr, "[FSR3] frame generation needs Upscaler = FSR3 (upscaler is %s), frame generation off\n",
+			OptionPreferences::getUpscalerName(upscaler));
+		fflush(stderr);
+		frameGeneration = FALSE;
+	}
 
 	if (TheGlobalData->m_headless)
 		return;
@@ -901,7 +917,31 @@ static void applyRenderScale()
 	// GeneralsX @feature Claude 16/10/2026 DXVK_UPSCALER selects FSR 2 in the patched DXVK (0013); FSR 1.0 still
 	// upscales the interface and every frame FSR 2 cannot take. The game's own choice always wins, so that
 	// -upscaler can switch between them for comparisons.
-	SetEnvironmentVariableA( "DXVK_UPSCALER", upscaler == OptionPreferences::UPSCALER_FSR2 ? "fsr2" : "fsr1" );
+	// GeneralsX @feature Claude 16/10/2026 DXVK_UPSCALER=fsr3 selects FSR 3 (patch 0016), which falls back to FSR 2
+	// when the DXVK build has no FidelityFX SDK.
+	if (upscaler == OptionPreferences::UPSCALER_FSR3)
+		SetEnvironmentVariableA( "DXVK_UPSCALER", "fsr3" );
+	else
+		SetEnvironmentVariableA( "DXVK_UPSCALER", upscaler == OptionPreferences::UPSCALER_FSR2 ? "fsr2" : "fsr1" );
+
+	// GeneralsX @feature Claude 16/10/2026 DXVK_FSR3_FRAMEGEN turns on FSR 3 frame generation (patch 0017). -framegen
+	// always wins; with Options.ini FrameGeneration, a DXVK_FSR3_FRAMEGEN value the player set is kept.
+	if (upscaler == OptionPreferences::UPSCALER_FSR3
+		&& (TheGlobalData->m_frameGeneration >= 0 || GetEnvironmentVariableA( "DXVK_FSR3_FRAMEGEN", nullptr, 0 ) == 0))
+	{
+		SetEnvironmentVariableA( "DXVK_FSR3_FRAMEGEN", frameGeneration ? "1" : "0" );
+	}
+	if (upscaler == OptionPreferences::UPSCALER_FSR3)
+	{
+		char value[32] = "";
+		GetEnvironmentVariableA( "DXVK_FSR3_FRAMEGEN", value, sizeof(value) );
+		fprintf(stderr, "[FSR3] frame generation %s (command line %s, Options.ini FrameGeneration %s), DXVK_FSR3_FRAMEGEN=%s\n",
+			frameGeneration ? "requested" : "off",
+			TheGlobalData->m_frameGeneration < 0 ? "not set" : (TheGlobalData->m_frameGeneration > 0 ? "on" : "off"),
+			optionPref.getFrameGeneration() ? "yes" : "no",
+			value);
+		fflush(stderr);
+	}
 
 	// GeneralsX @feature Claude 15/10/2026 Options.ini FSRSharpness sets the RCAS pass that DXVK runs after
 	// EASU (DXVK_FSR_SHARPNESS, in stops, 0 = sharpest). A DXVK_FSR_SHARPNESS value the player set is kept.
@@ -916,7 +956,8 @@ static void applyRenderScale()
 	// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask and sharpening (DXVK patch 0015): Options.ini
 	// UpscalerReactiveScale sets DXVK_FSR2_REACTIVE_SCALE, UpscalerSharpness sets DXVK_FSR2_SHARPNESS. Values the
 	// player set in the environment are kept, like DXVK_FSR_SHARPNESS.
-	if (upscaler == OptionPreferences::UPSCALER_FSR2)
+	// GeneralsX @feature Claude 16/10/2026 FSR 3 reads the same DXVK_FSR2_* reactive mask and sharpness settings
+	if (upscaler == OptionPreferences::UPSCALER_FSR2 || upscaler == OptionPreferences::UPSCALER_FSR3)
 	{
 		char value[32];
 		if (GetEnvironmentVariableA( "DXVK_FSR2_REACTIVE_SCALE", nullptr, 0 ) == 0)
@@ -934,8 +975,9 @@ static void applyRenderScale()
 		char sharpness[32] = "";
 		GetEnvironmentVariableA( "DXVK_FSR2_REACTIVE_SCALE", reactive, sizeof(reactive) );
 		GetEnvironmentVariableA( "DXVK_FSR2_SHARPNESS", sharpness, sizeof(sharpness) );
-		fprintf(stderr, "[FSR2] reactive mask scale %s (Options.ini UpscalerReactiveScale, 0 = off), FSR 2 sharpness %s (UpscalerSharpness, 0 = FSRSharpness only)\n",
-			reactive, sharpness);
+		const Bool fsr3 = upscaler == OptionPreferences::UPSCALER_FSR3;
+		fprintf(stderr, "%s reactive mask scale %s (Options.ini UpscalerReactiveScale, 0 = off), %s sharpness %s (UpscalerSharpness, 0 = FSRSharpness only)\n",
+			fsr3 ? "[FSR3]" : "[FSR2]", reactive, fsr3 ? "FSR 3" : "FSR 2", sharpness);
 		fflush(stderr);
 	}
 }

@@ -143,6 +143,9 @@ public:
 	// GeneralsX @feature Claude 16/10/2026 Upscaler from -upscaler, OptionPreferences::UpscalerType (0 = read Options.ini
 	// Upscaler). After start-up it holds the upscaler in use; the 3D view jitters its camera for UPSCALER_FSR2.
 	Int m_upscaler;
+	// GeneralsX @feature Claude 16/10/2026 FSR 3 frame generation from -framegen: -1 = read Options.ini
+	// FrameGeneration, 0 = off, 1 = on. Render only.
+	Int m_frameGeneration;
 	Int m_xResolution;
 	Int m_yResolution;
 	Int m_maxShellScreens;  ///< this many shells layouts can be loaded at once

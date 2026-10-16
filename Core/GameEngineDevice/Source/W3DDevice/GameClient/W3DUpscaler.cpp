@@ -94,9 +94,28 @@ Bool s_havePrevious = false;
 Vector3 s_previousPosition;
 std::chrono::steady_clock::time_point s_previousTime;
 
+// GeneralsX @feature Claude 16/10/2026 FSR 3 takes the same jittered camera and scene inputs as FSR 2
 Bool isFsr2Selected()
 {
-	return TheGlobalData != nullptr && TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR2;
+	return TheGlobalData != nullptr
+		&& (TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR2
+		 || TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR3);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Log prefix and name of the temporal upscaler in use
+Bool isFsr3Selected()
+{
+	return TheGlobalData != nullptr && TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR3;
+}
+
+const char *logTag()
+{
+	return isFsr3Selected() ? "[FSR3]" : "[FSR2]";
+}
+
+const char *upscalerName()
+{
+	return isFsr3Selected() ? "FSR 3" : "FSR 2";
 }
 
 void lookupSubmitFrame()
@@ -113,9 +132,11 @@ void lookupSubmitFrame()
 #endif
 
 	if (s_submitFrame != nullptr)
-		fprintf(stderr, "[FSR2] DXVK FSR 2 interface found, the 3D camera jitters while DXVK upscales with FSR 2\n");
+		fprintf(stderr, "%s DXVK %s interface found, the 3D camera jitters while DXVK upscales with %s\n",
+			logTag(), upscalerName(), upscalerName());
 	else
-		fprintf(stderr, "[FSR2] d3d9.dll has no GeneralsX_UpscalerSubmitFrame (not the GeneralsX DXVK build), FSR 1.0 upscales instead\n");
+		fprintf(stderr, "%s d3d9.dll has no GeneralsX_UpscalerSubmitFrame (not the GeneralsX DXVK build), FSR 1.0 upscales instead\n",
+			logTag());
 	fflush(stderr);
 }
 
@@ -269,8 +290,8 @@ void W3DUpscaler::endScene(CameraClass *camera)
 
 	if (s_temporalActive != wasActive || s_sceneCount == 1 || s_sceneCount % LOG_INTERVAL == 0)
 	{
-		fprintf(stderr, "[FSR2] scene %u: FSR 2 %s, jitter %.3f %.3f px (phase %u of %u), viewport %.0fx%.0f at %.0f,%.0f, display %dx%d, near %.1f far %.1f, frame %.1f ms%s\n",
-			s_sceneCount,
+		fprintf(stderr, "%s scene %u: %s %s, jitter %.3f %.3f px (phase %u of %u), viewport %.0fx%.0f at %.0f,%.0f, display %dx%d, near %.1f far %.1f, frame %.1f ms%s\n",
+			logTag(), s_sceneCount, upscalerName(),
 			s_temporalActive ? "active" : "inactive (FSR 1.0 upscales)",
 			frame.jitterX, frame.jitterY, s_phaseIndex + 1, s_phaseCount,
 			frame.viewport[2], frame.viewport[3], frame.viewport[0], frame.viewport[1],
@@ -296,7 +317,8 @@ void W3DUpscaler::markOpaqueScene()
 	if (!s_opaqueLogged)
 	{
 		s_opaqueLogged = true;
-		fprintf(stderr, "[FSR2] reactive mask: opaque 3D scene marked for DXVK before translucent objects and particles (scene %u)\n",
+		fprintf(stderr, "%s reactive mask: opaque 3D scene marked for DXVK before translucent objects and particles (scene %u)\n",
+			logTag(),
 			s_sceneCount + 1);
 		fflush(stderr);
 	}
