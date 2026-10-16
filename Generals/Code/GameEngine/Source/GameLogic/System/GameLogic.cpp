@@ -1863,17 +1863,11 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 	// will build and various damage states for all the structures on the map so that we
 	// don't have big pauses when building those objects or switching to those states
 	//
-	if( TheGlobalData->m_preloadAssets )
+	// GeneralsX @performance Claude 16/10/2026 On by default (Options.ini PreloadAssets); the client also creates the
+	// preloaded textures and logs the time. Client side only. The menu background map is skipped.
+	if( TheGlobalData->m_preloadAssets && !isInShellGame() )
 	{
-		if (TheGlobalData->m_preloadEverything)
-		{
-			for (Int td = TIME_OF_DAY_FIRST; td < TIME_OF_DAY_COUNT; ++td)
-				TheGameClient->preloadAssets((TimeOfDay)td);
-		}
-		else
-		{
-			TheGameClient->preloadAssets( TheGlobalData->m_timeOfDay );
-		}
+		TheGameClient->preloadMatchAssets();
 	}
 
 	//put this here somewhat randomly.

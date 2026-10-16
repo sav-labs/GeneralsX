@@ -914,6 +914,13 @@ void W3DDisplay::init2DScene()
 
 }
 
+// GeneralsX @performance Claude 16/10/2026 Running totals of main thread texture loads for the frame profiler.
+static void readTextureLoadTotals(UnsignedInt &textureLoads, double &textureLoadMs)
+{
+	textureLoads = TextureLoader::Get_Sync_Load_Count();
+	textureLoadMs = TextureLoader::Get_Sync_Load_Ms();
+}
+
 // W3DDisplay::init ===========================================================
 /** Initialize or re-initialize the W3D display system.  Here we need to
   * create our window, and get our 3D hardware setup and online */
@@ -1216,6 +1223,8 @@ void W3DDisplay::init()
 		PerfStats::applyOptions(prefs.getPerfOverlayEnabled(), prefs.getPerfIntervalSeconds());
 		if (PerfStats::isEnabled())
 		{
+			// GeneralsX @performance Claude 16/10/2026 Texture loads that stall the main thread, for [PERF] hitch lines.
+			PerfStats::setLoadTotalsSource(readTextureLoadTotals);
 			fprintf(stderr, "[PERF] skin cache %s\n", MeshClass::Is_Skin_Cache_Enabled() ? "on" : "off (SkinCache = no)");
 			fflush(stderr);
 		}
@@ -3606,6 +3615,34 @@ void W3DDisplay::preloadTextureAssets( AsciiString texture )
 		theTexture->Release_Ref();//release reference
 	}
 
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 16/10/2026 Creates the GPU textures of every asset loaded so far. Model loads
+// only name their textures; the game creates a texture the first time it is drawn, which reads and decodes the
+// file in the middle of a frame (hundreds of ms for a new unit or building with HD textures). Called after the
+// map preload so that this happens behind the load screen instead.
+//-------------------------------------------------------------------------------------------------
+Int W3DDisplay::createPreloadedTextures()
+{
+	if (m_assetManager == nullptr)
+		return 0;
+
+	Int created = 0;
+	HashTemplateIterator<StringClass,TextureClass*> ite(m_assetManager->Texture_Hash());
+	for (ite.First(); !ite.Is_Done(); ite.Next())
+	{
+		TextureClass *texture = ite.Peek_Value();
+		if (texture != nullptr && !texture->Is_Initialized())
+		{
+			texture->Init();
+			++created;
+		}
+	}
+
+	// Finish the loads that went to the background loader instead.
+	TextureLoader::Flush_Pending_Load_Tasks();
+	return created;
 }
 
 //-------------------------------------------------------------------------------------------------

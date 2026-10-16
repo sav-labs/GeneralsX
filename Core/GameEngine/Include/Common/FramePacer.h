@@ -68,6 +68,8 @@ public:
 	Real getLogicTimeStepMilliseconds(LogicTimeQueryFlags flags = 0) const; ///< Get the logic time step in milliseconds
 
 	Real getLogicFramePhase() const; ///< Get how far the current render step reaches into the current logic frame, in [0,1]. Used to interpolate render updates between logic updates.
+	// GeneralsX @bugfix Claude 16/10/2026 Phase from the logic time accumulator, see FramePacer::update().
+	void setLogicTimeAccumulatorPhase(Real phase); ///< The time accumulated towards the next logic frame, in logic frames. Called by the engine when it paces logic frames by time.
 
 protected:
 
@@ -78,6 +80,8 @@ protected:
 
 	Real m_updateTime; ///< Last update delta time in seconds
 	Real m_logicFramePhase; ///< How far the current render step reaches into the current logic frame, ranging 0 to 1.
+	Real m_accumulatorPhase; ///< Logic time accumulator in logic frames, valid when m_hasAccumulatorPhase is set.
+	Bool m_hasAccumulatorPhase; ///< The engine paced this iteration's logic by the time accumulator.
 
 	Bool m_enableFpsLimit;
 	Bool m_enableLogicTimeScale;

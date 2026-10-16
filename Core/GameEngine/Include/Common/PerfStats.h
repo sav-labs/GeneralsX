@@ -23,6 +23,8 @@
 // vertices, skin cache hits, particle counts and texture memory. -perfdump also writes one CSV row per
 // frame into the capture folder (Options.ini CapturePath). It only reads clocks and counters: game logic,
 // CRCs and replays are unaffected.
+// GeneralsX @performance Claude 16/10/2026 Every frame longer than HitchThresholdMs prints one [PERF] hitch line
+// with that frame's sections and what was loaded or created in it (textures, models, shaders, drawables).
 
 #pragma once
 
@@ -67,6 +69,12 @@ namespace PerfStats
 		Int particlesOnScreen;
 	};
 
+	// GeneralsX @performance Claude 16/10/2026 Frames at least this long print a [PERF] hitch line.
+	const double HitchThresholdMs = 100.0;
+
+	/// Running totals of synchronous texture loads, read once per frame from the renderer.
+	typedef void (*LoadTotalsSource)(UnsignedInt &textureLoads, double &textureLoadMs);
+
 	extern Bool s_enabled;
 
 	inline Bool isEnabled() { return s_enabled; }
@@ -95,6 +103,15 @@ namespace PerfStats
 	// GeneralsX @feature Claude 16/10/2026 Effect light counters (W3DEffectLights).
 	/// Effect lights lit this frame, retail LightPulse lights still on, and light candidates before the budget.
 	void setEffectLights(UnsignedInt active, UnsignedInt retail, UnsignedInt candidates);
+	// GeneralsX @performance Claude 16/10/2026 Hitch counters: what was loaded or created during a frame.
+	/// The renderer's synchronous texture load totals; endFrame turns them into per frame counts.
+	void setLoadTotalsSource(LoadTotalsSource source);
+	/// A .w3d file was read from disk and took this long.
+	void addModelLoad(double ms);
+	/// A Direct3D vertex or pixel shader was created.
+	void addShaderCreated();
+	/// A drawable was created.
+	void addDrawableCreated();
 	/// True when the next summary is due, so the display only walks the texture list then.
 	Bool wantsTextureMemory();
 	void setTextureMemory(UnsignedInt64 bytes, UnsignedInt64 freeBytes);

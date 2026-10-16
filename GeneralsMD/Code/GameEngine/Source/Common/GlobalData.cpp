@@ -1286,6 +1286,13 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_showMoneyPerMinute = optionPref.getShowMoneyPerMinute();
 	// GeneralsX @feature Claude 14/10/2026 Smooth object motion between logic frames, on by default.
 	TheWritableGlobalData->m_smoothMotion = optionPref.getSmoothMotion();
+	// GeneralsX @performance Claude 16/10/2026 Options.ini PreloadAssets (default yes). It only adds to -preload and
+	// -preloadEverything. Preloading is client side: it loads models and textures and makes temporary drawables.
+	const OptionPreferences::PreloadAssetsMode preloadMode = optionPref.getPreloadAssetsMode();
+	if (preloadMode != OptionPreferences::PRELOAD_ASSETS_NO)
+		TheWritableGlobalData->m_preloadAssets = TRUE;
+	if (preloadMode == OptionPreferences::PRELOAD_ASSETS_EVERYTHING)
+		TheWritableGlobalData->m_preloadEverything = TRUE;
 	TheWritableGlobalData->m_gameWindowTransitionSpeedMultiplier = optionPref.getGameWindowTransitionSpeedMultiplier();
 	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
 	TheWritableGlobalData->m_skirmishTickRate = optionPref.getSkirmishTickRate();
