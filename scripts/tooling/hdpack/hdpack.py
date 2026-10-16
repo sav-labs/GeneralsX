@@ -701,7 +701,8 @@ def main():
     out_ext = ".tga" if args.terrain else ".dds"
     source_dir, source_exts = (TERRAIN_DIR, TERRAIN_EXTS) if args.terrain else (TEXTURE_DIR, TEXTURE_EXTS)
     settings = cache_settings(args.upscaler, args.model, args.scale, args.max_size, mode)
-    safe_settings = cache_settings("safe", "lanczos-unsharp", args.scale, args.max_size, mode)
+    # "-wrap": safe textures that tile are resized with wrap-around context (seamless).
+    safe_settings = cache_settings("safe", "lanczos-unsharp-wrap", args.scale, args.max_size, mode)
     safe_patterns = set(SAFE_PATTERNS) | (read_name_list(args.safe_list) if args.safe_list else set())
 
     archives = collect_archives(args.game_dir)
@@ -781,8 +782,9 @@ def main():
             continue
 
         rgb = {k: v[0].convert("RGB") for k, v in batch.items() if k not in safe}
-        up_rgb = {k: upscale_safe(v[0].convert("RGB"), target_size(*v[0].size, args.scale))
-                  for k, v in batch.items() if k in safe}
+        tiles = {k: tile_axes(v[0]) for k, v in batch.items() if k in safe}
+        up_rgb = {k: upscale_safe(batch[k][0].convert("RGB"), target_size(*batch[k][0].size, args.scale), t)
+                  for k, t in tiles.items()}
         if rgb and args.upscaler == "onnx":
             if session is None:
                 session = onnx_session(args.onnx)
@@ -800,7 +802,8 @@ def main():
             alpha = img.getchannel("A")
             has_alpha = alpha.getextrema()[0] < 255
             result = colour.convert("RGBA")
-            result.putalpha(alpha.resize(size, Image.Resampling.LANCZOS))
+            result.putalpha(wrap_resize(alpha, size, tiles[stem]) if stem in tiles
+                            else alpha.resize(size, Image.Resampling.LANCZOS))
             partial = cache_file.with_suffix(".tmp")
             if args.terrain:
                 # The terrain loader reads plain TGA; drop alpha when the tile has none.
