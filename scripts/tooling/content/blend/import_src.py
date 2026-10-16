@@ -521,7 +521,12 @@ def occluded(nt, colour, baked):
     return m.outputs[2]
 
 
-def bake_highpoly(low, high, size, extrusion):
+# Gloss per finish for the engine normal map's alpha (0 matte, 1 shiny): CARC paint is flat, worn steel
+# and glass catch the light.
+FINISH_GLOSS = {"paint": 0.27, "canvas": 0.12, "rubber": 0.1, "metal": 0.63, "glass": 0.9}
+
+
+def bake_highpoly(low, high, size, extrusion, spec):
     """Object-space normals and occlusion of the full-resolution source pieces (high), baked through the
     decimated meshes' atlas UVs (low). Both are joined into temporary objects for the selected-to-active
     bake and removed afterwards; the low meshes themselves are untouched."""
@@ -543,11 +548,14 @@ def bake_highpoly(low, high, size, extrusion):
         return out
     target = merged(low, "bake_low")
     target.data.uv_layers.active = target.data.uv_layers["Atlas"]
+    target.data.uv_layers["Atlas"].active_render = True
+    finishes = [finish_of(m, spec) if m else "paint" for m in target.data.materials]
+    face_finish = [finishes[p.material_index] if finishes else "paint" for p in target.data.polygons]
     source = merged(high, "bake_high")
     out = {}
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
-    for kind, samples in (("normal", 1), ("ao", 64)):
+    for kind, samples in (("normal", 1), ("ao", 64), ("tangent", 1), ("gloss", 1)):
         img = bpy.data.images.new(f"hp_{kind}", size, size, alpha=False, float_buffer=True)
         img.colorspace_settings.name = "Non-Color"
         mat = bpy.data.materials.new(f"hp_{kind}")
@@ -556,16 +564,43 @@ def bake_highpoly(low, high, size, extrusion):
         node.image = img
         mat.node_tree.nodes.active = node
         target.data.materials.clear()
-        target.data.materials.append(mat)
+        if kind == "gloss":
+            # Gloss straight from each face's finish, an emission bake of the low mesh alone.
+            for f in FINISH_GLOSS:
+                m = bpy.data.materials.new(f"hp_gloss_{f}")
+                m.use_nodes = True
+                nt = m.node_tree
+                nt.nodes.clear()
+                em = nt.nodes.new("ShaderNodeEmission")
+                em.inputs["Color"].default_value = (FINISH_GLOSS[f],) * 3 + (1.0,)
+                o_ = nt.nodes.new("ShaderNodeOutputMaterial")
+                nt.links.new(em.outputs[0], o_.inputs["Surface"])
+                n_ = nt.nodes.new("ShaderNodeTexImage")
+                n_.image = img
+                nt.nodes.active = n_
+                target.data.materials.append(m)
+            order = list(FINISH_GLOSS)
+            target.data.polygons.foreach_set("material_index", [order.index(f if f in order else "paint")
+                                                                for f in face_finish])
+        else:
+            target.data.materials.append(mat)
         scene.cycles.samples = samples
         bpy.ops.object.select_all(action="DESELECT")
-        source.select_set(True)
+        if kind != "gloss":
+            source.select_set(True)
         target.select_set(True)
         bpy.context.view_layer.objects.active = target
-        kwargs = dict(normal_space="OBJECT") if kind == "normal" else {}
-        bpy.ops.object.bake(type="NORMAL" if kind == "normal" else "AO", use_selected_to_active=True,
-                            cage_extrusion=extrusion, max_ray_distance=extrusion * 2.5, margin=6, use_clear=True,
-                            **kwargs)
+        if kind == "gloss":
+            bpy.ops.object.bake(type="EMIT", margin=6, use_clear=True)
+        else:
+            # Tangent space in OpenGL orientation (Y+), the engine's format; object space for the colour
+            # relief.
+            kwargs = (dict(normal_space="OBJECT") if kind == "normal" else
+                      dict(normal_space="TANGENT", normal_r="POS_X", normal_g="POS_Y", normal_b="POS_Z")
+                      if kind == "tangent" else {})
+            bpy.ops.object.bake(type="NORMAL" if kind in ("normal", "tangent") else "AO",
+                                use_selected_to_active=True, cage_extrusion=extrusion,
+                                max_ray_distance=extrusion * 2.5, margin=6, use_clear=True, **kwargs)
         out[kind] = img
     for o in (target, source, *high):
         bpy.data.objects.remove(o)
@@ -1009,7 +1044,7 @@ def build(path, spec, name, size, damaged=False):
     step("unwrapped")
     spec.pop("_highpoly", None)
     if high:
-        spec["_highpoly"] = bake_highpoly(visible, high, size, spec["highpoly"])
+        spec["_highpoly"] = bake_highpoly(visible, high, size, spec["highpoly"], spec)
         step("high-poly normals and occlusion baked")
     px = bake_source(visible, size, damaged, k.burns, f"{name}_body", spec)
     split_finishes(joined, spec)
@@ -1023,3 +1058,24 @@ def build(path, spec, name, size, damaged=False):
         me.attributes.new("nrm", "FLOAT_VECTOR", "CORNER").data.foreach_set("vector", nrm)
     bpy.context.scene["bones"] = repr(k.bones)
     return k, joined, px
+
+
+def normal_map(spec, size=1024):
+    """The engine's unit normal map (docs/WORKDIR/support/MODEL_NORMAL_MAPS.md) from the last high-poly
+    bake: tangent-space normals (OpenGL, Y+) in RGB, gloss in alpha, lowered in the baked occlusion so
+    crevices stay matte. A PIL image at `size`, or None without a high-poly bake."""
+    from PIL import Image
+    baked = spec.get("_highpoly")
+    if not baked:
+        return None
+
+    def pixels(img):
+        a = np.empty(img.size[0] * img.size[1] * 4, np.float32)
+        img.pixels.foreach_get(a)
+        return a.reshape(img.size[1], img.size[0], 4)[::-1]
+    nrm, gloss, ao = pixels(baked["tangent"]), pixels(baked["gloss"]), pixels(baked["ao"])
+    rgba = np.empty(nrm.shape, np.float32)
+    rgba[..., :3] = nrm[..., :3]
+    rgba[..., 3] = gloss[..., 0] * np.clip(0.35 + ao[..., 0], 0, 1)
+    img = Image.fromarray((np.clip(rgba, 0, 1) * 255 + 0.5).astype(np.uint8), "RGBA")
+    return img.resize((size, size), Image.Resampling.LANCZOS) if img.width != size else img

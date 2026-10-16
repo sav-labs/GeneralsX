@@ -21,6 +21,9 @@ import textures  # noqa: E402
 import w3d  # noqa: E402
 from PIL import Image  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "hdpack"))
+from hdpack import write_dds_mipmapped  # noqa: E402
+
 
 def level(px, target, reference=None):
     """Scale the baked atlas so the brighter paint (70th percentile of covered texels) sits at `target`
@@ -58,6 +61,12 @@ def build(unit, spec, src, w3d_dir, tex_dir, size, blend_dir=None, cameo_dir=Non
         body_tex = f"{spec['stem']}_body{d}.tga"
         img = Image.fromarray(kit.save_image(px, os.path.join(tex_dir, body_tex.replace(".tga", ".png"))))
         textures.save_tga(img, os.path.join(tex_dir, body_tex))
+        nmap = import_src.normal_map(spec)
+        if nmap is not None:
+            # Engine normal map next to the colour atlas: <texture>_n.dds, DXT5 with mips.
+            nmap.save(os.path.join(tex_dir, body_tex.replace(".tga", "_n.png")))
+            with open(os.path.join(tex_dir, body_tex.replace(".tga", "_n.dds")), "wb") as f:
+                f.write(write_dds_mipmapped(nmap, True))
         materials = {kind: w3d.Material(f"GX{kind.capitalize()}", body_tex, specular=spec_, shininess=shine)
                      for kind, (spec_, shine) in FINISH_SPECULAR.items()}
         materials["shadow"] = materials["team"] = materials["body"]
