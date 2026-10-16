@@ -64,6 +64,7 @@ INFANTRY = {
     "GXIRNG": ([(150, 132, 100), (112, 104, 78), (92, 98, 74)], (150, 128, 92)),
     "GXISNP": ([(96, 100, 70), (74, 70, 48), (120, 114, 84)], (88, 92, 62)),
     "GXIBRT": ([(70, 72, 66), (52, 54, 50), (88, 86, 74)], (66, 68, 60)),
+    "GXIMDF": ([(132, 128, 104), (104, 100, 80), (84, 88, 70)], (120, 110, 84)),
     "GXIPLT": ([(118, 122, 98), (112, 116, 94), (106, 110, 90)], (92, 98, 78)),
 }
 
@@ -164,6 +165,7 @@ CAMEOS = {
     "GXCameo_Sniper": "GXISNP",
     "GXCameo_Burton": "GXIBRT",
     "GXCameo_Pilot": "GXIPLT",
+    "GXCameo_MissileDef": "GXIMDF",
 }
 # Retail command bar images redrawn with our cameos. The retail MappedImages load from TextureSize_*
 # before HandCreated, so redefining them here swaps the picture on every button and portrait that uses
@@ -196,6 +198,7 @@ RETAIL_CAMEOS = {
     "GXCameo_Sniper": ["SAPathfinder1"],
     "GXCameo_Burton": ["SABurton"],
     "GXCameo_Pilot": ["SAPilot"],
+    "GXCameo_MissileDef": ["SAMissleDefender"],
 }
 # Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
 DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}

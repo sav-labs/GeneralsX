@@ -260,10 +260,14 @@ def clip_frames(frames, fn):
     return [fn(f / (frames - 1) if frames > 1 else 0.0, f) for f in range(frames)]
 
 
-def clips(armed):
+def clips(armed, shoulder=False):
     """name -> list of poses, one per frame (30 per second)."""
     rest = low_ready() if armed else unarmed()
-    aim = aiming() if armed else unarmed(spine=(0.0, 4.0, 0.0))
+    if shoulder:
+        # Launcher on the right shoulder, the tube's rear past the shoulder blade.
+        aim = aiming(grip=(0.75, -1.2, 8.3), head=(6.0, 4.0, 10.0))
+    else:
+        aim = aiming() if armed else unarmed(spine=(0.0, 4.0, 0.0))
     out = {}
 
     def breathe(t, f, base):
@@ -582,6 +586,14 @@ def weapon(parts, kind):
         tube(2.3, 3.6, 0.25, 0.14)  # suppressor
         box((0.1, -0.09, 0.5), (0.5, 0.09, 0.66))
         return (3.6, 0.0, 0.25)
+    if kind == "launcher":
+        # Guided-missile launcher: a tube over the grip, sight on the left, blast cone at the rear.
+        tube(-2.0, 2.6, 0.55, 0.36, region=GEAR)
+        tube(-2.6, -2.0, 0.55, 0.3, 0.46)
+        tube(2.6, 2.75, 0.55, 0.4)
+        box((1.8, -0.12, -0.45), (2.05, 0.12, 0.2))  # front grip
+        box((0.3, 0.3, 0.7), (1.0, 0.65, 1.05))  # sight unit
+        return (2.75, 0.0, 0.55)
     # Precision rifle with a long barrel, scope and bipod.
     box((-1.7, -0.14, -0.1), (-0.3, 0.14, 0.45), GEAR)
     box((-0.3, -0.14, 0.05), (1.2, 0.14, 0.48))
@@ -614,10 +626,12 @@ def build(name, body_texture, team_texture, kit):
         muzzle = weapon(parts, kit["weapon"])
         g = np.array(dict(SKELETON_POS)["WEAPON"])
         model.add_bone("MUZZLE", "WEAPON", tuple(g + np.array(muzzle)))
+        if kit["weapon"] == "launcher":
+            model.add_bone("MUZZLE01", "WEAPON", tuple(g + np.array(muzzle)))  # laser lock effect
     parts.finish()
 
     anims = {}
-    for clip, poses in clips(armed).items():
+    for clip, poses in clips(armed, shoulder=kit.get("weapon") == "launcher").items():
         frames_world = [solve(p, armed) for p in poses]
         anims[clip] = (len(poses), local_tracks(model, frames_world))
     return model, anims
@@ -630,6 +644,8 @@ KITS = {
     "GXISNP": dict(weapon="sniper", vest="chest_rig", pack="ghillie", hat="ghillie", kneepads=False),
     # Colonel Burton: boonie hat and face paint, chest rig with knife, suppressed carbine.
     "GXIBRT": dict(weapon="carbine", vest="chest_rig", hat="boonie", kneepads=False),
+    # Missile Defender: plate carrier, helmet, guided-missile launcher on the shoulder.
+    "GXIMDF": dict(weapon="launcher", vest="plate", pack="assault", hat="helmet"),
     # Pilot: flight suit, survival vest and helmet with visor; unarmed like the retail pilot.
     "GXIPLT": dict(weapon=None, vest="flight", hat="flight", kneepads=False, holster=True, gloves=True),
 }
