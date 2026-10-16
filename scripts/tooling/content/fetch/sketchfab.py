@@ -6,6 +6,10 @@ GeneralsX @feature Claude 16/10/2026 Runs in CI, where Sketchfab is reachable.
   sketchfab.py fetch <picks.txt> <out dir>
                                   downloads the picked models as .glb (needs SKETCHFAB_TOKEN) and writes
                                   CREDITS.md with title, author, licence and link for each
+  sketchfab.py probe <probe.txt> <out dir>
+                                  downloads candidates for a closer look (needs SKETCHFAB_TOKEN): uid lines
+                                  as they are, "q: <query>" lines as the best PBR-textured search hits, and
+                                  writes probe.json with each one's texture maps and sizes
 Search needs no token; downloads do. Licences that forbid commercial use or derivatives are skipped.
 """
 
@@ -124,8 +128,76 @@ def fetch(picks, out):
         f.write("\n".join(credits) + "\n")
 
 
+def glb_maps(data):
+    """Texture maps a glb's materials use, with each image's size, from its JSON chunk and PNG/JPEG headers."""
+    import struct
+    length = struct.unpack("<I", data[12:16])[0]
+    gltf = json.loads(data[20:20 + length])
+    blob_at = 20 + length + 8
+    sizes = []
+    for img in gltf.get("images", []):
+        view = gltf["bufferViews"][img["bufferView"]] if "bufferView" in img else None
+        try:
+            raw = data[blob_at + view.get("byteOffset", 0):blob_at + view.get("byteOffset", 0) + view["byteLength"]]
+            sizes.append(Image.open(io.BytesIO(raw)).size)
+        except Exception:
+            sizes.append(None)
+    maps = {}
+    for m in gltf.get("materials", []):
+        pbr = m.get("pbrMetallicRoughness", {})
+        for key, tex in (("base", pbr.get("baseColorTexture")), ("mr", pbr.get("metallicRoughnessTexture")),
+                         ("normal", m.get("normalTexture")), ("ao", m.get("occlusionTexture"))):
+            if tex:
+                src = gltf["textures"][tex["index"]].get("source")
+                maps.setdefault(key, set()).add(str(sizes[src]) if src is not None and src < len(sizes) else "?")
+    return {k: sorted(v) for k, v in maps.items()}, len(gltf.get("materials", []))
+
+
+def probe(listing, out):
+    token = os.environ.get("SKETCHFAB_TOKEN")
+    if not token:
+        sys.exit("SKETCHFAB_TOKEN is not set")
+    os.makedirs(out, exist_ok=True)
+    uids = []
+    for line in open(listing):
+        line = line.split("#")[0].strip()
+        if line.startswith("q:"):
+            for lic in LICENCES:
+                params = {"type": "models", "q": line[2:].strip(), "downloadable": "true", "license": lic,
+                          "pbr_type": "true", "count": 12, "sort_by": "-likeCount"}
+                for m in get(f"{API}/search?{urllib.parse.urlencode(params)}").get("results", [])[:3]:
+                    if m.get("faceCount", 0) <= 300000:
+                        uids.append(m["uid"])
+        elif line:
+            uids.append(line.split()[0])
+    report = {}
+    for uid in list(dict.fromkeys(uids))[:16]:
+        try:
+            info = get(f"{API}/models/{uid}")
+            links = get(f"{API}/models/{uid}/download", token=token)
+            if not links.get("glb"):
+                continue
+            data = get(links["glb"]["url"], raw=True)
+            if len(data) > 150 * 1024 * 1024:
+                continue
+            maps, mats = glb_maps(data)
+            with open(os.path.join(out, f"probe_{uid}.glb"), "wb") as f:
+                f.write(data)
+            report[uid] = {"name": info["name"], "author": info["user"]["username"],
+                           "licence": info["license"]["slug"] if isinstance(info.get("license"), dict) else None,
+                           "faces": info.get("faceCount"), "mb": len(data) // (1024 * 1024), "materials": mats,
+                           "maps": maps, "url": info.get("viewerUrl")}
+            print(uid, json.dumps(report[uid]), flush=True)
+        except Exception as e:
+            print(f"probe {uid} failed: {e}")
+    with open(os.path.join(out, "probe.json"), "w") as f:
+        json.dump(report, f, indent=1)
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "search":
         search(sys.argv[2])
+    elif sys.argv[1] == "probe":
+        probe(sys.argv[2], sys.argv[3])
     else:
         fetch(sys.argv[2], sys.argv[3])

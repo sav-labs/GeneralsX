@@ -1,0 +1,8 @@
+# Candidates to download for a closer look (sketchfab.py probe): a uid per line, or "q: <query>" for the
+# best PBR-textured search hits. Results go to the model-candidates prerelease as probe_<uid>.glb.
+2577a4eccbc74b2da6dba5bfd09b7511  # M1 Abrams / Artem.Goyko
+1b4a0b196df14e67bce38ed6fef7d944  # Abrams M1A1 [Free] / mansoorsajidp
+10a16c96ca8b4ebc855915f5d5202046  # M1A2 Abrams / MirzaArrafiERV_45
+q: M1 Abrams
+q: M1A2 Abrams SEP
+q: Abrams tank PBR

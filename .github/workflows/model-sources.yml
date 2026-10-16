@@ -37,6 +37,17 @@ jobs:
             gh release create model-candidates --prerelease --title "Model candidates" \
               --notes "Openly licensed source model candidates for the detailed units (not a game build)."
           gh release upload model-candidates candidates/* --clobber
+      - name: Probe candidates
+        env:
+          SKETCHFAB_TOKEN: ${{ secrets.SKETCHFAB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$SKETCHFAB_TOKEN" ] || ! grep -qv '^#' scripts/tooling/content/fetch/probe.txt; then
+            echo "No token or nothing to probe."
+            exit 0
+          fi
+          python scripts/tooling/content/fetch/sketchfab.py probe scripts/tooling/content/fetch/probe.txt probe
+          gh release upload model-candidates probe/* --clobber
       - name: Fetch picked models
         env:
           SKETCHFAB_TOKEN: ${{ secrets.SKETCHFAB_TOKEN }}
