@@ -555,7 +555,140 @@ def supply_drop_zone(name, wall, team, glass, variant=""):
     return k.finish(variant, height=6.0)
 
 
+def strategy_center(name, wall, team, glass, variant=""):
+    """Joint operations centre: a three-storey glazed command block with a sensor tower, a dish farm,
+    a helipad and a roof deck for the bombardment gun (drawn by its own model, ABGXSTRATGUN). Retail
+    footprint 124 x 88, height 24."""
+    k = Kit(name, wall, team, glass, height=24.0)
+    k.pad(-60.0, -42.0, 60.0, 42.0)
+    k.block(-44.0, -30.0, 20.0, 30.0, 0.8, 19.0, storey=6.2)
+    k.parapet(-44.0, -30.0, 20.0, 30.0, 19.0)
+    for z0, z1 in ((2.6, 5.0), (8.8, 11.2), (15.0, 17.4)):
+        k.window_band(20.0, -28.0, 20.0, 28.0, z0, z1)
+        k.window_band(-42.0, -30.0, 18.0, -30.0, z0, z1)
+        k.window_band(-42.0, 30.0, 18.0, 30.0, z0, z1)
+    k.team_band(20.0, -29.0, 20.0, 29.0, 6.2, 7.0)
+    k.door(20.0, -6.0, 6.0, 5.0)
+    # Sensor tower on the back corner.
+    k.block(-42.0, 18.0, -32.0, 28.0, 19.0, 30.0, storey=5.5)
+    k.antenna(-37.0, 23.0, 30.0, 12.0, r=0.3)
+    k.dish(-37.0, 23.0, 30.0, 3.0, facing=0.0, tilt=50.0)
+    # Roof plant and the gun deck in the middle of the roof.
+    for x, y in ((-30.0, -22.0), (-22.0, -22.0), (0.0, 22.0), (8.0, 22.0)):
+        k.ac_unit(x, y, 19.0)
+    k.b.cylinder_z(-10.0, 0.0, 19.0, 20.0, 7.0, 7.0, sides=16, region=METAL)
+    # Dish farm and helipad on the open front of the pad.
+    for x, y, f in ((34.0, -32.0, 30.0), (46.0, -32.0, 10.0), (46.0, -18.0, 330.0)):
+        k.b.box((x - 2.4, y - 2.4, 0.8), (x + 2.4, y + 2.4, 1.6), ROOF)
+        k.dish(x, y, 1.6, 4.0, facing=f, tilt=40.0)
+    k.b.cylinder_z(40.0, 24.0, 0.8, 1.2, 13.0, 13.0, sides=20, region=ROOF)
+    k.t.box((36.0, 22.6, 1.2), (44.0, 25.4, 1.26), TEAM)
+    k.t.box((36.0, 18.0, 1.2), (37.6, 30.0, 1.26), TEAM)
+    k.t.box((42.4, 18.0, 1.2), (44.0, 30.0, 1.26), TEAM)
+    k.fx_spots.append((30.0, -36.0, 52.0, 36.0, 1.2))
+    k.hesco(58.0, -42.0, 58.0, -10.0)
+    k.hesco(58.0, 10.0, 58.0, 42.0)
+    return k.finish(variant, height=19.0)
+
+
+def strategy_gun(name, wall, team, glass, variant=""):
+    """The Strategy Center's bombardment gun on its roof deck: a turret with a long barrel (BARREL for
+    recoil, MUZZLE at the tip), sitting on ABGXSTRATCTR's gun deck."""
+    k = Kit(name, wall, team, glass, height=26.0)
+    k.model.add_bone("BARREL", "ROOTTRANSFORM", (-6.0, 0.0, 23.6))
+    k.model.add_bone("MUZZLE", "BARREL", (14.0, 0.0, 23.6))
+    k.b.cylinder_z(-10.0, 0.0, 20.0, 21.0, 6.0, 5.6, sides=16, region=METAL)
+    k.b.loft([(-15.0, -4.0, 21.0), (-4.0, -4.0, 21.0), (-4.0, 4.0, 21.0), (-15.0, 4.0, 21.0)],
+             [(-14.0, -3.4, 25.0), (-6.0, -3.4, 25.0), (-6.0, 3.4, 25.0), (-14.0, 3.4, 25.0)], WALL)
+    k.team_band(-15.0, -4.0, -4.0, -4.0, 22.0, 22.8)
+    gun, g = turret_mesh(k, "BARREL", "BARREL")
+    g.cylinder_x(-6.0, -2.0, 0.0, 23.6, 0.9, 0.8, sides=12, region=METAL)
+    g.cylinder_x(-2.0, 13.0, 0.0, 23.6, 0.55, 0.45, sides=12, region=METAL, caps=False)
+    g.cylinder_x(13.0, 14.0, 0.0, 23.6, 0.8, 0.8, sides=12, region=METAL)
+    k.model.attach("BARREL", gun)
+    for mesh in (k.body, k.glass, k.team):
+        if mesh.triangles:
+            k.model.attach("ROOTTRANSFORM", mesh)
+    return k.model
+
+
+def airfield(name, wall, team, glass, variant=""):
+    """Air base: an open apron across the whole retail footprint (224 x 148, height 25) so jets taxi,
+    park and take off from the retail runway and parking bones on clear concrete, with open aircraft
+    shelters (roofs on thin posts) along the +Y edge, a control tower and an operations block at the
+    -Y corners, edge lights in team colour and a helipad."""
+    k = Kit(name, wall, team, glass, height=25.0)
+    k.pad(-110.0, -72.0, 110.0, 72.0, h=0.4)
+    # Runway edge and centre markings along X.
+    for y in (-38.0, -8.0):
+        k.t.box((-100.0, y - 0.4, 0.4), (100.0, y + 0.4, 0.44), TEAM)
+    for i in range(10):
+        x = -95.0 + i * 20.0
+        k.b.box((x, -23.4, 0.4), (x + 10.0, -22.6, 0.44), METAL)
+    # Open shelters along +Y.
+    for x0 in (-96.0, -48.0, 0.0, 48.0):
+        x1 = x0 + 40.0
+        k.b.box((x0, 30.0, 12.0), (x1, 70.0, 13.0), ROOF)
+        k.t.box((x0, 29.8, 11.4), (x1, 30.0, 12.6), TEAM)
+        for x in (x0 + 0.6, x1 - 0.6):
+            for y in (30.6, 69.4):
+                k.b.cylinder_z(x, y, 0.4, 12.0, 0.35, 0.35, sides=6, region=METAL)
+        k.fx_spots.append((x0, 30.0, x1, 70.0, 13.0))
+    # Control tower and operations block on the -Y corners.
+    k.block(-108.0, -70.0, -98.0, -60.0, 0.4, 18.0, storey=6.0)
+    k.b.loft([(-110.0, -72.0, 18.0), (-96.0, -72.0, 18.0), (-96.0, -58.0, 18.0), (-110.0, -58.0, 18.0)],
+             [(-110.0, -72.0, 18.4), (-96.0, -72.0, 18.4), (-96.0, -58.0, 18.4), (-110.0, -58.0, 18.4)], ROOF)
+    k.g.loft([(-109.0, -71.0, 18.4), (-97.0, -71.0, 18.4), (-97.0, -59.0, 18.4), (-109.0, -59.0, 18.4)],
+             [(-109.6, -71.6, 22.4), (-96.4, -71.6, 22.4), (-96.4, -58.4, 22.4), (-109.6, -58.4, 22.4)], GLASS, cap_bottom=False)
+    k.b.box((-110.4, -72.4, 22.4), (-95.6, -57.6, 23.2), METAL)
+    k.antenna(-103.0, -65.0, 23.2, 6.0)
+    k.fx_spots.append((-108.0, -70.0, -98.0, -60.0, 23.2))
+    k.block(84.0, -70.0, 108.0, -56.0, 0.4, 8.0, storey=8.0, region=METAL)
+    k.window_band(84.0, -56.0, 106.0, -56.0, 3.0, 5.6)
+    k.dish(96.0, -63.0, 8.0, 2.6, facing=180.0)
+    # Helipad near the ops block.
+    k.b.cylinder_z(70.0, -60.0, 0.4, 0.6, 9.0, 9.0, sides=20, region=ROOF)
+    k.t.box((67.0, -60.6, 0.6), (73.0, -59.4, 0.64), TEAM)
+    k.t.box((67.0, -63.0, 0.6), (68.2, -57.0, 0.64), TEAM)
+    k.t.box((71.8, -63.0, 0.6), (73.0, -57.0, 0.64), TEAM)
+    return k.finish(variant, height=13.0)
+
+
+def particle_uplink(name, wall, team, glass, variant=""):
+    """Orbital weapon uplink: a power and control block, a reactor ring of capacitor banks and a big
+    tracking dish on a lattice mount pointed at the sky. Retail footprint 128 x 76, height 38."""
+    k = Kit(name, wall, team, glass, height=38.0)
+    k.pad(-62.0, -36.0, 62.0, 36.0)
+    k.block(-58.0, -32.0, -24.0, 32.0, 0.8, 12.0, storey=6.0)
+    k.parapet(-58.0, -32.0, -24.0, 32.0, 12.0)
+    k.window_band(-24.0, -30.0, -24.0, 30.0, 6.4, 9.0)
+    k.team_band(-24.0, -31.0, -24.0, 31.0, 10.4, 11.2)
+    k.solar_rows(-56.0, -30.0, -26.0, 30.0, 12.0, rows=5)
+    # Capacitor banks around the dish mount.
+    for a in range(8):
+        r = math.radians(a * 45.0 + 22.5)
+        x, y = 16.0 + 24.0 * math.cos(r), 24.0 * math.sin(r) * 0.45
+        k.b.cylinder_z(x, y, 0.8, 7.0, 2.6, 2.6, sides=10, region=METAL)
+        k.b.cylinder_z(x, y, 7.0, 7.6, 2.0, 1.4, sides=10, region=METAL)
+    # Lattice mount and the dish facing up and towards +X.
+    k.b.cylinder_z(16.0, 0.0, 0.8, 4.0, 11.0, 10.0, sides=20, region=WALL)
+    for a in range(4):
+        r = math.radians(a * 90.0 + 45.0)
+        x, y = 16.0 + 7.0 * math.cos(r), 7.0 * math.sin(r)
+        k.b.cylinder_z(x, y, 4.0, 18.0, 0.7, 0.5, sides=6, region=METAL)
+    k.b.cylinder_z(16.0, 0.0, 4.0, 33.0, 2.4, 1.6, sides=10, region=METAL)
+    k.dish(16.0, 0.0, 18.0, 15.0, facing=0.0, tilt=62.0)
+    k.antenna(16.0, 0.0, 26.0, 12.0, r=0.5)
+    k.fx_spots.append((4.0, -10.0, 28.0, 10.0, 20.0))
+    k.hesco(60.0, -36.0, 60.0, -8.0)
+    k.hesco(60.0, 8.0, 60.0, 36.0)
+    return k.finish(variant, height=20.0)
+
+
 BUILDERS = {
+    "ABGXSTRATCTR": strategy_center,
+    "ABGXAIRFIELD": airfield,
+    "ABGXUPLINK": particle_uplink,
     "ABGXDROPZONE": supply_drop_zone,
     "ABGXPATRIOT": patriot,
     "ABGXFIREBASE": fire_base,
