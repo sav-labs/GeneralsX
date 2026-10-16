@@ -53,6 +53,7 @@
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
+#include "W3DDevice/GameClient/W3DUpscaler.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8renderer.h"
 #include "WW3D2/sortingrenderer.h"
@@ -888,7 +889,13 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
 
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask: everything up to here is the opaque scene.
+		// Translucent objects, particles and sorted alpha-blended polygons follow; DXVK copies the scene here
+		// while FSR 2 is active (render state 251), other drivers never see the state. Render only.
+		W3DUpscaler::markOpaqueScene();
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
+	}
 
 	{
 		//USE_PERF_TIMER(translucentRender)

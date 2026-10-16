@@ -912,6 +912,32 @@ static void applyRenderScale()
 		snprintf( sharpness, sizeof(sharpness), "%.2f", optionPref.getFSRSharpness() );
 		SetEnvironmentVariableA( "DXVK_FSR_SHARPNESS", sharpness );
 	}
+
+	// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask and sharpening (DXVK patch 0015): Options.ini
+	// UpscalerReactiveScale sets DXVK_FSR2_REACTIVE_SCALE, UpscalerSharpness sets DXVK_FSR2_SHARPNESS. Values the
+	// player set in the environment are kept, like DXVK_FSR_SHARPNESS.
+	if (upscaler == OptionPreferences::UPSCALER_FSR2)
+	{
+		char value[32];
+		if (GetEnvironmentVariableA( "DXVK_FSR2_REACTIVE_SCALE", nullptr, 0 ) == 0)
+		{
+			snprintf( value, sizeof(value), "%.2f", optionPref.getUpscalerReactiveScale() );
+			SetEnvironmentVariableA( "DXVK_FSR2_REACTIVE_SCALE", value );
+		}
+		if (GetEnvironmentVariableA( "DXVK_FSR2_SHARPNESS", nullptr, 0 ) == 0)
+		{
+			snprintf( value, sizeof(value), "%.2f", optionPref.getUpscalerSharpness() );
+			SetEnvironmentVariableA( "DXVK_FSR2_SHARPNESS", value );
+		}
+
+		char reactive[32] = "";
+		char sharpness[32] = "";
+		GetEnvironmentVariableA( "DXVK_FSR2_REACTIVE_SCALE", reactive, sizeof(reactive) );
+		GetEnvironmentVariableA( "DXVK_FSR2_SHARPNESS", sharpness, sizeof(sharpness) );
+		fprintf(stderr, "[FSR2] reactive mask scale %s (Options.ini UpscalerReactiveScale, 0 = off), FSR 2 sharpness %s (UpscalerSharpness, 0 = FSRSharpness only)\n",
+			reactive, sharpness);
+		fflush(stderr);
+	}
 }
 
 // applyPostEffects ===========================================================

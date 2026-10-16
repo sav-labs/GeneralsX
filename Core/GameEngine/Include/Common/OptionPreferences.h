@@ -188,6 +188,12 @@ public:
 	// (Quality | Balanced | Performance | UltraPerformance, default Quality)
 	Int getUpscalerQualityScale() const;
 	AsciiString getUpscalerQualityName() const;
+	// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask strength for particles and other alpha-blended
+	// effects (Options.ini UpscalerReactiveScale, 0 to 1, 0 = off, default 0.9)
+	Real getUpscalerReactiveScale() const;
+	// GeneralsX @feature Claude 16/10/2026 FSR 2's own RCAS sharpening (Options.ini UpscalerSharpness, 0 to 1,
+	// 0 = leave sharpening to FSRSharpness, default 0.5)
+	Real getUpscalerSharpness() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK bloom, colour grade and FXAA (Options.ini PostEffects, default yes)
 	Bool getPostEffectsEnabled() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK ambient occlusion (Options.ini AmbientOcclusion, default yes)

@@ -39,6 +39,11 @@ namespace
 // Private render state that marks the end of the 3D scene for DXVK. D3D does not define render state 252.
 const unsigned UPSCALER_SCENE_RENDER_STATE = 252;
 
+// GeneralsX @feature Claude 16/10/2026 Private render state that marks the end of the opaque part of the 3D scene,
+// before particles and other alpha-blended effects (D3D9UpscalerOpaqueRenderState in DXVK patch 0015). D3D does
+// not define render state 251.
+const unsigned UPSCALER_OPAQUE_RENDER_STATE = 251;
+
 // How often the console shows the upscaler state, in scenes
 const UnsignedInt LOG_INTERVAL = 600;
 
@@ -77,6 +82,9 @@ SubmitFrameFunc s_submitFrame = nullptr;
 
 Bool s_temporalActive = false;		///< DXVK upscaled the previous frame with FSR 2, so this frame jitters
 Bool s_jittered = false;				///< the camera of the current scene is jittered
+// GeneralsX @feature Claude 16/10/2026 Reactive mask state
+Bool s_sceneOpen = false;				///< between beginScene and endScene of the tactical view while FSR 2 is active
+Bool s_opaqueLogged = false;
 Real s_jitterPixels[2] = { 0.0f, 0.0f };
 UnsignedInt s_phaseIndex = 0;
 UnsignedInt s_phaseCount = 1;
@@ -158,9 +166,13 @@ void getViewportPixels(CameraClass *camera, Real viewport[4])
 void W3DUpscaler::beginScene(CameraClass *camera)
 {
 	s_jittered = false;
+	s_sceneOpen = false;
 
 	if (camera == nullptr || !isFsr2Selected() || !s_temporalActive)
 		return;
+
+	// GeneralsX @feature Claude 16/10/2026 The scene may mark its opaque part for the reactive mask
+	s_sceneOpen = true;
 
 	Real viewport[4];
 	getViewportPixels(camera, viewport);
@@ -184,6 +196,9 @@ void W3DUpscaler::beginScene(CameraClass *camera)
 
 void W3DUpscaler::endScene(CameraClass *camera)
 {
+	// GeneralsX @feature Claude 16/10/2026 Nothing drawn after this belongs to the 3D scene
+	s_sceneOpen = false;
+
 	if (camera == nullptr)
 		return;
 
@@ -262,6 +277,27 @@ void W3DUpscaler::endScene(CameraClass *camera)
 			TheGlobalData->m_renderScaleDisplayWidth, TheGlobalData->m_renderScaleDisplayHeight,
 			frame.cameraNear, frame.cameraFar, frame.frameTimeMs,
 			(frame.flags & UPSCALER_FRAME_RESET) ? ", history reset" : "");
+		fflush(stderr);
+	}
+}
+
+// GeneralsX @feature Claude 16/10/2026 Called by RTS3DScene::Flush after opaque meshes, trees, shadows and water,
+// before translucent objects, particles and sorted alpha-blended polygons. Only the tactical view's scene sets
+// render state 251, and only while FSR 2 is active. When a view filter draws the scene twice, DXVK keeps the last
+// copy, and drops it if the final scene went to a different render target. Render only.
+void W3DUpscaler::markOpaqueScene()
+{
+	if (!s_sceneOpen || !isFsr2Selected())
+		return;
+
+	DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)UPSCALER_OPAQUE_RENDER_STATE, 1);
+	DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)UPSCALER_OPAQUE_RENDER_STATE, 0);
+
+	if (!s_opaqueLogged)
+	{
+		s_opaqueLogged = true;
+		fprintf(stderr, "[FSR2] reactive mask: opaque 3D scene marked for DXVK before translucent objects and particles (scene %u)\n",
+			s_sceneCount + 1);
 		fflush(stderr);
 	}
 }
