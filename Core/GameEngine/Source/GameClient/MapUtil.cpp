@@ -514,8 +514,71 @@ void MapCache::updateCache()
 	if (m_doLoadStandardMapCacheINI)
 	{
 		loadMapsFromMapCacheINI(mapDir);
+		loadArchiveMapsMissingFromCache(mapDir);
 		m_doLoadStandardMapCacheINI = FALSE;
 	}
+}
+
+// GeneralsX @feature Claude 16/10/2026 List maps that ship in the game's archives (such as the
+// generated skirmish maps in GeneralsXContent.big) but are not in the retail MapCache.ini. Retail
+// lists standard maps only from that cache, so a new map in an archive never showed up.
+void MapCache::loadArchiveMapsMissingFromCache( const AsciiString &mapDir )
+{
+	std::set<AsciiString, rts::less_than_nocase<AsciiString> > known;
+	for (MapCache::const_iterator it = begin(); it != end(); ++it)
+	{
+		known.insert(normalizedMapKey(it->first));
+	}
+
+	FilenameList filepathList;
+	AsciiString toplevelPattern;
+	toplevelPattern.format("%s\\", mapDir.str());
+	AsciiString filenamepattern;
+	filenamepattern.format("*.%s", getMapExtension().str());
+	TheFileSystem->getFileListInDirectory(toplevelPattern, filenamepattern, filepathList, TRUE);
+
+	for (FilenameListIter filepathIt = filepathList.begin(); filepathIt != filepathList.end(); ++filepathIt)
+	{
+		AsciiString filepathLower = *filepathIt;
+		filepathLower.toLower();
+		if (known.find(normalizedMapKey(filepathLower)) != known.end())
+		{
+			continue;
+		}
+
+		const char *szFilenameLower = findLastPathSeparator(filepathLower);
+		if (!szFilenameLower)
+		{
+			continue;
+		}
+		AsciiString filenameLower = szFilenameLower + 1;
+		filenameLower.truncateBy(strlen(mapExtension));
+		if (!hasValidMapLeafLayout(filepathLower, filenameLower))
+		{
+			continue;
+		}
+
+		FileInfo fileInfo;
+		if (!TheFileSystem->getFileInfo(*filepathIt, &fileInfo))
+		{
+			continue;
+		}
+
+		addMap(mapDir, *filepathIt, filepathLower, fileInfo, TRUE);
+		fprintf(stderr, "[MapCache] Added archive map %s\n", filepathIt->str());
+		fflush(stderr);
+	}
+}
+
+AsciiString MapCache::normalizedMapKey( const AsciiString &path )
+{
+	AsciiString key;
+	for (const char *c = path.str(); *c; ++c)
+	{
+		key.concat(*c == '/' ? '\\' : *c);
+	}
+	key.toLower();
+	return key;
 }
 
 void MapCache::prepareUnseenMaps( const AsciiString &mapDir )

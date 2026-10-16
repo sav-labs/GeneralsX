@@ -150,6 +150,71 @@ class ChunkWriter:
         return bytes(toc + self.body)
 
 
+# Script chunk versions (Scripts.cpp): Script 2, OrCondition 1, Condition 4, ScriptAction 2.
+K_SCRIPT_DATA_VERSION_2 = 2
+K_SCRIPT_OR_CONDITION_DATA_VERSION_1 = 1
+K_SCRIPT_CONDITION_VERSION_4 = 4
+K_SCRIPT_ACTION_VERSION_2 = 2
+PARAM_COORD3D = 16  # Parameter::COORD3D (Scripts.h)
+
+
+def _write_name_key(w, name):
+    """DataChunkOutput::writeNameKey: a table-of-contents symbol tagged as an ascii string."""
+    w.int((w.symbol(name) << 8) | DICT_ASCIISTRING)
+
+
+def _write_parameters(w, parms):
+    w.int(len(parms))
+    for ptype, value in parms:
+        w.int(ptype)
+        if ptype == PARAM_COORD3D:
+            for v in value:
+                w.real(v)
+        else:
+            ival, rval, sval = 0, 0.0, ""
+            if isinstance(value, bool) or isinstance(value, int):
+                ival = int(value)
+            elif isinstance(value, float):
+                rval = value
+            else:
+                sval = value
+            w.int(ival)
+            w.real(rval)
+            w.ascii(sval)
+
+
+def _write_script(w, script):
+    """script: dict with name, conditions [[(type id, internal name, [(param type, value)])]]
+    (an OR of ANDs), actions [(type id, internal name, params)] and optional one_shot/active."""
+    w.open("Script", K_SCRIPT_DATA_VERSION_2)
+    w.ascii(script["name"])
+    w.ascii(script.get("comment", ""))
+    w.ascii("")
+    w.ascii("")
+    w.byte(1 if script.get("active", True) else 0)
+    w.byte(1 if script.get("one_shot", True) else 0)
+    for _ in range(3):  # easy, normal, hard
+        w.byte(1)
+    w.byte(0)  # subroutine
+    w.int(script.get("delay", 0))
+    for and_list in script["conditions"]:
+        w.open("OrCondition", K_SCRIPT_OR_CONDITION_DATA_VERSION_1)
+        for ctype, cname, parms in and_list:
+            w.open("Condition", K_SCRIPT_CONDITION_VERSION_4)
+            w.int(ctype)
+            _write_name_key(w, cname)
+            _write_parameters(w, parms)
+            w.close()
+        w.close()
+    for atype, aname, parms in script["actions"]:
+        w.open("ScriptAction", K_SCRIPT_ACTION_VERSION_2)
+        w.int(atype)
+        _write_name_key(w, aname)
+        _write_parameters(w, parms)
+        w.close()
+    w.close()
+
+
 def write_map(m):
     """m is a dict with: width, height, border, heights (bytes, width*height), tiles (list of
     Short, width*height), blend (list), extra_blend (list), cliff_info (list), cliff_state
@@ -212,8 +277,11 @@ def write_map(m):
     for team in m["teams"]:
         w.dict(team)
     w.open("PlayerScriptsList", K_SCRIPTS_DATA_VERSION_1)
-    for _ in m["sides"]:
+    side_scripts = m.get("scripts", {})
+    for i in range(len(m["sides"])):
         w.open("ScriptList", K_SCRIPT_LIST_DATA_VERSION_1)
+        for script in side_scripts.get(i, []):
+            _write_script(w, script)
         w.close()
     w.close()
     w.close()
@@ -255,7 +323,7 @@ def write_map(m):
         for light in (terrain[0], objects[0], objects[1], objects[2], terrain[1], terrain[2]):
             for v in light["ambient"] + light["diffuse"] + light["pos"]:
                 w.real(v)
-    w.int(lighting["shadow_color"])
+    w.bytes(struct.pack("<I", lighting["shadow_color"]))
     w.close()
 
     w.open("WaypointsList", K_WAYPOINTS_VERSION_1)
@@ -551,10 +619,52 @@ def parse_sides(c):
             continue
         for lst in sub.children():
             if lst.label == "ScriptList":
-                scripts.append([s.label for s in lst.children()])
+                scripts.append([_parse_script_entry(s) for s in lst.children()])
         if len(scripts) >= MAX_PLAYER_COUNT:
             raise MapError("PlayerScriptsList: too many script lists")
     return {"sides": sides, "teams": teams, "scripts": scripts}
+
+
+def _parse_parameter(c):
+    ptype = c.int()
+    if ptype == PARAM_COORD3D:
+        return (ptype, (c.real(), c.real(), c.real()))
+    return (ptype, c.int(), c.real(), c.ascii())
+
+
+def _parse_template(c, keyed_from):
+    ttype = c.int()
+    name = c.r.name(c.uint() >> 8) if c.version >= keyed_from else None
+    return (ttype, name, [_parse_parameter(c) for _ in range(c.int())])
+
+
+def _parse_script(c):
+    s = {"name": c.ascii(), "comment": c.ascii(), "condition_comment": c.ascii(), "action_comment": c.ascii()}
+    s["active"], s["one_shot"], s["easy"], s["normal"], s["hard"], s["subroutine"] = (c.byte() for _ in range(6))
+    s["delay"] = c.int() if c.version >= 2 else 0
+    s["conditions"], s["actions"], s["actions_false"] = [], [], []
+    for sub in c.children():
+        if sub.label == "OrCondition":
+            ands = []
+            for cond in sub.children():
+                ands.append(_parse_template(cond, 4))
+                cond.end()
+            s["conditions"].append(ands)
+        elif sub.label in ("ScriptAction", "ScriptActionFalse"):
+            s["actions" if sub.label == "ScriptAction" else "actions_false"].append(_parse_template(sub, 2))
+            sub.end()
+    return s
+
+
+def _parse_script_entry(c):
+    if c.label == "Script":
+        return ("Script", _parse_script(c))
+    if c.label == "ScriptGroup":
+        name, active = c.ascii(), c.byte()
+        if c.version >= 2:
+            c.byte()
+        return ("ScriptGroup", name, active, [_parse_script(s) for s in c.children() if s.label == "Script"])
+    return (c.label,)
 
 
 def parse_objects(c):
