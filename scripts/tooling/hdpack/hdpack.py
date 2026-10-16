@@ -310,44 +310,6 @@ def upscale_safe(img, size, tiles=(False, False)):
     return wrap_resize(img, size, tiles, sharpen=True)
 
 
-def gaussian(arr, sigma, tiles):
-    """Separable Gaussian blur of an HxWxC float array, wrapping along tiling axes."""
-    import numpy as np
-    r = max(1, int(sigma * 3))
-    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2).astype(np.float32)
-    k /= k.sum()
-    h, w = arr.shape[:2]
-    padded = pad_hw(arr, r, tiles)
-    rows = sum(k[i] * padded[i:i + h] for i in range(len(k)))
-    return sum(k[i] * rows[:, i:i + w] for i in range(len(k)))
-
-
-GUIDE_SIGMA = 2.0      # output px; about half a source pixel at 4x
-GUIDE_STRENGTH = 0.8   # share of the model's fine detail where it agrees with the source
-GUIDE_LIMIT = 0.25     # largest detail step the model may add (0..1 colour)
-GUIDE_AGREE = 0.05     # coarse colour difference at which the model's detail is dropped
-
-
-def guided_detail(lanczos, model, tiles=(False, False)):
-    """Lanczos shapes with the model's fine detail, only where the model agrees with the source.
-
-    Both results are split into a coarse band (Gaussian, about a source pixel) and a
-    fine band. The coarse band always comes from Lanczos, so letters, emblems, glows and
-    patterns keep the source's shapes. The fine band is the model's (clamped), faded out
-    wherever the model's coarse band moved away from Lanczos, which is exactly where it
-    repainted something instead of sharpening it.
-    """
-    import numpy as np
-    lan = np.asarray(lanczos.convert("RGB"), dtype=np.float32) / 255.0
-    mod = np.asarray(model.convert("RGB").resize(lanczos.size, Image.Resampling.LANCZOS), dtype=np.float32) / 255.0
-    lan_low, mod_low = gaussian(lan, GUIDE_SIGMA, tiles), gaussian(mod, GUIDE_SIGMA, tiles)
-    disagree = gaussian(np.abs(mod_low - lan_low).mean(axis=2, keepdims=True), GUIDE_SIGMA * 2, tiles)
-    gate = GUIDE_STRENGTH * np.exp(-(disagree / GUIDE_AGREE) ** 2)
-    fine = gate * np.clip(mod - mod_low, -GUIDE_LIMIT, GUIDE_LIMIT) + (1 - gate) * (lan - lan_low)
-    out = np.clip(lan_low + fine, 0.0, 1.0)
-    return Image.fromarray((out * 255.0).round().astype(np.uint8), "RGB")
-
-
 def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
     """Upscale a dict of {key: RGB image} with realesrgan-ncnn-vulkan in one run."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -555,10 +517,19 @@ def review(sources, keys, cache_dir, settings, out_ext, review_dir, count):
     print(f"reviewed {len(keys)} textures, worst {len(worst)} written to {review_dir}")
 
 
-def lab(src_dir, out_dir, session, tile, scale):
-    """Compare upscalers on loose texture files: source, Lanczos (current safe path),
-    the raw model and the guided blend, plus a 2x2 tiling crop for tileable textures.
-    Writes lab_001.jpg, ... and lab.json with the drift of each method."""
+def sharpness(img):
+    """Mean absolute Laplacian: how much fine detail an upscale carries."""
+    import numpy as np
+    a = np.asarray(img.convert("L"), dtype=np.float32)
+    lap = 4 * a[1:-1, 1:-1] - a[:-2, 1:-1] - a[2:, 1:-1] - a[1:-1, :-2] - a[1:-1, 2:]
+    return float(np.abs(lap).mean())
+
+
+def lab(src_dir, out_dir, models, tile, scale):
+    """Compare upscalers on loose texture files: source, Lanczos (current safe path) and
+    each model in `models` ({name: ONNX session}), run with wrap-around context on tiling
+    axes. Writes lab_001.jpg, ... and lab.json with drift (lower is closer to the source)
+    and sharpness (higher is crisper) of each method."""
     from PIL import ImageDraw
     os.makedirs(out_dir, exist_ok=True)
     files = sorted(f for f in Path(src_dir).iterdir() if f.suffix.lower() in (".dds", ".tga"))
@@ -576,34 +547,27 @@ def lab(src_dir, out_dir, session, tile, scale):
         size = target_size(*img.size, scale)
         rgb = img.convert("RGB")
         tiles = tile_axes(rgb)
-        tileable = any(tiles)
-        lan = upscale_safe(rgb, size, tiles)
-        if session is not None:
-            mod = upscale_rgb_onnx({stem: rgb}, session, tile, {stem: tiles})[stem]
-            mod = mod.resize(size, Image.Resampling.LANCZOS) if mod.size != size else mod
-        else:
-            mod = lan
-        gui = guided_detail(wrap_resize(rgb, size, tiles), mod, tiles)
-        results = {"lanczos": lan, "model": mod, "guided": gui}
-        score = {k: round(drift(img, v.convert("RGBA")), 2) for k, v in results.items()}
-        scores.append({"texture": stem, "tiles": tiles, **score})
+        results = {"lanczos": upscale_safe(rgb, size, tiles)}
+        for name, session in models.items():
+            up = upscale_rgb_onnx({stem: rgb}, session, tile, {stem: tiles})[stem]
+            results[name] = up.resize(size, Image.Resampling.LANCZOS) if up.size != size else up
+        entry = {"texture": stem, "tiles": tiles}
+        for name, v in results.items():
+            entry[name] = {"drift": round(drift(img, v.convert("RGBA")), 2), "sharpness": round(sharpness(v), 2)}
+        scores.append(entry)
         w, h = size
         cw, ch = min(cell, w), min(cell, h)
         box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
         cells = [rgb.resize(size, Image.Resampling.NEAREST).crop(box)] + [v.crop(box) for v in results.values()]
-        if tileable:
-            for v in (lan, gui):
-                quad = Image.new("RGB", (w * 2, h * 2))
-                for y in range(2):
-                    for x in range(2):
-                        quad.paste(v, (x * w, y * h))
-                cells.append(quad.crop((w - cw // 2, h - ch // 2, w + cw // 2, h + ch // 2)))
-        label = f"{stem}  drift lanczos {score['lanczos']}  model {score['model']}  guided {score['guided']}"
+        label = stem + "  " + "  ".join(f"{k} d{v['drift']} s{v['sharpness']}"
+                                        for k, v in entry.items() if isinstance(v, dict))
         rows.append((label, cells))
-    names = "source x4 nearest | lanczos (now) | model | guided | seam: lanczos | seam: guided"
-    for page, first in enumerate(range(0, len(rows), SHEET_ROWS // 2), start=1):
-        chunk = rows[first:first + SHEET_ROWS // 2]
-        sheet = Image.new("RGB", (6 * (cell + 6), 20 + len(chunk) * (cell + 22)), (32, 32, 32))
+    names = " | ".join(["source x4 nearest", "lanczos (now)", *models])
+    columns = 2 + len(models)
+    per_page = SHEET_ROWS // 2
+    for page, first in enumerate(range(0, len(rows), per_page), start=1):
+        chunk = rows[first:first + per_page]
+        sheet = Image.new("RGB", (columns * (cell + 6), 20 + len(chunk) * (cell + 22)), (32, 32, 32))
         draw = ImageDraw.Draw(sheet)
         draw.text((4, 4), names, fill=(255, 255, 255))
         for row, (label, cells) in enumerate(chunk):
@@ -613,7 +577,7 @@ def lab(src_dir, out_dir, session, tile, scale):
                 sheet.paste(c, (col * (cell + 6), y + 18))
         sheet.save(Path(out_dir, f"lab_{page:03d}.jpg"), quality=90)
     Path(out_dir, "lab.json").write_text(json.dumps(scores, indent=2))
-    print(f"lab: {len(rows)} textures compared, sheets in {out_dir}")
+    print(f"lab: {len(rows)} textures compared with {', '.join(['lanczos', *models])}, sheets in {out_dir}")
 
 
 # ---------------------------------------------------------------- main
@@ -675,11 +639,15 @@ def main():
     ap.add_argument("--lab", metavar="DIR",
                     help="Only compare upscalers on the loose .dds/.tga files in DIR; sheets go to --lab-out")
     ap.add_argument("--lab-out", default="hdpack-lab", help="Output folder of --lab")
+    ap.add_argument("--lab-model", action="append", metavar="NAME=MODEL.onnx",
+                    help="4x ONNX model to compare in --lab (repeatable; default: the --onnx model)")
     ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
     args = ap.parse_args()
     if args.lab:
-        session = onnx_session(args.onnx) if args.upscaler == "onnx" else None
-        lab(args.lab, args.lab_out, session, args.tile, args.scale)
+        specs = [m.split("=", 1) for m in args.lab_model] if args.lab_model else (
+            [("x4plus", args.onnx)] if args.upscaler == "onnx" else [])
+        models = {name: onnx_session(path) for name, path in specs}
+        lab(args.lab, args.lab_out, models, args.tile, args.scale)
         return
     if not args.game_dir:
         ap.error("--game-dir is required unless --lab is given")

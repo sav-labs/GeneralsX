@@ -54,15 +54,15 @@ Useful options:
 
 ## Comparing upscalers on the safe textures (`--lab`)
 
-Textures on the safe list (lettering, flags, water caustics, ground strips, noise and night maps) skip the AI model and get Lanczos. To try better methods on them without building a pack, put loose `.dds`/`.tga` copies in a folder and run:
+Textures on the safe list (lettering, flags, water caustics, ground strips, noise and night maps) skip the AI model and get Lanczos. To try other upscalers on them without building a pack, put loose `.dds`/`.tga` copies in a folder and run:
 
 ```
-hdpack.exe --lab <folder> --lab-out <sheets folder>
+hdpack.exe --lab <folder> --lab-out <sheets folder> --lab-model pbrify=<models>\pbrify-rplksrd-v3.onnx --lab-model dn50=<models>\general-dn50.onnx
 ```
 
-Each row of `lab_001.jpg`, ... shows the source (4x nearest), Lanczos (the current safe path), the raw model and the guided blend, plus a 2x2 tiling crop of Lanczos and guided for textures that tile. `lab.json` holds the drift of each method (lower is closer to the source).
+Each row of `lab_001.jpg`, ... shows the source (4x nearest), Lanczos (the current safe path) and each `--lab-model` (default: the bundled x4plus). `lab.json` holds per method the drift (lower is closer to the source) and the sharpness (mean absolute Laplacian, higher is crisper). Models run with wrap-around context on tiling axes, like the pack.
+
+Candidate models come from the `hdpack-lab-models` artifact of the same workflow, exported by `export_lab_models.py` (PyTorch and spandrel, weights pinned by SHA-256): Real-ESRGAN Compact `general-x4v3` and its half-denoised blend `general-dn50` (BSD-3-Clause), and the PBRify texture upscalers `pbrify-rplksrd-v3` and `pbrify-v4` (CC0-1.0).
 
 - Tiling is detected per axis (`tile_axes`): the jump from the last column or row to the first is compared with the jumps inside. Tiling textures are resized and upscaled with wrap-around context, so they stay seamless.
-- Guided blend (`guided_detail`): the coarse band (about one source pixel) always comes from Lanczos, so shapes stay as in the source; the model only adds fine detail, and only where its coarse band agrees with Lanczos.
-
-The pack uses the seamless Lanczos for safe textures that tile (colour and alpha). The guided blend stays in the lab only: on the Windows run over 199 safe textures it gave no visible gain over Lanczos with unsharp mask, and where the model invents fine patterns (caustic cell edges, letters in night maps, dot patterns on cement, branches in snow noise) faint ghosts of them still came through.
+- The pack uses the seamless Lanczos for safe textures that tile (colour and alpha). A blend of x4plus detail over Lanczos was tried and dropped: no visible gain, and faint ghosts of invented detail came through.
