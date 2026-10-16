@@ -35,6 +35,9 @@ LightClass(LightClass::POINT)
 
 	m_priorEnable = false;
 	m_enabled = true;
+	// GeneralsX @feature Claude 16/10/2026 Retail lights are not effect lights.
+	m_managed = false;
+	m_skipTerrainVertices = false;
 
 }
 

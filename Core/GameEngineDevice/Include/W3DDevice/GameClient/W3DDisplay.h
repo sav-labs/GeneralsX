@@ -89,6 +89,8 @@ public:
 	virtual void createLightPulse( const Coord3D *pos, const RGBColor *color, Real innerRadius,Real outerRadius,
 																 UnsignedInt increaseFrameTime, UnsignedInt decayFrameTime//, Bool donut = FALSE
 																 ) override;
+	// GeneralsX @feature Claude 16/10/2026 Automatic effect light (W3DEffectLights).
+	virtual void addEffectLight( const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius ) override;
 	virtual void setTimeOfDay ( TimeOfDay tod ) override;
 
 	/// draw a line on the display in screen coordinates
@@ -143,6 +145,7 @@ public:
 #endif
 	virtual void preloadModelAssets( AsciiString model ) override;			///< preload model asset
 	virtual void preloadTextureAssets( AsciiString texture ) override;	///< preload texture asset
+	virtual Int createPreloadedTextures() override;	///< create the GPU textures of all loaded assets
 
 	/// @todo Need a scene abstraction
 	static RTS3DScene *m_3DScene;							///< our 3d scene representation
@@ -216,6 +219,12 @@ protected:
 
 	DisplayString *m_displayStrings[DisplayStringCount];
 	DisplayString *m_benchmarkDisplayString;
+
+	// GeneralsX @performance Claude 16/10/2026 Frame profiler overlay (Options.ini PerfOverlay).
+	enum { PerfDisplayStringCount = 3 };
+	DisplayString *m_perfDisplayStrings[PerfDisplayStringCount];
+	void drawPerfOverlay();
+	void recordPerfCounters();
 
 	W3DDebugDisplay *m_nativeDebugDisplay;		///< W3D specific debug display interface
 

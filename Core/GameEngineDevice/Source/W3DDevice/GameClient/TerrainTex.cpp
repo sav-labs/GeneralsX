@@ -50,6 +50,8 @@
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/TileData.h"
+// GeneralsX @feature Claude 16/10/2026 Terrain relief in the atlas alpha channel.
+#include "W3DDevice/GameClient/W3DTerrainDetail.h"
 #include "Common/GlobalData.h"
 #include "WW3D2/dx8wrapper.h"
 #include "d3dx8tex.h"
@@ -149,6 +151,7 @@ int TerrainTextureClass::update(WorldHeightMap *htMap)
 	}
 
 	DX8_ErrorCode(surface_level->LockRect(&locked_rect, nullptr, 0));
+	Bool reliefBaked = FALSE;
 
 	Int tilePixelExtent = TILE_PIXEL_EXTENT;
 	Int tilesPerRow = surface_desc.Width/(2*TILE_PIXEL_EXTENT+TILE_OFFSET);
@@ -184,6 +187,18 @@ int TerrainTextureClass::update(WorldHeightMap *htMap)
 					pBGR +=TILE_BYTES_PER_PIXEL;
 				}
 			}
+		}
+		// GeneralsX @feature Claude 16/10/2026 Terrain relief (W3DTerrainDetail): light a height field derived
+		// from each texture class with the global lights and keep it in the alpha channel of the 32 bit atlas.
+		// Done before the borders are copied, so they carry the relief too.
+		if (pixelBytes == 4 && W3DTerrainDetail::wantsReliefInAtlas()) {
+			for (Int reliefClass=0; reliefClass<htMap->m_numTextureClasses; reliefClass++) {
+				ICoord2D origin = htMap->m_textureClasses[reliefClass].positionInTexture;
+				if (origin.x<=0) continue;
+				W3DTerrainDetail::bakeReliefRegion((UnsignedByte*)locked_rect.pBits, surface_desc.Width*pixelBytes,
+					origin.x, origin.y, htMap->m_textureClasses[reliefClass].width*TILE_PIXEL_EXTENT);
+			}
+			reliefBaked = TRUE;
 		}
 		// Now draw the 4 pixel border around each tile class.
 		Int texClass;
@@ -229,6 +244,8 @@ int TerrainTextureClass::update(WorldHeightMap *htMap)
 	surface_level->UnlockRect();
 	surface_level->Release();
 	DX8_ErrorCode(D3DXFilterTexture(Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+	// GeneralsX @feature Claude 16/10/2026 Fade the relief out in the smaller mips (far view keeps the retail look).
+	W3DTerrainDetail::finishReliefAtlas(Peek_D3D_Texture(), reliefBaked);
 	if (WW3D::Get_Texture_Reduction()) {
 		Peek_D3D_Texture()->SetLOD(WW3D::Get_Texture_Reduction());
 	}

@@ -55,6 +55,8 @@ class DebugDisplayInterface;
 class Radar;
 class Image;
 class DisplayString;
+// GeneralsX @feature Claude 16/10/2026 Effect light profile (GameClient/EffectLights.h).
+namespace EffectLights { struct Profile; }
 enum StaticGameLODLevel CPP_11(: Int);
 /**
  * The Display class implements the Display interface
@@ -136,6 +138,9 @@ public:
 	virtual void createLightPulse( const Coord3D *pos, const RGBColor *color, Real innerRadius,Real attenuationWidth,
 																 UnsignedInt increaseFrameTime, UnsignedInt decayFrameTime//, Bool donut = FALSE
 																 ) = 0;
+	// GeneralsX @feature Claude 16/10/2026 Automatic coloured light for an effect (explosion, muzzle flash, flame burst)
+	// whose data has no LightPulse. Displays without 3D lights ignore it; W3DDisplay hands it to W3DEffectLights.
+	virtual void addEffectLight( const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius ) { (void)pos; (void)profile; (void)objectRadius; }
 
 	/// draw a line on the display in pixel coordinates with the specified color
 	virtual void drawLine( Int startX, Int startY, Int endX, Int endY,
@@ -181,6 +186,9 @@ public:
 #endif
 	virtual void preloadModelAssets( AsciiString model ) = 0;	///< preload model asset
 	virtual void preloadTextureAssets( AsciiString texture ) = 0;	///< preload texture asset
+	// GeneralsX @performance Claude 16/10/2026 Creates the GPU textures of everything loaded so far, so that the
+	// first sight of a preloaded model does not load its textures in the middle of a frame.
+	virtual Int createPreloadedTextures() = 0;	///< returns how many textures were created
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence

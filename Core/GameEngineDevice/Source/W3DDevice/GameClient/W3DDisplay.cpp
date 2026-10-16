@@ -52,6 +52,8 @@ static void drawFramerateBar();
 #include "Common/ThingFactory.h"
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
+#include "Common/PerfStats.h"
+#include "Common/OptionPreferences.h"
 #include "Common/FileSystem.h"
 #include "Common/LocalFileSystem.h"
 #include "Common/Player.h"
@@ -88,6 +90,8 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
+#include "W3DDevice/GameClient/W3DSkinnedShadow.h"
+#include "W3DDevice/GameClient/W3DEffectLights.h"
 #include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DCapture.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -109,6 +113,8 @@ static void drawFramerateBar();
 #include "WW3D2/meshmatdesc.h"
 #include "WW3D2/meshmdl.h"
 #include "WW3D2/rddesc.h"
+#include "WW3D2/texture.h"
+#include "WW3D2/assetmgr.h"
 #include "WWLib/TARGA.h"
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
@@ -424,6 +430,8 @@ W3DDisplay::W3DDisplay()
 
 	for (i = 0; i < DisplayStringCount; i++)
 		m_displayStrings[i] = nullptr;
+	for (i = 0; i < PerfDisplayStringCount; i++)
+		m_perfDisplayStrings[i] = nullptr;
 
 	m_batchTexture = nullptr;
 	m_batchMode = DRAW_IMAGE_ALPHA;
@@ -459,6 +467,13 @@ W3DDisplay::~W3DDisplay()
 		TheDisplayStringManager->freeDisplayString(m_benchmarkDisplayString);
 	}
 
+	// GeneralsX @performance Claude 16/10/2026 Free the frame profiler overlay strings.
+	for (int i = 0; i < PerfDisplayStringCount; i++)
+	{
+		if (m_perfDisplayStrings[i])
+			TheDisplayStringManager->freeDisplayString(m_perfDisplayStrings[i]);
+	}
+
 	// delete 2D renderer
 	if( m_2DRender )
 	{
@@ -474,6 +489,10 @@ W3DDisplay::~W3DDisplay()
 	// free them BEFORE we shutdown W3D
 	//
 	Display::deleteViews();
+
+	// GeneralsX @feature Claude 16/10/2026 Effect lights live in the 3D scene.
+	delete TheW3DEffectLights;
+	TheW3DEffectLights = nullptr;
 
 	REF_PTR_RELEASE( m_3DScene );
 	REF_PTR_RELEASE( m_2DScene );
@@ -895,6 +914,13 @@ void W3DDisplay::init2DScene()
 
 }
 
+// GeneralsX @performance Claude 16/10/2026 Running totals of main thread texture loads for the frame profiler.
+static void readTextureLoadTotals(UnsignedInt &textureLoads, double &textureLoadMs)
+{
+	textureLoads = TextureLoader::Get_Sync_Load_Count();
+	textureLoadMs = TextureLoader::Get_Sync_Load_Ms();
+}
+
 // W3DDisplay::init ===========================================================
 /** Initialize or re-initialize the W3D display system.  Here we need to
   * create our window, and get our 3D hardware setup and online */
@@ -952,6 +978,10 @@ void W3DDisplay::init()
 		for (lindex=0; lindex<TheGlobalData->m_numGlobalLights; lindex++)
 		{	m_3DScene->setGlobalLight( m_myLight[lindex], lindex );
 		}
+
+		// GeneralsX @feature Claude 16/10/2026 Effect lights (Options.ini DynamicLights, DynamicLightIntensity).
+		TheW3DEffectLights = NEW W3DEffectLights;
+		TheW3DEffectLights->init( m_3DScene );
 
 	#ifdef SAMPLE_DYNAMIC_LIGHT
 		theDynamicLight = NEW_REF(W3DDynamicLight, ());
@@ -1179,6 +1209,27 @@ void W3DDisplay::init()
 		DX8WebBrowser::Initialize();
 	}
 
+	// GeneralsX @performance Claude 16/10/2026 Frame profiler and skin cache options from Options.ini. The
+	// -perfdump CSV goes into the capture folder next to bug report screenshots.
+	{
+		OptionPreferences prefs;
+		MeshClass::Set_Skin_Cache_Enabled(prefs.getSkinCacheEnabled());
+		if (PerfStats::isDumpRequested())
+		{
+			AsciiString path = W3D_GetCaptureDirectory();
+			path.concat(W3D_MakeCaptureFileName("perf", "csv"));
+			PerfStats::setDumpFile(path.str());
+		}
+		PerfStats::applyOptions(prefs.getPerfOverlayEnabled(), prefs.getPerfIntervalSeconds());
+		if (PerfStats::isEnabled())
+		{
+			// GeneralsX @performance Claude 16/10/2026 Texture loads that stall the main thread, for [PERF] hitch lines.
+			PerfStats::setLoadTotalsSource(readTextureLoadTotals);
+			fprintf(stderr, "[PERF] skin cache %s\n", MeshClass::Is_Skin_Cache_Enabled() ? "on" : "off (SkinCache = no)");
+			fflush(stderr);
+		}
+	}
+
 	// we're now online
 	m_initialized = true;
 	if( TheGlobalData->m_displayDebug )
@@ -1213,6 +1264,10 @@ void W3DDisplay::reset()
 	}
 
 	m_isClippedEnabled = FALSE;
+
+	// GeneralsX @feature Claude 16/10/2026 Forget the effect lights of the last map and read the options again.
+	if (TheW3DEffectLights)
+		TheW3DEffectLights->reset();
 
 	// release any unused assets from W3D
 	/// @todo really need that "scene abstraction", having this stuff in the display is icky
@@ -2056,6 +2111,71 @@ void W3DDisplay::step()
 /** Draw the entire W3D Display */
 //=============================================================================
 //DECLARE_PERF_TIMER(W3DDisplay_draw)
+// GeneralsX @performance Claude 16/10/2026 Hands this frame's render counters to the frame profiler, and the
+// texture memory when a summary is due (walking all textures is too slow for every frame).
+void W3DDisplay::recordPerfCounters()
+{
+	PerfStats::FrameCounters counters;
+	counters.drawCalls = (UnsignedInt)Debug_Statistics::Get_Draw_Calls();
+	counters.triangles = (UnsignedInt)Debug_Statistics::Get_DX8_Polygons();
+	counters.sortedTriangles = (UnsignedInt)Debug_Statistics::Get_Sorting_Polygons();
+	counters.skinMeshes = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Renders();
+	counters.skinVertices = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Vertices();
+	counters.skinCacheHits = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Cache_Hits();
+	counters.particles = TheParticleSystemManager ? TheParticleSystemManager->getParticleCount() : 0;
+	counters.particlesOnScreen = TheParticleSystemManager ? TheParticleSystemManager->getOnScreenParticleCount() : 0;
+	PerfStats::setFrameCounters(counters);
+
+	if (PerfStats::wantsTextureMemory() && WW3DAssetManager::Get_Instance())
+	{
+		UnsignedInt64 bytes = 0;
+		HashTemplateIterator<StringClass,TextureClass*> ite(WW3DAssetManager::Get_Instance()->Texture_Hash());
+		for (ite.First(); !ite.Is_Done(); ite.Next())
+		{
+			bytes += ite.Peek_Value()->Get_Texture_Memory_Usage();
+		}
+		PerfStats::setTextureMemory(bytes, (UnsignedInt64)DX8Wrapper::Get_Free_Texture_RAM());
+	}
+}
+
+// GeneralsX @performance Claude 16/10/2026 Three lines of frame profiler numbers in the top left corner.
+void W3DDisplay::drawPerfOverlay()
+{
+	const char *text = PerfStats::getOverlayText();
+	if (text == nullptr || text[0] == 0)
+		return;
+
+	const Color textColor = GameMakeColor( 255, 255, 160, 255 );
+	const Color dropColor = GameMakeColor( 0, 0, 0, 255 );
+	Int y = 4;
+	const char *line = text;
+	for (Int i = 0; i < PerfDisplayStringCount && line != nullptr && *line != 0; ++i)
+	{
+		const char *end = strchr(line, '\n');
+		char buffer[256];
+		size_t len = end ? (size_t)(end - line) : strlen(line);
+		if (len >= sizeof(buffer))
+			len = sizeof(buffer) - 1;
+		memcpy(buffer, line, len);
+		buffer[len] = 0;
+
+		if (m_perfDisplayStrings[i] == nullptr)
+		{
+			m_perfDisplayStrings[i] = TheDisplayStringManager->newDisplayString();
+			m_perfDisplayStrings[i]->setFont( TheFontLibrary->getFont( "FixedSys", 8, FALSE ) );
+		}
+		UnicodeString unicode;
+		unicode.translate(AsciiString(buffer));
+		m_perfDisplayStrings[i]->setText(unicode);
+		m_perfDisplayStrings[i]->draw( 4, y, textColor, dropColor );
+
+		Int w, h;
+		m_perfDisplayStrings[i]->getSize(&w, &h);
+		y += h;
+		line = end ? end + 1 : nullptr;
+	}
+}
+
 void W3DDisplay::draw()
 {
 	//USE_PERF_TIMER(W3DDisplay_draw)
@@ -2070,6 +2190,9 @@ void W3DDisplay::draw()
 
 	if (TheGlobalData->m_headless)
 		return;
+
+	// GeneralsX @performance Claude 16/10/2026 Display draw time for the frame profiler.
+	PERF_STATS_SCOPE(SECTION_DRAW);
 
 	// TheSuperHackers @feature bobtista 10/07/2026 Show messages for screenshots finished by the screenshot thread.
 	W3D_UpdateScreenshotMessages();
@@ -2211,15 +2334,28 @@ AGAIN:
 			if (!viewsUpdated)
 				updateViews();
 
+			// GeneralsX @performance Claude 16/10/2026 Particle queueing and render target textures for the frame profiler.
+			PERF_STATS_SCOPE(SECTION_RENDER_TARGETS);
+
 			TheParticleSystemManager->DRAW();
 
-			if (TheWaterRenderObj && TheGlobalData->m_waterType == 2)
+			// GeneralsX @feature Claude 16/10/2026 Pick this frame's effect lights before any view draws the scene.
+			if (TheW3DEffectLights)
+				TheW3DEffectLights->update(primaryW3DView ? primaryW3DView->get3DCamera() : nullptr);
+
+			// GeneralsX @feature Claude 16/10/2026 Every water type may render a reflection now (water effects);
+			// updateRenderTargetTextures keeps the retail mirror to water type 2.
+			if (TheWaterRenderObj && primaryW3DView)
 				TheWaterRenderObj->updateRenderTargetTextures(primaryW3DView->get3DCamera());	//do a render into each texture
 
 			//Can't render into textures while rendering to screen so these textures need to be updated
 			//before we enter main rendering loop.
 			if (TheW3DProjectedShadowManager)
 				TheW3DProjectedShadowManager->updateRenderTargetTextures();
+
+			// GeneralsX @feature Claude 16/10/2026 Skinned shadow culling and shadow atlas tiles.
+			if (TheW3DSkinnedShadowManager)
+				TheW3DSkinnedShadowManager->updateRenderTargetTextures(primaryW3DView ? primaryW3DView->get3DCamera() : nullptr);
 		}
 
 		viewsUpdated = FALSE;
@@ -2258,7 +2394,11 @@ AGAIN:
 					Debug_Statistics::Record_DX8_Polys_And_Vertices(numRenderTargetPolygons,numRenderTargetVertices,ShaderClass::_PresetOpaqueShader);
 
 				// draw all views of the world
-				drawViews();
+				// GeneralsX @performance Claude 16/10/2026 3D scene time for the frame profiler.
+				{
+					PERF_STATS_SCOPE(SECTION_SCENE);
+					drawViews();
+				}
 
 				// draw the user interface
 				TheInGameUI->DRAW();
@@ -2313,6 +2453,12 @@ AGAIN:
 					drawCurrentDebugDisplay();
 				}
 
+				// GeneralsX @performance Claude 16/10/2026 Frame profiler overlay (Options.ini PerfOverlay).
+				if (PerfStats::isEnabled())
+				{
+					drawPerfOverlay();
+				}
+
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)
 				{
@@ -2340,7 +2486,15 @@ AGAIN:
 				}
 #endif
 				// render is all done!
-				WW3D::End_Render();
+				// GeneralsX @performance Claude 16/10/2026 Present time and per frame counters for the frame profiler.
+				{
+					PERF_STATS_SCOPE(SECTION_PRESENT);
+					WW3D::End_Render();
+				}
+				if (PerfStats::isEnabled())
+				{
+					recordPerfCounters();
+				}
 			}
 			else
 			{
@@ -2465,6 +2619,13 @@ void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
 	//theDynamicLight->setDonut(donut);
 	// (gth) CNC3 enable far attenuation.  C&C3 defaults to disabled.  Must enable to match Generals. MW 8-06-03
 	theDynamicLight->Set_Flag(LightClass::FAR_ATTENUATION,true);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Automatic light of an effect without a LightPulse (see W3DEffectLights).
+void W3DDisplay::addEffectLight( const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius )
+{
+	if (TheW3DEffectLights)
+		TheW3DEffectLights->addEffect(pos, profile, objectRadius);
 }
 
 void W3DDisplay::toggleLetterBox()
@@ -3454,6 +3615,34 @@ void W3DDisplay::preloadTextureAssets( AsciiString texture )
 		theTexture->Release_Ref();//release reference
 	}
 
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 16/10/2026 Creates the GPU textures of every asset loaded so far. Model loads
+// only name their textures; the game creates a texture the first time it is drawn, which reads and decodes the
+// file in the middle of a frame (hundreds of ms for a new unit or building with HD textures). Called after the
+// map preload so that this happens behind the load screen instead.
+//-------------------------------------------------------------------------------------------------
+Int W3DDisplay::createPreloadedTextures()
+{
+	if (m_assetManager == nullptr)
+		return 0;
+
+	Int created = 0;
+	HashTemplateIterator<StringClass,TextureClass*> ite(m_assetManager->Texture_Hash());
+	for (ite.First(); !ite.Is_Done(); ite.Next())
+	{
+		TextureClass *texture = ite.Peek_Value();
+		if (texture != nullptr && !texture->Is_Initialized())
+		{
+			texture->Init();
+			++created;
+		}
+	}
+
+	// Finish the loads that went to the background loader instead.
+	TextureLoader::Flush_Pending_Load_Tasks();
+	return created;
 }
 
 //-------------------------------------------------------------------------------------------------

@@ -47,6 +47,20 @@ jobs:
   # GeneralsX @feature Claude 15/10/2026 Without DXVK_CAPTURE_VIDEO, the game starts and stops clips at run time through
   # DXVK_CAPTURE_VIDEO_CONTROL (patch 0012): F11 or Ctrl+Shift+R records a bug report video into Options.ini CapturePath
   # (default D:\GeneralsX\bugs), encoded to mp4 by a helper copy of GeneralsXZH.exe with the FFmpeg DLLs it ships.
+  # GeneralsX @feature Claude 16/10/2026 FSR 2 temporal upscaling (patches 0013 and 0014): DXVK_UPSCALER=fsr2 upscales the
+  # 3D scene with AMD FidelityFX FSR 2 (MIT), fetched below at a pinned tag and compiled into d3d9.dll. The game sets it
+  # only for Options.ini Upscaler = FSR2 or -upscaler fsr2, jitters its 3D camera, and passes the camera to DXVK through
+  # the exported GeneralsX_UpscalerSubmitFrame and render state 252, where DXVK copies the scene colour and depth.
+  # GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask (patch 0015): render state 251 marks the opaque scene before
+  # particles and other alpha-blended effects; FSR 2's ffxFsr2ContextGenerateReactiveMask compares that copy with the
+  # final scene so effects stop smearing. Options.ini UpscalerReactiveScale / UpscalerSharpness reach DXVK as
+  # DXVK_FSR2_REACTIVE_SCALE / DXVK_FSR2_SHARPNESS; DXVK_FSR2_DEBUG=reactive shows the mask.
+  # GeneralsX @feature Claude 16/10/2026 FSR 3 (patches 0016 and 0017): DXVK_UPSCALER=fsr3 upscales the 3D scene with the
+  # FSR 3.1 upscaler of the AMD FidelityFX SDK v1.1.4 (MIT), fetched below at a pinned tag (GLSL shaders + Vulkan backend
+  # only) and compiled into d3d9.dll; without the SDK, DXVK still builds and FSR 3 falls back to FSR 2. DXVK_FSR3_FRAMEGEN=1
+  # adds frame generation with the SDK's optical flow and frame interpolation: the swap chain presents a generated frame,
+  # then the real one, and the interface always comes from the real frame. The game sets both from Options.ini
+  # Upscaler = FSR3 / FrameGeneration = yes or -upscaler fsr3 / -framegen on.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -69,13 +83,27 @@ jobs:
       - name: Build DXVK
         run: |
           git clone --depth 1 --branch v2.6 --recurse-submodules --shallow-submodules https://github.com/doitsujin/dxvk.git dxvk
+          git clone --depth 1 --branch v2.2.1 https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git fsr2
+          # FidelityFX SDK v1.1.4 (FSR 3.1.4): only the SDK headers and sources are needed
+          git clone --depth 1 --branch v1.1.4 --filter=blob:none --sparse https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git ffx-sdk
+          git -C ffx-sdk sparse-checkout set sdk/include sdk/src
           cd dxvk
           for patch in ../cmake/dxvk-patches/*.patch; do git apply "$patch"; done
+          # FSR 2 core and Vulkan backend; patch 0013 builds them with its own shader table
+          cp -r ../fsr2/src/ffx-fsr2-api src/dxvk/fsr2/ffx-fsr2-api
+          cp ../fsr2/LICENSE.txt ../fsr2-LICENSE.txt
+          # FSR 3 upscaler, frame interpolation and optical flow; patch 0016 builds them with its own shader table
+          mkdir -p src/dxvk/fsr3/ffx-sdk
+          cp -r ../ffx-sdk/sdk/include ../ffx-sdk/sdk/src ../ffx-sdk/LICENSE.txt src/dxvk/fsr3/ffx-sdk/
           ~/.local/bin/meson setup --cross-file build-win64.txt --buildtype release \
             -Denable_d3d10=false -Denable_d3d11=false -Denable_dxgi=false build
           ninja -C build src/d3d8/d3d8.dll src/d3d9/d3d9.dll
+          x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_UpscalerSubmitFrame
+          test -f build/src/dxvk/libdxvk_fsr3.a
           mkdir -p ../dxvk-out
           cp build/src/d3d8/d3d8.dll build/src/d3d9/d3d9.dll ../dxvk-out/
+          cp ../fsr2-LICENSE.txt ../dxvk-out/FidelityFX-FSR2-LICENSE.txt
+          cp ../ffx-sdk/LICENSE.txt ../dxvk-out/FidelityFX-SDK-LICENSE.txt
 
       - name: Upload DXVK
         uses: actions/upload-artifact@v7
@@ -184,6 +212,7 @@ jobs:
         run: |
           python -m pip install pillow==12.0.0 numpy==2.1.3
           python scripts/tooling/content/test_content.py
+          python scripts/tooling/maps/test_maps.py
           python scripts/tooling/content/build_content.py . content-out
 
       # GeneralsX @feature Claude 16/10/2026 Build the effects pack (our own particle textures and the
@@ -216,7 +245,7 @@ jobs:
             Get-ChildItem -Path (Join-Path $vcReleaseDir.FullName "*.dll") | ForEach-Object { Copy-Item $_.FullName artifacts/ }
           }
           # GeneralsX @build Claude 12/10/2026 Ship DXVK so the x64 build renders through Vulkan like Linux/macOS.
-          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll artifacts/
+          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll, dxvk-fsr/FidelityFX-FSR2-LICENSE.txt, dxvk-fsr/FidelityFX-SDK-LICENSE.txt artifacts/
           @"
           @echo off
           rem Borderless window at display size; the game renders at its own resolution and FSR 1.0 upscales it.
@@ -225,6 +254,14 @@ jobs:
           set DXVK_FXAA=1
           start "" "%~dp0GeneralsXZH.exe" -upscale %*
           "@ | Set-Content artifacts/Play-FSR.cmd -Encoding ascii
+          # GeneralsX @performance Claude 16/10/2026 Frame profiler launcher for big battle measurements.
+          @"
+          @echo off
+          rem Frame profiler: a [PERF] summary every 5 s goes to perf-log.txt next to the game, and a per frame CSV
+          rem of 300 s of the next match, starting 60 s after the match begins, goes to the capture folder.
+          rem Extra arguments are passed on, for example: Perf.cmd -skirmish "Maps\<map>\<map>.map" 7
+          "%~dp0GeneralsXZH.exe" -perf -perfdump 300 60 %* 2> "%~dp0perf-log.txt"
+          "@ | Set-Content artifacts/Perf.cmd -Encoding ascii
           @"
           Experimental 64-bit build. Copy these files into a separate copy of a licensed
           Zero Hour installation. Audio uses MiniAudio and videos use FFmpeg, because the
@@ -237,12 +274,19 @@ jobs:
           DXVK_SATURATION=1.1 and DXVK_CONTRAST=1.05 (1 = unchanged) in the environment or in Play-FSR.cmd.
           Ambient occlusion adds soft shade where units and buildings meet the ground. AmbientOcclusion = no in
           Options.ini turns it off; DXVK_SSAO_STRENGTH=0.6 and DXVK_SSAO_RADIUS=12 tune it.
+          Close-up terrain: TerrainDetail = yes adds a fine detail texture to the ground (TerrainDetailStrength,
+          0 to 1, default 0.7), TerrainRelief = yes lights the tile surfaces with the map's sun (needs high
+          texture quality) and TerrainSoftBlend = yes gives the edges between terrain layers a natural shape.
+          Set all three to no for the original ground.
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
           into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and
           DXVK_CAPTURE_VIDEO_SCALE change the window and size; set DXVK_HUD=fps,frametimes to include the HUD in the video.
           With -camtest, set DXVK_CAPTURE_VIDEO_START=camtest to start recording with the first frame of the camera flight
           (DXVK_CAPTURE_VIDEO_SECONDS then counts from there), so clips of different runs line up whatever the load time.
+          -camtest 10 battle spawns your column and one of the AI opponent's side facing each other in front of your base,
+          sets a building near them on fire and circles the fight for 10 s; add a unit count for both sides together
+          (-camtest 10 battle 60) and night for a night match (-camtest 10 battle 60 night). Use it with -skirmish.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
           ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
           Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
@@ -255,6 +299,87 @@ jobs:
           GeneralsXEffects.big holds the new explosions, fire and smoke; delete it for the original effects.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
+          FSR 2 (experimental, off by default): add Upscaler = FSR2 to Options.ini, or start the game with
+          -upscaler fsr2 (-upscaler fsr1 or -upscaler off override Options.ini the same way). UpscalerQuality =
+          Quality, Balanced, Performance or UltraPerformance picks the render scale (67%, 59%, 50%, 33%) unless
+          RenderScale or -renderscale is set. FSR 2 adds detail over several frames. The console and d3d9.log
+          show [FSR2] / FSR2: lines with the active upscaler.
+          FSR 2 smoke, explosions and particles: UpscalerReactiveScale (0 to 1, default 0.9, 0 = off) tells FSR 2
+          to trust the current frame where such effects are drawn, so they do not smear or leave trails.
+          FSR 2 sharpening: UpscalerSharpness (0 to 1, default 0.5) is FSR 2's own sharpening of the 3D scene;
+          FSRSharpness then only sharpens the interface. UpscalerSharpness = 0 leaves the whole frame to
+          FSRSharpness. Nothing is sharpened twice.
+          FSR 2 reactive mask check: set DXVK_FSR2_DEBUG=reactive before starting the game (for example
+          set DXVK_FSR2_DEBUG=reactive in a .cmd file next to GeneralsXZH.exe). The scene turns grey and every
+          pixel FSR 2 treats as an effect shows in red; a blue tint means no mask that frame. Remove the line to
+          play normally. DXVK_FSR2_REACTIVE_THRESHOLD (default 0.05) is the smallest change that counts.
+          FidelityFX-FSR2-LICENSE.txt is the MIT license of AMD FidelityFX FSR 2, built into d3d9.dll.
+          FSR 3 (experimental, off by default): add Upscaler = FSR3 to Options.ini, or start the game with
+          -upscaler fsr3. It takes the same UpscalerQuality, UpscalerReactiveScale and UpscalerSharpness settings
+          as FSR 2 and shows [FSR3] lines in the console and d3d9.log. If FSR 3 cannot start, FSR 2 takes over.
+          FSR 3 frame generation (experimental, off by default, FSR 3 only): add FrameGeneration = yes to
+          Options.ini, or start the game with -framegen on (-framegen off overrides Options.ini). Every frame is
+          then shown twice: first a frame generated between the previous and the current one, then the real
+          frame. The interface is always taken from the real frame. Frame generation adds about one frame of
+          latency and works best at 60 fps or more before it is turned on. With vsync, use a display refresh rate
+          of at least twice the game frame rate. Debug settings (set them in a .cmd file before the game starts):
+          DXVK_FSR3_FRAMEGEN=1 turns frame generation on without Options.ini, DXVK_FSR3_FRAMEGEN_PACING=0 shows
+          the real frame right after the generated one instead of half a frame later, and DXVK_FSR3_DEBUG=tearlines,
+          view or resets shows the FidelityFX debug overlays (tear lines, the interpolation inputs, camera resets).
+          FidelityFX-SDK-LICENSE.txt is the MIT license of the AMD FidelityFX SDK (FSR 3), built into d3d9.dll.
+          Performance measurement (big battles): Perf.cmd starts the game with the frame profiler. Every 5 seconds
+          perf-log.txt gets a [PERF] line: fps, frame time (avg/max), game logic, client update, draw, 3D scene,
+          meshes (includes CPU skinning), shadows, particles and present in ms per frame, draw calls, triangles,
+          skinned meshes and vertices, skin cache hits, shadow volume rebuilds, particles and texture memory, and
+          skinned shadows (skinshadows = drawn, updates = tiles redrawn or volumes rebuilt, skinshadow_ms).
+          -perfdump <seconds> [delay] writes one CSV row per frame for <seconds> of the next match, starting
+          [delay] seconds after it begins, as perf_<date>_<time>.csv into the capture folder (CapturePath).
+          -perf alone only writes the [PERF] lines (-perf 2 every 2 seconds). PerfOverlay = yes in Options.ini
+          prints them too and shows four lines of numbers in the top left corner; PerfInterval = 5 sets the period.
+          perf-log.txt is only written when the game is started with Perf.cmd (it redirects stderr there); a plain
+          -perf run prints the [PERF] lines to stderr only.
+          Stutter: every frame of 100 ms or more prints a [PERF] hitch line with that frame's times and what was
+          loaded in it: texloads (textures read from disk while drawing, count and ms), modelloads (.w3d files),
+          shaders and drawables created. The 5 s line counts hitches and the same loads.
+          PreloadAssets = yes (default) loads the models and textures of the map's objects and of the units the
+          players' sides can build while the map loads, so they are not read in the middle of the match; stderr
+          gets a [PRELOAD] line with the time it took. PreloadAssets = everything preloads every side for every time
+          of day (slow, much memory); PreloadAssets = no is the original behaviour.
+          Big battle switches in Options.ini (render only, the game itself is unchanged):
+          SkinCache = no turns off the skinned vertex cache (default yes; for before/after comparisons).
+          ShadowVolumeHighPolyTriangles = 4000 and ShadowVolumeHighPolyAngle = 3: shadow casting parts with at least
+          that many triangles rebuild their shadow after 3 degrees of turning instead of 0.2 (0 turns this off).
+          ShadowVolumeMaxTriangles = 0: models with more shadow casting triangles than this get a round ground
+          shadow instead of a shadow volume (0 = never), or the skinned shadow below when SkinnedShadows is on.
+          Shadows of skinned units (tanks, helicopters, mechs made of skinned meshes) follow their real shape:
+          SkinnedShadows = Projected (default) draws each unit seen from the sun into a small shadow texture
+          and lays it on the ground; only the ground and bridges receive it. SkinnedShadows = Volume uses
+          stencil shadow volumes like the other 3D shadows (also falls on other units and on the unit itself,
+          more CPU per animated unit). SkinnedShadows = Decal is the old round ground shadow.
+          SkinnedShadowQuality = Low | Medium | High (default Medium): shadow texture size 64/128/256 and how
+          often animated shadows are redrawn (every 3rd/2nd/every frame).
+          SkinnedShadowDistance = 1500: camera distance where they have faded out (0 = no limit).
+          SkinnedShadowKeepDecal = no: yes keeps the old round shadow under the new one.
+          SkinnedShadowMinTriangles = 2000: units the game gives a round shadow switch to the new shadow only
+          from this many triangles, so infantry keep theirs. They follow the 3D Shadows option (2D Shadows
+          for units that had a round shadow). stderr gets [SHADOW] lines (settings, each model, every 600 frames).
+          Coloured lights from explosions, burning buildings and vehicles, muzzle flashes, missile exhausts and
+          superweapons on the ground, units and buildings (strongest at night):
+          DynamicLights = High (default): all of them, up to 16 at once, smooth light pools on the ground.
+          DynamicLights = Low: explosions, muzzle flashes and superweapons only, up to 6, ground lit on the
+          terrain grid like the game's own lights. DynamicLights = Off: only the lights the game data asks for.
+          DynamicLightIntensity = 1 (0 to 2): brightness of these lights. stderr gets [LIGHTS] lines; the
+          [PERF] line shows lights, retail lights, candidates and lights_ms.
+          Water (lakes, ponds and rivers; Options.ini, read when the game starts, render only):
+          WaterReflections = Full (default) mirrors the sky, terrain, buildings, units and trees in the water,
+          stronger towards the horizon; Sky mirrors only the clouds (cheaper); Off keeps the original water.
+          WaterReflectionScale = 0.5 (0.25 to 1): size of the reflection image relative to the 3D view; lower is
+          faster and softer. The [PERF] line shows its cost as water_refl (ms per frame).
+          ShoreFoam = yes: drifting foam along the shoreline and water that fades in over the first few units of
+          depth instead of ending in a hard line. ShoreFoam = no turns both off.
+          WaterWaves = yes: small moving waves ripple the reflection and the foam. WaterWaves = no keeps them still.
+          WaterReflections = Off, ShoreFoam = no and WaterWaves = no give the original water. stderr gets [WATER]
+          lines with the active settings.
           "@ | Set-Content artifacts/INSTALL.txt
           # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
           @"

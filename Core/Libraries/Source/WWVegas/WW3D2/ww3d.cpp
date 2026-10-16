@@ -1158,6 +1158,50 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
 }
 
 
+// GeneralsX @feature Claude 16/10/2026 Render into the current render target without starting a frame (see ww3d.h).
+WW3DErrorType WW3D::Begin_Offscreen_Render(bool clear,bool clearz,const Vector3 & color)
+{
+	if (!IsInitted || IsRendering) {
+		return WW3D_ERROR_GENERIC;
+	}
+
+	if (DX8Wrapper::_Get_D3D_Device8() == nullptr || DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel() != D3D_OK) {
+		return WW3D_ERROR_GENERIC;
+	}
+
+	IsRendering = true;
+
+	if (clear || clearz) {
+		RenderBackendViewport vp;
+		int width, height, bits;
+		bool windowed;
+		WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
+		vp.x = 0;
+		vp.y = 0;
+		vp.width = width;
+		vp.height = height;
+		vp.min_z = 0.0f;
+		vp.max_z = 1.0f;
+		Get_Render_Backend()->Set_Viewport(vp);
+		Get_Render_Backend()->Clear(clear, clearz, color, 1.0f);
+	}
+
+	DX8Wrapper::_Get_D3D_Device8()->BeginScene();
+	return WW3D_ERROR_OK;
+}
+
+WW3DErrorType WW3D::End_Offscreen_Render()
+{
+	if (!IsInitted || !IsRendering) {
+		return WW3D_ERROR_GENERIC;
+	}
+
+	SortingRendererClass::Flush();
+	DX8Wrapper::_Get_D3D_Device8()->EndScene();
+	IsRendering = false;
+	return WW3D_ERROR_OK;
+}
+
 /***********************************************************************************************
  * WW3D::Flip_To_Primary                                                                       *
  *                                                                                             *

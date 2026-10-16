@@ -62,6 +62,33 @@ def check_onnx_tiling(tmp):
     return path
 
 
+def check_safe_upscale(tmp, model):
+    """Tile detection, seamless resize and the --lab sheets."""
+    import numpy as np
+    # A smooth periodic pattern tiles; the same pattern plus a ramp does not along x.
+    yy, xx = np.mgrid[0:64, 0:64]
+    wave = 128 + 60 * np.sin(xx * 2 * np.pi / 16) * np.cos(yy * 2 * np.pi / 32)
+    tile = Image.fromarray(np.repeat(wave[..., None], 3, 2).astype(np.uint8), "RGB")
+    ramp = Image.fromarray(np.repeat((wave * 0.5 + xx * 2)[..., None], 3, 2).astype(np.uint8), "RGB")
+    assert hdpack.tile_axes(tile) == (True, True)
+    assert hdpack.tile_axes(ramp) == (False, True)
+    # The wrapped resize joins its own opposite edges as smoothly as its inside.
+    up = np.asarray(hdpack.wrap_resize(tile, (256, 256), (True, True)), dtype=np.float32)
+    inner = np.abs(np.diff(up, axis=1)).max()
+    assert np.abs(up[:, 0] - up[:, -1]).max() <= inner + 1, (np.abs(up[:, 0] - up[:, -1]).max(), inner)
+    loose = Path(tmp, "loose")
+    loose.mkdir()
+    tile.save(loose / "trtile.tga")
+    ramp.save(loose / "nbsign.tga")
+    out = Path(tmp, "lab")
+    subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--lab", str(loose), "--lab-out", str(out),
+                    "--lab-model", f"a={model}", "--lab-model", f"b={model}", "--tile", "32"], check=True)
+    scores = json.loads(Path(out, "lab.json").read_text())
+    assert [s["texture"] for s in scores] == ["nbsign", "trtile"], scores
+    assert set(scores[1]) == {"texture", "tiles", "lanczos", "a", "b"}, scores[1]
+    assert Path(out, "lab_001.jpg").is_file()
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         game = Path(tmp, "game")
@@ -91,6 +118,15 @@ def main():
         assert check_dds(hdpack.read_entry(entries["art/textures/avtank.dds"]), 512, 256) == b"DXT1"
         assert check_dds(hdpack.read_entry(entries["art/textures/avhouse.dds"]), 256, 256) == b"DXT5"
         assert (previews / "compare_001.jpg").is_file()
+
+        # Review mode ranks the cached results and writes sheets; the pack stays as it is.
+        before = out.stat().st_mtime_ns
+        review_dir = Path(tmp, "review")
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(out),
+                        "--upscaler", "lanczos", "--review-dir", str(review_dir)], check=True, capture_output=True)
+        ranked = json.loads((review_dir / "review.json").read_text())
+        assert sorted(r["texture"] for r in ranked) == ["avhouse", "avtank"], ranked
+        assert (review_dir / "compare_001.jpg").is_file() and out.stat().st_mtime_ns == before
 
         # A rerun reuses the cache; a small part size splits the pack and removes the single file.
         rerun = subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(out),
@@ -144,12 +180,40 @@ def main():
         assert report["content_pack_textures_excluded"] == ["avjeep", "gxtank"], report
         assert report["written_files"] == ["Art\\Textures\\AVTank.dds"], report["written_files"]
 
+        # Texture caches built before terrain mode existed must keep matching.
+        assert hdpack.cache_settings("onnx", "realesrgan-x4plus", 4, 1024, "textures") == b"onnx|realesrgan-x4plus|4|1024|v1"
+        assert hdpack.cache_settings("onnx", "realesrgan-x4plus", 4, 1024, "terrain") == b"onnx|realesrgan-x4plus|4|1024|terrain|v1"
+
+        # --check passes a clean pack and flags a tree sheet (the magenta-tree bug) in an old one.
+        check = [sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--check"]
+        assert subprocess.run(check + [str(terrain)], capture_output=True).returncode == 0
+        old_terrain = Path(tmp, "!HDTerrainOld.big")
+        hdpack.write_big(old_terrain, [("Art\\Terrain\\PTSnowPine01.tga", tga((256, 256), (20, 60, 20, 255)))])
+        flagged = subprocess.run(check + [str(old_terrain)], capture_output=True, text=True)
+        assert flagged.returncode == 1 and "tree_textures: art/terrain/ptsnowpine01.tga" in flagged.stdout, flagged.stdout
+
         model = check_onnx_tiling(tmp)
+        check_safe_upscale(tmp, model)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
+        safe_list = Path(tmp, "safe.txt")
+        safe_list.write_text("# lettering\nAVHouse  # sign on the wall\n")
         subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(onnx_out),
-                        "--upscaler", "onnx", "--onnx", str(model), "--tile", "32"], check=True)
+                        "--upscaler", "onnx", "--onnx", str(model), "--tile", "32", "--safe-list", str(safe_list)],
+                       check=True)
         entries = hdpack.read_big(onnx_out)
         assert check_dds(hdpack.read_entry(entries["art/textures/avtank.dds"]), 512, 256) == b"DXT1"
+        # Listed textures (lettering) skip the AI model.
+        report = json.loads(Path(tmp, "!HDTexturesOnnx.report.json").read_text())
+        assert report["safe_upscaled"] == ["avhouse"], report["safe_upscaled"]
+        # Safe ground textures go through the gentle model when it is there.
+        game3 = Path(tmp, "game3")
+        game3.mkdir()
+        hdpack.write_big(game3 / "Textures.big", [("Art\\Textures\\TRDirtRoad.tga", tga((64, 64), (150, 120, 80, 255)))])
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game3), "--out", str(Path(tmp, "!Soft.big")),
+                        "--upscaler", "onnx", "--onnx", str(model), "--soft-onnx", str(model), "--tile", "32"],
+                       check=True, capture_output=True)
+        report = json.loads(Path(tmp, "!Soft.report.json").read_text())
+        assert report["soft_upscaled"] == ["trdirtroad"] and report["safe_upscaled"] == [], report
     print("hdpack self-test passed")
 
 

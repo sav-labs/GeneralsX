@@ -97,7 +97,11 @@ CameraClass::CameraClass() :
 	ZFar(1000.0f),										// far clip plane distance
 	ZBufferMin(0.0f),									// smallest value we'll write into the z-buffer
 	ZBufferMax(1.0f),									// largest value we'll write into the z-buffer
-	FrustumValid(false)
+	FrustumValid(false),
+	JitterX(0.0f),
+	JitterY(0.0f),
+	ObliqueClip(false),
+	ObliquePlane(0.0f,0.0f,0.0f,0.0f)
 {
 	Set_Transform(Matrix3D(true));
 	Set_View_Plane(DEG_TO_RADF(50.0f));
@@ -131,7 +135,11 @@ CameraClass::CameraClass(const CameraClass & src) :
 	CameraInvTransform(src.CameraInvTransform),
 	AspectRatio(src.AspectRatio),
 	ZBufferMin(src.ZBufferMin),
-	ZBufferMax(src.ZBufferMax)
+	ZBufferMax(src.ZBufferMax),
+	JitterX(0.0f),
+	JitterY(0.0f),
+	ObliqueClip(false),
+	ObliquePlane(0.0f,0.0f,0.0f,0.0f)
 {
 	// just being paranoid in case any parent class doesn't completely copy the entire state...
 	FrustumValid = false;
@@ -730,6 +738,43 @@ void CameraClass::Device_To_World_Space(const Vector2 & device_coord,Vector3 * w
  * HISTORY:                                                                                    *
  *   1/29/2001  gth : Created.                                                                 *
  *=============================================================================================*/
+// GeneralsX @feature Claude 16/10/2026 Tilts the near plane of a D3D projection (z in [0, w], rows give
+// the clip coordinates) onto ObliquePlane (E. Lengyel, "Modifying the Projection Matrix to Perform Oblique Near-Plane
+// Clipping"). The far plane moves to pass through the frustum corner opposite the plane, so the depth range stays
+// inside [0, 1] for everything in view.
+void CameraClass::Apply_Oblique_Clip_Plane(Matrix4x4 & proj) const
+{
+	// The plane in view space: a plane transforms with the inverse of the point transform (world to view).
+	const Matrix4x4 view_to_world = Matrix4x4(CameraInvTransform).Inverse();
+	Vector4 plane;
+	for (int j = 0; j < 4; ++j)
+	{
+		plane[j] = ObliquePlane.X * view_to_world[0][j] + ObliquePlane.Y * view_to_world[1][j] +
+			ObliquePlane.Z * view_to_world[2][j] + ObliquePlane.W * view_to_world[3][j];
+	}
+
+	// The eye (view space origin) must be on the clipped side, or the plane would clip the whole view.
+	if (plane.W >= 0.0f)
+		return;
+
+	// Frustum corner farthest on the kept side: the clip space corner (sign(x), sign(y), 1, 1) back to view space.
+	const Matrix4x4 inv_proj = proj.Inverse();
+	Vector4 clip_plane;
+	for (int j = 0; j < 4; ++j)
+	{
+		clip_plane[j] = plane.X * inv_proj[0][j] + plane.Y * inv_proj[1][j] + plane.Z * inv_proj[2][j] + plane.W * inv_proj[3][j];
+	}
+	const Vector4 corner_clip(clip_plane.X > 0.0f ? 1.0f : (clip_plane.X < 0.0f ? -1.0f : 0.0f),
+		clip_plane.Y > 0.0f ? 1.0f : (clip_plane.Y < 0.0f ? -1.0f : 0.0f), 1.0f, 1.0f);
+	const Vector4 corner = inv_proj * corner_clip;
+
+	const float plane_dot_corner = Vector4::Dot_Product(plane, corner);
+	if (plane_dot_corner == 0.0f)
+		return;
+	const float scale = Vector4::Dot_Product(proj[3], corner) / plane_dot_corner;
+	proj[2] = plane * scale;
+}
+
 void CameraClass::Apply()
 {
 	Update_Frustum();
@@ -749,6 +794,20 @@ void CameraClass::Apply()
 
 	Matrix4x4 d3dprojection;
 	Get_D3D_Projection_Matrix(&d3dprojection);
+
+	// GeneralsX @feature Claude 16/10/2026 FSR 2 jitter: shift clip space x and y by a multiple of w, which
+	// moves the image by a constant offset in normalized device coordinates.
+	if (JitterX != 0.0f || JitterY != 0.0f)
+	{
+		d3dprojection[0] += d3dprojection[3] * JitterX;
+		d3dprojection[1] += d3dprojection[3] * JitterY;
+	}
+
+	if (ObliqueClip)
+	{
+		Apply_Oblique_Clip_Plane(d3dprojection);
+	}
+
 	DX8Wrapper::Set_Projection_Transform_With_Z_Bias(d3dprojection,ZNear,ZFar);
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,CameraInvTransform);
 }

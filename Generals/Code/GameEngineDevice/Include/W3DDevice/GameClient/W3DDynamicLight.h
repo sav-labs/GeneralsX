@@ -58,6 +58,12 @@ protected:
 	Vector3 m_targetAmbient;
 	Vector3 m_targetDiffuse;
 
+	// GeneralsX @feature Claude 16/10/2026 Effect lights (W3DEffectLights) own their lights: retail light pulses
+	// must not take them over, and on DynamicLights = High the ground gets them from a light splat pass instead
+	// of the terrain vertex colours.
+	Bool		m_managed;
+	Bool		m_skipTerrainVertices;
+
 
 public:
 	W3DDynamicLight();
@@ -68,6 +74,11 @@ public:
 
 	void setEnabled(Bool enabled) { m_enabled = enabled; m_decayRange = false; m_decayFrameCount = 0; m_decayColor = false; m_increaseFrameCount = 0;};
 	Bool isEnabled() {return m_enabled;};
+
+	// GeneralsX @feature Claude 16/10/2026 Effect light ownership (see m_managed).
+	void setManaged(Bool managed, Bool skipTerrainVertices) { m_managed = managed; m_skipTerrainVertices = skipTerrainVertices; }
+	Bool isManaged() const { return m_managed; }
+	Bool skipsTerrainVertices() const { return m_skipTerrainVertices; }
 
 
 	/// 0 frameIncreaseTime means it starts out full size/intensity, 0 decay time means it lasts forever.

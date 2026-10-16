@@ -19,6 +19,8 @@ Common command line parameters for `GeneralsX` (Generals) and `GeneralsXZH` (Zer
 | `-quickstart` | Quick launch (skip movies + shell) | `./GeneralsXZH -quickstart` |
 | `-debug` | Enable debug mode | `./GeneralsXZH -debug` |
 | `-logToCon` | Enables legacy debug-log console routing (`DEBUG_LOG`). **Debug builds only** (`ALLOW_DEBUG_UTILS` / `RTS_BUILD_OPTION_DEBUG=ON`); ignored in release builds. | `./GeneralsXZH -logToCon` |
+| `-perf [seconds]` | Frame profiler, release builds included: prints a `[PERF]` line to stderr every 5 seconds (or `[seconds]`, or Options.ini `PerfInterval`) with fps, frame time, game logic, client, draw, 3D scene, mesh flush (CPU skinning), shadows, particles and present ms per frame, draw calls, triangles, skinned meshes/vertices, skin cache hits, shadow volume rebuilds, particles and texture memory. Options.ini `PerfOverlay = yes` does the same and adds an on-screen overlay. Every frame of 100 ms or more also prints a `[PERF] hitch` line with that frame's sections and the textures (count, ms), .w3d models (count, ms), shaders and drawables created in it. Reads clocks and counters only; game logic and replays are unaffected. | `./GeneralsXZH -perf 2` |
+| `-perfdump <seconds> [delay]` | Like `-perf`, and writes one CSV row per frame for `<seconds>` of the next match, starting `[delay]` seconds after the match begins, as `perf_<date>_<time>.csv` into the capture folder (Options.ini `CapturePath`). | `./GeneralsXZH -perfdump 300 60` |
 
 ## Mods & Content
 

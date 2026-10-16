@@ -231,12 +231,26 @@ public:
 	// apply this camera's settings into d3d.
 	void								Apply();
 
+	// GeneralsX @feature Claude 16/10/2026 Sub-pixel offset that Apply() adds to the projection for the FSR 2
+	// temporal upscaler, in normalized device coordinates. Render only: the projection and view matrices the
+	// camera returns, culling and picking stay unjittered. Not copied with the camera.
+	void								Set_Projection_Jitter(float ndc_x,float ndc_y) { JitterX = ndc_x; JitterY = ndc_y; }
+	void								Get_Projection_Jitter(float & ndc_x,float & ndc_y) const { ndc_x = JitterX; ndc_y = JitterY; }
+
+	// GeneralsX @feature Claude 16/10/2026 Oblique near clip plane for planar reflections: Apply() tilts the
+	// near plane of the projection onto this world space plane (a, b, c, d with a*x + b*y + c*z + d >= 0 on the kept
+	// side), so geometry behind the mirror is clipped by the depth range at no cost. Render only, like the jitter:
+	// the frustum, culling and picking are unchanged. Ignored while the camera itself is on the clipped side.
+	void								Set_Oblique_Clip_Plane(const Vector4 & world_plane) { ObliqueClip = true; ObliquePlane = world_plane; }
+	void								Clear_Oblique_Clip_Plane() { ObliqueClip = false; }
+
 	// utility class to convert to old space of 0..1
 	static void	Convert_Old(Vector3 &pos);
 
 protected:
 
 	void								Update_Frustum() const;
+	void								Apply_Oblique_Clip_Plane(Matrix4x4 & proj) const;
 
 	ProjectionType					Projection;		// projection type, orthographic or perspective
 	ViewportClass					Viewport;		// pixel viewport to render into
@@ -253,6 +267,11 @@ protected:
 	mutable OBBoxClass			NearClipBBox;					// obbox which bounds the near clip plane
 	mutable Matrix4x4				ProjectionTransform;
 	mutable Matrix3D				CameraInvTransform;
+
+	float								JitterX;
+	float								JitterY;
+	bool								ObliqueClip;
+	Vector4							ObliquePlane;
 };
 
 

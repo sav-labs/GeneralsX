@@ -53,10 +53,16 @@
 #include "Common/DrawModule.h"
 #include "W3DDevice/GameClient/W3DVolumetricShadow.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#include "W3DDevice/GameClient/W3DSkinnedShadow.h"
 #include "WW3D2/statistics.h"
 #include "GameLogic/TerrainLogic.h"
 #include "WW3D2/dx8caps.h"
 #include "GameClient/Drawable.h"
+#include "Common/OptionPreferences.h"
+#include "Common/PerfStats.h"
+
+#include <algorithm>
+#include <vector>
 
 
 // Global Variables and Functions /////////////////////////////////////////////
@@ -72,6 +78,89 @@ extern const FrustumClass *shadowCameraFrustum;	//defined in W3DShadow.
 // (represented in degrees in the first number below)
 // is large enough the shadow info will be reconstructed
 const Real cosAngleToCare = cos ((0.2 * PI) / 180.0);	//1.5 degree difference
+
+// GeneralsX @performance Claude 16/10/2026 Duplicate vertex search for shadow geometry in O(n log n).
+// The original compared every vertex with every later one (O(n^2), about 50 million tests for a 10k vertex
+// mesh on the first spawn of a model). Vertices are now sorted by position and equal positions grouped; as
+// before, each vertex points at the first vertex with the same position and the return value is the
+// number of distinct positions. +0 and -0 count as equal, a NaN component never matches, as with the old
+// Length2() == 0 test.
+namespace
+{
+	struct ShadowVertexKey
+	{
+		UnsignedInt x, y, z;
+		Int index;
+		bool hasNaN;
+	};
+
+	inline UnsignedInt shadowVertexBits(Real value)
+	{
+		if (value == 0.0f)
+			return 0;	// +0 and -0
+		UnsignedInt bits;
+		memcpy(&bits, &value, sizeof(bits));
+		return bits;
+	}
+
+	inline bool shadowVertexKeyLess(const ShadowVertexKey &a, const ShadowVertexKey &b)
+	{
+		if (a.hasNaN != b.hasNaN)
+			return a.hasNaN < b.hasNaN;
+		if (a.x != b.x)
+			return a.x < b.x;
+		if (a.y != b.y)
+			return a.y < b.y;
+		if (a.z != b.z)
+			return a.z < b.z;
+		return a.index < b.index;
+	}
+
+	inline bool shadowVertexKeySamePosition(const ShadowVertexKey &a, const ShadowVertexKey &b)
+	{
+		return !a.hasNaN && !b.hasNaN && a.x == b.x && a.y == b.y && a.z == b.z;
+	}
+}
+
+static Int findDuplicateShadowVertices(const Vector3 *verts, Int numVerts, UnsignedShort *vertParent)
+{
+	std::vector<ShadowVertexKey> keys(numVerts);
+	for (Int v = 0; v < numVerts; v++)
+	{
+		const Vector3 &p = verts[v];
+		keys[v].x = shadowVertexBits(p.X);
+		keys[v].y = shadowVertexBits(p.Y);
+		keys[v].z = shadowVertexBits(p.Z);
+		keys[v].index = v;
+		keys[v].hasNaN = (p.X != p.X) || (p.Y != p.Y) || (p.Z != p.Z);
+	}
+	std::sort(keys.begin(), keys.end(), shadowVertexKeyLess);
+
+	Int newVertexCount = numVerts;
+	Int groupStart = 0;
+	for (Int s = 0; s < numVerts; s++)
+	{
+		if (s > 0 && shadowVertexKeySamePosition(keys[s - 1], keys[s]))
+		{
+			vertParent[keys[s].index] = (UnsignedShort)keys[groupStart].index;	// lowest index of the group
+			newVertexCount--;
+		}
+		else
+		{
+			groupStart = s;
+			vertParent[keys[s].index] = (UnsignedShort)keys[s].index;
+		}
+	}
+	return newVertexCount;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Shadow volume casters with at least this many triangles rebuild their
+// silhouette only after s_cosHighPolyShadowAngle of rotation (Options.ini ShadowVolumeHighPolyTriangles and
+// ShadowVolumeHighPolyAngle); models with more caster triangles than s_maxShadowVolumeTriangles get a decal
+// shadow (Options.ini ShadowVolumeMaxTriangles, 0 = no limit). Set in W3DVolumetricShadowManager::init().
+static Int s_highPolyShadowTriangles = 4000;
+static Real s_cosHighPolyShadowAngle = 0.99862953f;	// cos(3 degrees)
+static Int s_maxShadowVolumeTriangles = 0;
 #define MAX_SILHOUETTE_EDGES	1024	//maximum number of shadov volume sides or edges in silhoutte
 #define	SHADOW_EXTRUSION_BUFFER	0.1f		//amount to extend shadow volume beyond what's required to hit ground.
 #define AIRBORNE_UNIT_GROUND_DELTA 2.0f
@@ -589,6 +678,14 @@ class W3DShadowGeometry : public RefCountClass, public	HashableClass
 
 
 		int GetNumTotalVertex ()	{	return m_numTotalsVerts;}	///<total number of vertices in all meshes of this geometry
+		// GeneralsX @performance Claude 16/10/2026 Triangles of all caster meshes, for ShadowVolumeMaxTriangles.
+		Int getNumTotalPolygons()
+		{
+			Int total = 0;
+			for (Int i = 0; i < m_meshCount; i++)
+				total += m_meshList[i].m_numPolygons;
+			return total;
+		}
 
 	private:
 
@@ -608,7 +705,7 @@ Int W3DShadowGeometry::initFromHLOD(RenderObjClass *robj)
 	//vertices are removed.
 	UnsignedShort vertParent[MAX_SHADOW_VOLUME_VERTS];
 
-	Int i,j,k,newVertexCount;
+	Int i,newVertexCount;
 
 	// GeneralsX @bugfix Mr. Meeseeks 17/06/2026 If HLOD contains any skinned meshes at any LOD level, skip the entire HLOD from casting volumetric shadows
 	for (int l = 0; l < hlod->Get_LOD_Count(); l++)
@@ -657,29 +754,8 @@ Int W3DShadowGeometry::initFromHLOD(RenderObjClass *robj)
 			if (geomMesh->m_numVerts > MAX_SHADOW_VOLUME_VERTS)
 				return FALSE;	//too many vertices to process
 
-			//reset index of all vertices
-			memset(vertParent,0xffffffff,sizeof(vertParent));
-			newVertexCount=geomMesh->m_numVerts;
-			//Find all duplicated vertices.
-			for (j=0; j<geomMesh->m_numVerts; j++)
-			{
-				if (vertParent[j] != 0xffff)
-					continue;	//this vertex has already been processed
-
-				const Vector3 *v_curr=&geomMesh->m_verts[j];
-
-				for (k=j+1; k<geomMesh->m_numVerts; k++)
-				{
-					Vector3 len(*v_curr - geomMesh->m_verts[k]);
-					if (len.Length2() == 0)
-					{
-						//found duplicate vertex
-						vertParent[k]=j;
-						newVertexCount--;	//decrease total vertices since duplicate found.
-					}
-				}
-				vertParent[j]=j;	//first instance of new vertex
-			}
+			// GeneralsX @performance Claude 16/10/2026 Find duplicated vertices by sorting instead of comparing all pairs.
+			newVertexCount=findDuplicateShadowVertices(geomMesh->m_verts, geomMesh->m_numVerts, vertParent);
 			geomMesh->m_parentVerts = NEW UnsignedShort[geomMesh->m_numVerts];
 			memcpy(geomMesh->m_parentVerts,vertParent,sizeof(UnsignedShort)*geomMesh->m_numVerts);
 			geomMesh->m_numVerts=newVertexCount;	//adjust actual vertex count to ignore duplicates
@@ -707,7 +783,7 @@ Int W3DShadowGeometry::initFromMesh(RenderObjClass *robj)
 	//vertices are removed.
 	UnsignedShort vertParent[MAX_SHADOW_VOLUME_VERTS];
 
-	Int j,k,newVertexCount;
+	Int newVertexCount;
 	W3DShadowGeometryMesh *geomMesh=&m_meshList[m_meshCount];
 
 	assert (m_meshCount < MAX_SHADOW_CASTER_MESHES);
@@ -730,29 +806,8 @@ Int W3DShadowGeometry::initFromMesh(RenderObjClass *robj)
 	if (geomMesh->m_numVerts > MAX_SHADOW_VOLUME_VERTS)
 		return FALSE;	//too many vertices to process
 
-	//reset index of all vertices
-	memset(vertParent,0xffffffff,sizeof(vertParent));
-	newVertexCount=geomMesh->m_numVerts;
-	//Find all duplicated vertices.
-	for (j=0; j<geomMesh->m_numVerts; j++)
-	{
-		if (vertParent[j] != 0xffff)
-			continue;	//this vertex has already been processed
-
-		const Vector3 *v_curr=&geomMesh->m_verts[j];
-
-		for (k=j+1; k<geomMesh->m_numVerts; k++)
-		{
-			Vector3 len(*v_curr - geomMesh->m_verts[k]);
-			if (len.Length2() == 0)
-			{
-				//found duplicate vertex
-				vertParent[k]=j;
-				newVertexCount--;	//decrease total vertices since duplicate found.
-			}
-		}
-		vertParent[j]=j;	//first instance of new vertex
-	}
+	// GeneralsX @performance Claude 16/10/2026 Find duplicated vertices by sorting instead of comparing all pairs.
+	newVertexCount=findDuplicateShadowVertices(geomMesh->m_verts, geomMesh->m_numVerts, vertParent);
 
 	geomMesh->m_parentVerts = NEW UnsignedShort[geomMesh->m_numVerts];
 	memcpy(geomMesh->m_parentVerts,vertParent,sizeof(UnsignedShort)*geomMesh->m_numVerts);
@@ -886,6 +941,46 @@ void W3DShadowGeometryMesh::buildPolygonNeighbors()
 
 	}
 
+	// GeneralsX @performance Claude 16/10/2026 Only polygons sharing a vertex can be neighbors. List the polygons
+	// around each vertex once and test each polygon only against those candidates, in the same ascending order
+	// as the old test against every polygon, so the neighbor table is identical. Building it is no longer
+	// quadratic in the polygon count (several seconds of stall for a 15k triangle model).
+	std::vector<Int> vertexPolyStart;
+	std::vector<Int> vertexPolys;
+	std::vector<Int> candidates;
+	{
+		Int maxVertex = -1;
+		for( Int k = 0; k < m_numPolyNeighbors; k++ )
+		{
+			Short idx[ 3 ];
+			GetPolygonIndex( k, idx, 3 );
+			for( Int a = 0; a < 3; a++ )
+				if( idx[ a ] > maxVertex )
+					maxVertex = idx[ a ];
+		}
+		vertexPolyStart.assign( maxVertex + 2, 0 );
+		for( Int k = 0; k < m_numPolyNeighbors; k++ )
+		{
+			Short idx[ 3 ];
+			GetPolygonIndex( k, idx, 3 );
+			for( Int a = 0; a < 3; a++ )
+				if( idx[ a ] >= 0 )
+					vertexPolyStart[ idx[ a ] + 1 ]++;
+		}
+		for( Int v = 0; v <= maxVertex; v++ )
+			vertexPolyStart[ v + 1 ] += vertexPolyStart[ v ];
+		vertexPolys.resize( vertexPolyStart[ maxVertex + 1 ] );
+		std::vector<Int> fill( vertexPolyStart.begin(), vertexPolyStart.end() - 1 );
+		for( Int k = 0; k < m_numPolyNeighbors; k++ )
+		{
+			Short idx[ 3 ];
+			GetPolygonIndex( k, idx, 3 );
+			for( Int a = 0; a < 3; a++ )
+				if( idx[ a ] >= 0 )
+					vertexPolys[ fill[ idx[ a ] ]++ ] = k;
+		}
+	}
+
 	// assign polygon data for each of our polygons
 	for( i = 0; i < m_numPolyNeighbors; i++ )
 	{
@@ -897,9 +992,22 @@ void W3DShadowGeometryMesh::buildPolygonNeighbors()
 		GetPolygonIndex( i, poly, 3 );
 		GetPolygonNormal(i,&vNorm);
 
-		// find the neighbors of this polygon
-		for( j = 0; j < m_numPolyNeighbors; j++ )
+		// GeneralsX @performance Claude 16/10/2026 Candidates: polygons around our vertices, ascending, no repeats.
+		candidates.clear();
+		for( Int a = 0; a < 3; a++ )
 		{
+			if( poly[ a ] < 0 )
+				continue;
+			for( Int c = vertexPolyStart[ poly[ a ] ]; c < vertexPolyStart[ poly[ a ] + 1 ]; c++ )
+				candidates.push_back( vertexPolys[ c ] );
+		}
+		std::sort( candidates.begin(), candidates.end() );
+		candidates.erase( std::unique( candidates.begin(), candidates.end() ), candidates.end() );
+
+		// find the neighbors of this polygon
+		for( size_t candidate = 0; candidate < candidates.size(); candidate++ )
+		{
+			j = candidates[ candidate ];
 			Int a, b;
 			Int index1, index2;
 			Int index1Pos[2]; //positions of shared edge vertices in triangle list. (0,1 or 2)
@@ -1871,6 +1979,12 @@ void W3DVolumetricShadow::updateMeshVolume(Int meshIndex, Int lightIndex, const 
 	Matrix4x4 objectToWorld(*meshXform);
 	Matrix4x4 *prevXForm=&m_objectXformHistory[ lightIndex ][meshIndex];
 
+	// GeneralsX @performance Claude 16/10/2026 High poly caster meshes (ShadowVolumeHighPolyTriangles) rebuild their
+	// silhouette after ShadowVolumeHighPolyAngle degrees of rotation instead of 0.2: a turning 15k triangle turret
+	// otherwise rebuilds its silhouette and volume every frame.
+	const Real rotationCosLimit = (s_highPolyShadowTriangles > 0 &&
+		m_geometry->getMesh(meshIndex)->GetNumPolygon() >= s_highPolyShadowTriangles) ? s_cosHighPolyShadowAngle : cosAngleToCare;
+
 	//
 	// build the shadow silhouette and construct shadow volume from
 	// this light location.  The for loop wrapped around this is
@@ -1885,12 +1999,12 @@ void W3DVolumetricShadow::updateMeshVolume(Int meshIndex, Int lightIndex, const 
 	//When dealing with infinite light sources, we can assume that the shadow doesn't
 	//change much based on object position.  Only the orientation to light matters.
 	Real cosAngle = fabs (Vector3::Dot_Product((Vector3 &)(prevXForm->operator [](0)),(Vector3 &)(objectToWorld.operator [](0))));
-	if (cosAngle >= cosAngleToCare)
+	if (cosAngle >= rotationCosLimit)
 	{	cosAngle = fabs (Vector3::Dot_Product((Vector3 &)(prevXForm->operator [](1)),(Vector3 &)(objectToWorld.operator [](1))));
-		if (cosAngle >= cosAngleToCare)
+		if (cosAngle >= rotationCosLimit)
 		{
 			cosAngle = fabs (Vector3::Dot_Product((Vector3 &)(prevXForm->operator [](2)),(Vector3 &)(objectToWorld.operator [](2))));
-			if (cosAngle < cosAngleToCare)
+			if (cosAngle < rotationCosLimit)
 				isMeshRotating=true;
 		}
 		else
@@ -2036,6 +2150,8 @@ void W3DVolumetricShadow::updateMeshVolume(Int meshIndex, Int lightIndex, const 
 			}
 			resetSilhouette(meshIndex);
 			buildSilhouette(meshIndex, &lightPosObject);
+			// GeneralsX @performance Claude 16/10/2026 Silhouette rebuilds for the frame profiler.
+			PerfStats::addShadowRebuild((UnsignedInt)m_geometry->getMesh(meshIndex)->GetNumPolygon());
 
 			//
 			// in a multiple shadow situation we would be allocating a volume
@@ -3354,7 +3470,9 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
  	beY = bbox.Extent.Y;
  	beZ = bbox.Extent.Z;
 
-	if (m_shadowList && TheGlobalData->m_useShadowVolumes)
+	// GeneralsX @feature Claude 16/10/2026 Also run the stencil pass when only skinned shadow volumes are visible.
+	const Bool hasSkinnedVolumes = TheW3DSkinnedShadowManager && TheW3DSkinnedShadowManager->hasVolumesToRender();
+	if ((m_shadowList || hasSkinnedVolumes) && TheGlobalData->m_useShadowVolumes)
 	{
 
 		LPDIRECT3DDEVICE8 m_pDev=DX8Wrapper::_Get_D3D_Device8();
@@ -3490,6 +3608,15 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			}
 		}
 
+		// GeneralsX @feature Claude 16/10/2026 Skinned shadow volumes, increment pass. They draw from user memory, which
+		// unbinds the stream source and index buffer, so the cached stream source is reset and the vertex format restored.
+		if (TheW3DSkinnedShadowManager)
+		{
+			numRenderedShadows += TheW3DSkinnedShadowManager->renderVolumes(FALSE);
+			lastActiveVertexBuffer=nullptr;
+			m_pDev->SetVertexShader(W3DBufferManager::getDX8Format(W3DBufferManager::VBM_FVF_XYZ));
+		}
+
 		// change the stencil op to decrement
 		m_pDev->SetRenderState( D3DRS_STENCILPASS,  D3DSTENCILOP_DECRSAT);
 
@@ -3519,6 +3646,13 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			//all use the same vertex buffer.  Flush them ASAP.
 			shadowDynamicTask->m_parentShadow->RenderVolume(shadowDynamicTask->m_meshIndex,shadowDynamicTask->m_lightIndex);
 			shadowDynamicTask=(W3DVolumetricShadowRenderTask *)shadowDynamicTask->m_nextTask;
+		}
+
+		// GeneralsX @feature Claude 16/10/2026 Skinned shadow volumes, decrement pass.
+		if (TheW3DSkinnedShadowManager)
+		{
+			TheW3DSkinnedShadowManager->renderVolumes(TRUE);
+			lastActiveVertexBuffer=nullptr;
 		}
 
 		//Reset all render tasks for next frame.
@@ -3720,6 +3854,11 @@ Bool W3DVolumetricShadowManager::ReAcquireResources()
 // ============================================================================
 Bool W3DVolumetricShadowManager::init()
 {
+	// GeneralsX @performance Claude 16/10/2026 High poly shadow caster limits from Options.ini.
+	OptionPreferences prefs;
+	s_highPolyShadowTriangles = prefs.getShadowVolumeHighPolyTriangles();
+	s_cosHighPolyShadowAngle = WWMath::Cos(prefs.getShadowVolumeHighPolyAngle() * (PI / 180.0f));
+	s_maxShadowVolumeTriangles = prefs.getShadowVolumeMaxTriangles();
 	return TRUE;
 }
 
@@ -3739,8 +3878,11 @@ void W3DVolumetricShadowManager::reset()
 // Add the shadows for this hierarchy to the shadow management for
 // rendering.
 // ============================================================================
-W3DVolumetricShadow* W3DVolumetricShadowManager::addShadow(RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
+W3DVolumetricShadow* W3DVolumetricShadowManager::addShadow(RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw, Bool *overTriangleLimit)
 {
+	if (overTriangleLimit)
+		*overTriangleLimit = FALSE;
+
 	if (!DX8Wrapper::Has_Stencil() || !robj || !TheGlobalData->m_useShadowVolumes)
 		return nullptr;	//right now we require a stencil buffer
 
@@ -3757,12 +3899,28 @@ W3DVolumetricShadow* W3DVolumetricShadowManager::addShadow(RenderObjClass *robj,
 
 	if (sg==nullptr)
 	{
+		// GeneralsX @performance Claude 16/10/2026 Models without usable shadow geometry (only skins, too many
+		// vertices) are remembered, so later units of the same model do not repeat the failed build.
+		if (m_W3DShadowGeometryManager->Is_Missing(name))
+			return nullptr;
+
 		//did not find a cached copy of the shadow geometry, create a new one
 		m_W3DShadowGeometryManager->Load_Geom(robj,name);
 		//try loading again
 		sg=m_W3DShadowGeometryManager->Get_Geom(name);
 		if (sg==nullptr)
+		{
+			m_W3DShadowGeometryManager->Register_Missing(name);
 			return nullptr;	//could not create the shadow geometry
+		}
+	}
+
+	// GeneralsX @performance Claude 16/10/2026 Above ShadowVolumeMaxTriangles the caller uses a decal shadow.
+	if (s_maxShadowVolumeTriangles > 0 && sg->getNumTotalPolygons() > s_maxShadowVolumeTriangles)
+	{
+		if (overTriangleLimit)
+			*overTriangleLimit = TRUE;
+		return nullptr;
 	}
 
 	W3DVolumetricShadow *shadow = NEW W3DVolumetricShadow;	// poolify

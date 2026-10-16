@@ -25,6 +25,13 @@ Upscalers:
   on the colour channels; alpha is resized with Lanczos to keep cut-outs clean;
 - `lanczos`: plain resize, for pipeline checks without a GPU.
 
+Textures with lettering (signs, numbers, logos) get Lanczos plus a light unsharp
+mask instead of the AI model, which warps letters into invented shapes. Names
+matching SAFE_PATTERNS or a `--safe-list` file take that path.
+
+`--check <pack>` lists entries of a built pack that must not be in it (tree
+textures, UI textures, GeneralsX content pack textures) and exits 1 if any are.
+
 Requires Python 3.9+ and Pillow 11.2+ (DXT1/DXT5 writing).
 """
 
@@ -52,6 +59,30 @@ TEXTURE_EXTS = (".tga", ".dds")
 TERRAIN_DIR = "art/terrain/"
 TERRAIN_EXTS = (".tga",)
 MIN_SOURCE_SIZE = 32
+# Textures that skip the AI model (Lanczos plus unsharp mask instead). Found in the review sheets of the
+# full retail set (16/10/2026): the model warps lettering and flags, turns the soft water caustics into
+# hard cells, smooths fine ground and snow noise into flat paint with a seam, hardens the soft glow of
+# night window maps and draws figures into them, and invents patterns on some plates and walls.
+SAFE_PATTERNS = (
+    # lettering, emblems, flags
+    "*sign*", "*text*", "*logo*", "*letter*", "*number*", "*digit*", "*font*", "*billboard*",
+    "*poster*", "*banner*", "*decal*", "*flag*", "cvbigrig", "cbwrfwhrs*", "cbtmplhvn*", "ubpalwall*",
+    # water caustics (animated, soft by design)
+    "caust*",
+    # ground, snow and effect noise
+    "tray*", "trgrass*", "trdirt*", "*noise*", "exavalanche*",
+    # night light maps (soft glows)
+    "*_n", "*_ng", "*_nd", "*_dn", "*_sn", "*_esn", "*_en", "*_en2",
+    # invented patterns
+    "pmgrruin*", "cbnsubst_vent*", "ciburn", "atdiaplate", "pmcement*", "pmropecoil",
+)
+# Safe textures of ground and water that the gentler Real-ESRGAN Compact model (general-x4v3
+# blended half and half with its denoise twin, "general-dn50") upscales without repainting them:
+# on the Windows lab run (16/10/2026) it kept caustics soft, grass, dirt and concrete grain close to
+# the source and cement plain, where x4plus drew cells, flat paint and dot patterns. Lettering,
+# flags, night maps, noise and the patterned tray tiles still get Lanczos.
+SOFT_PATTERNS = ("caust*", "traygrass*", "traydirt*", "trayconcrete*", "trgrass*", "trdirt*", "pmcement*")
+
 MAX_OUTPUT_SIZE = 2048
 
 
@@ -210,7 +241,81 @@ def terrain_tile_textures(archives, game_dirs):
     return tiles - trees, trees
 
 
+def matches(stem, patterns):
+    return any(fnmatch.fnmatch(stem, p) for p in patterns)
+
+
+def read_name_list(path):
+    """Lower-case names or globs, one per line; # starts a comment."""
+    return {l.split("#")[0].strip().lower() for l in open(path) if l.split("#")[0].strip()}
+
+
+def check_pack(paths, archives, game_dirs):
+    """Entries of built packs that the game must not get from an HD pack."""
+    ui = mapped_image_textures(archives, game_dirs)
+    _, trees = terrain_tile_textures(archives, game_dirs)
+    content = own_content_textures(game_dirs)
+    problems = {"tree_textures": [], "ui_textures": [], "content_pack_textures": []}
+    total = 0
+    for path in paths:
+        for name in read_big(path):
+            total += 1
+            stem = Path(name).stem
+            if stem in trees:
+                problems["tree_textures"].append(name)
+            if stem in ui:
+                problems["ui_textures"].append(name)
+            if stem in content:
+                problems["content_pack_textures"].append(name)
+    return total, problems
+
+
 # ---------------------------------------------------------------- upscaling
+
+def tile_axes(img, ratio=1.6):
+    """(x, y): whether the texture wraps around seamlessly along each axis, i.e. the jump
+    from the last column (row) to the first is no larger than between neighbours inside."""
+    import numpy as np
+    a = np.asarray(img.convert("RGB"), dtype=np.float32)
+    if min(a.shape[:2]) < 4:
+        return False, False
+    def wraps(axis):
+        inner = np.abs(np.diff(a, axis=axis)).mean()
+        edge = np.abs(np.take(a, 0, axis=axis) - np.take(a, -1, axis=axis)).mean()
+        return bool(edge <= ratio * max(inner, 1.0))
+    return wraps(1), wraps(0)
+
+
+def pad_hw(arr, pad, tiles):
+    """Pad an HxW(xC) array by `pad` px: wrapped along tiling axes, edge-replicated otherwise."""
+    import numpy as np
+    rest = [(0, 0)] * (arr.ndim - 2)
+    arr = np.pad(arr, [(pad, pad), (0, 0)] + rest, mode="wrap" if tiles[1] else "edge")
+    return np.pad(arr, [(0, 0), (pad, pad)] + rest, mode="wrap" if tiles[0] else "edge")
+
+
+RESIZE_PAD = 8
+
+
+def wrap_resize(img, size, tiles=(False, False), sharpen=False):
+    """Lanczos resize with wrap-around context along tiling axes, so a tileable texture
+    still tiles without a seam (a plain resize clamps at the border)."""
+    import numpy as np
+    from PIL import ImageFilter
+    w, h = img.size
+    fx, fy = size[0] / w, size[1] / h
+    padded = Image.fromarray(pad_hw(np.asarray(img), RESIZE_PAD, tiles), img.mode)
+    out = padded.resize((round(padded.width * fx), round(padded.height * fy)), Image.Resampling.LANCZOS)
+    if sharpen:
+        out = out.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
+    x, y = round(RESIZE_PAD * fx), round(RESIZE_PAD * fy)
+    return out.crop((x, y, x + size[0], y + size[1]))
+
+
+def upscale_safe(img, size, tiles=(False, False)):
+    """Lanczos plus a light unsharp mask: sharper than plain resize, never invents shapes."""
+    return wrap_resize(img, size, tiles, sharpen=True)
+
 
 def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
     """Upscale a dict of {key: RGB image} with realesrgan-ncnn-vulkan in one run."""
@@ -254,18 +359,20 @@ def onnx_session(model):
     return session
 
 
-def upscale_rgb_onnx(images, session, tile):
+def upscale_rgb_onnx(images, session, tile, wrap=None):
     """4x upscale with the Real-ESRGAN ONNX model, tile by tile to bound GPU memory.
 
-    Each tile is read with TILE_PAD px of context on every side (edge-replicated at
-    the image border) and only its centre is kept, so tile seams do not show.
+    Each tile is read with TILE_PAD px of context on every side and only its centre is
+    kept, so tile seams do not show. At the image border the context is edge-replicated,
+    or wrapped around along the axes `wrap[key]` says tile (see tile_axes), so those still tile.
     """
     import numpy as np
     out = {}
     for key, img in images.items():
-        src = np.asarray(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
-        _, h, w = src.shape
-        padded = np.pad(src, ((0, 0), (TILE_PAD, TILE_PAD), (TILE_PAD, TILE_PAD)), mode="edge")
+        src = np.asarray(img, dtype=np.float32) / 255.0
+        h, w = src.shape[:2]
+        tiles = (wrap or {}).get(key, (False, False))
+        padded = pad_hw(src, TILE_PAD, tiles).transpose(2, 0, 1)
         result = np.zeros((3, h * 4, w * 4), dtype=np.float32)
         for y in range(0, h, tile):
             for x in range(0, w, tile):
@@ -351,6 +458,140 @@ def comparison_sheets(cells, preview_dir):
         sheet.save(Path(preview_dir, f"compare_{page:03d}.jpg"), quality=90)
 
 
+def drift(before, after):
+    """How far the upscale moved away from the source, beyond what plain resampling does.
+
+    Both the pack result and a Lanczos upscale are box-filtered back to the source size and
+    compared with it in 8 px blocks (opaque pixels only). The score is the 99th-percentile
+    block error of the pack result minus that of Lanczos: high where the model repainted
+    shapes (letters, emblems, fine patterns) rather than just sharpening them.
+    """
+    import numpy as np
+    src = np.asarray(before.convert("RGB"), dtype=np.float32)
+    opaque = np.asarray(before.getchannel("A")) > 0
+
+    def p99(img):
+        back = np.asarray(img.convert("RGB").resize(before.size, Image.Resampling.BOX), dtype=np.float32)
+        err = np.where(opaque, np.abs(src - back).mean(axis=2), 0)
+        h, w = err.shape
+        b = 8 if min(h, w) >= 8 else 1
+        blocks = err[:h // b * b, :w // b * b].reshape(h // b, b, w // b, b).mean(axis=(1, 3))
+        return float(np.percentile(blocks, 99))
+
+    plain = before.convert("RGB").resize(after.size, Image.Resampling.LANCZOS)
+    return p99(after) - p99(plain)
+
+
+def cache_settings(upscaler, model, scale, max_size, mode):
+    """Settings part of the cache key. Texture mode keeps the key it had before
+    terrain mode existed, so caches built by earlier versions stay valid."""
+    if mode == "textures":
+        return f"{upscaler}|{model}|{scale}|{max_size}|v1".encode()
+    return f"{upscaler}|{model}|{scale}|{max_size}|{mode}|v1".encode()
+
+
+def review(sources, keys, cache_dir, settings, out_ext, review_dir, count):
+    """Rank cached results by drift and write comparison sheets of the worst ones."""
+    from PIL import ImageDraw
+    os.makedirs(review_dir, exist_ok=True)
+    scores = []
+    for stem in keys:
+        data = read_entry(sources[stem])
+        cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}{out_ext}"
+        if not cache_file.is_file():
+            continue
+        try:
+            before = decode(data)
+            after = Image.open(cache_file)
+            after.load()
+            scores.append((drift(before, after), stem, before, after))
+        except Exception as e:
+            print(f"  skip {stem}: {e}", file=sys.stderr)
+        # Keep only the worst `count` images in memory.
+        if len(scores) > count * 2:
+            scores.sort(key=lambda t: -t[0])
+            del scores[count:]
+    scores.sort(key=lambda t: -t[0])
+    worst = scores[:count]
+    cells = []
+    for score, stem, before, after in worst:
+        plain, upscaled = comparison_cells(before, after)
+        ImageDraw.Draw(plain).text((4, 4), f"{stem} {score:.1f}", fill=(255, 255, 0))
+        cells.append((plain, upscaled))
+    comparison_sheets(cells, review_dir)
+    Path(review_dir, "review.json").write_text(json.dumps(
+        [{"texture": stem, "drift": round(score, 2)} for score, stem, _, _ in worst], indent=2))
+    print(f"reviewed {len(keys)} textures, worst {len(worst)} written to {review_dir}")
+
+
+def sharpness(img):
+    """Mean absolute Laplacian: how much fine detail an upscale carries."""
+    import numpy as np
+    a = np.asarray(img.convert("L"), dtype=np.float32)
+    lap = 4 * a[1:-1, 1:-1] - a[:-2, 1:-1] - a[2:, 1:-1] - a[1:-1, :-2] - a[1:-1, 2:]
+    return float(np.abs(lap).mean())
+
+
+def lab(src_dir, out_dir, models, tile, scale):
+    """Compare upscalers on loose texture files: source, Lanczos (current safe path) and
+    each model in `models` ({name: ONNX session}), run with wrap-around context on tiling
+    axes. Writes lab_001.jpg, ... and lab.json with drift (lower is closer to the source)
+    and sharpness (higher is crisper) of each method."""
+    from PIL import ImageDraw
+    os.makedirs(out_dir, exist_ok=True)
+    files = sorted(f for f in Path(src_dir).iterdir() if f.suffix.lower() in (".dds", ".tga"))
+    cell = SHEET_CELL
+    rows, scores = [], []
+    for f in files:
+        stem = f.stem.lower()
+        try:
+            img = decode(f.read_bytes())
+        except Exception as e:
+            print(f"  skip {stem}: {e}", file=sys.stderr)
+            continue
+        if min(img.size) < MIN_SOURCE_SIZE:
+            continue
+        size = target_size(*img.size, scale)
+        rgb = img.convert("RGB")
+        tiles = tile_axes(rgb)
+        results = {"lanczos": upscale_safe(rgb, size, tiles)}
+        for name, session in list(models.items()):
+            try:
+                up = upscale_rgb_onnx({stem: rgb}, session, tile, {stem: tiles})[stem]
+            except Exception as e:  # e.g. an op the GPU provider cannot run; ORT messages may not be UTF-8
+                print(f"  {name} dropped on {stem}: {type(e).__name__}", file=sys.stderr)
+                del models[name]
+                continue
+            results[name] = up.resize(size, Image.Resampling.LANCZOS) if up.size != size else up
+        entry = {"texture": stem, "tiles": tiles}
+        for name, v in results.items():
+            entry[name] = {"drift": round(drift(img, v.convert("RGBA")), 2), "sharpness": round(sharpness(v), 2)}
+        scores.append(entry)
+        w, h = size
+        cw, ch = min(cell, w), min(cell, h)
+        box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
+        cells = [rgb.resize(size, Image.Resampling.NEAREST).crop(box)] + [v.crop(box) for v in results.values()]
+        label = stem + "  " + "  ".join(f"{k} d{v['drift']} s{v['sharpness']}"
+                                        for k, v in entry.items() if isinstance(v, dict))
+        rows.append((label, cells))
+    names = " | ".join(["source x4 nearest", "lanczos (now)", *models])
+    columns = 2 + len(models)
+    per_page = SHEET_ROWS // 2
+    for page, first in enumerate(range(0, len(rows), per_page), start=1):
+        chunk = rows[first:first + per_page]
+        sheet = Image.new("RGB", (columns * (cell + 6), 20 + len(chunk) * (cell + 22)), (32, 32, 32))
+        draw = ImageDraw.Draw(sheet)
+        draw.text((4, 4), names, fill=(255, 255, 255))
+        for row, (label, cells) in enumerate(chunk):
+            y = 20 + row * (cell + 22)
+            draw.text((4, y + 2), label, fill=(255, 255, 0))
+            for col, c in enumerate(cells):
+                sheet.paste(c, (col * (cell + 6), y + 18))
+        sheet.save(Path(out_dir, f"lab_{page:03d}.jpg"), quality=90)
+    Path(out_dir, "lab.json").write_text(json.dumps(scores, indent=2))
+    print(f"lab: {len(rows)} textures compared with {', '.join(['lanczos', *models])}, sheets in {out_dir}")
+
+
 # ---------------------------------------------------------------- main
 
 def decode(data):
@@ -363,6 +604,11 @@ def default_onnx():
     """realesrgan_x4plus.onnx next to hdpack.exe or hdpack.py (built by export_onnx.py)."""
     base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
     return base / "realesrgan_x4plus.onnx"
+
+
+def default_soft_onnx():
+    """general-dn50.onnx next to hdpack.exe or hdpack.py (built by export_lab_models.py)."""
+    return default_onnx().with_name("general-dn50.onnx")
 
 
 def default_esrgan():
@@ -379,13 +625,18 @@ def default_esrgan():
 def main():
     global MAX_OUTPUT_SIZE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--game-dir", action="append", required=True,
+    ap.add_argument("--game-dir", action="append",
                     help="Folder with the retail .big files (repeat for Generals + Zero Hour; later wins)")
-    ap.add_argument("--out", required=True, help="Output archive, e.g. <game>/!HDTextures.big")
+    ap.add_argument("--out", help="Output archive, e.g. <game>/!HDTextures.big")
+    ap.add_argument("--check", action="append", metavar="PACK",
+                    help="Only check built packs for tree, UI and content pack textures (repeatable)")
     ap.add_argument("--upscaler", choices=("onnx", "esrgan", "lanczos"),
                     default="onnx" if default_onnx().is_file() else "esrgan",
                     help="onnx: Real-ESRGAN via ONNX Runtime (DirectML/CPU); esrgan: ncnn Vulkan binary; lanczos: plain resize")
     ap.add_argument("--onnx", default=str(default_onnx()), help="Real-ESRGAN x4plus ONNX model")
+    ap.add_argument("--soft-onnx", default=str(default_soft_onnx()),
+                    help="Gentle 4x ONNX model for safe ground and water textures (SOFT_PATTERNS); "
+                         "without it they get Lanczos like the other safe textures")
     ap.add_argument("--esrgan", default=default_esrgan(), help="Path to realesrgan-ncnn-vulkan or upscayl-bin")
     ap.add_argument("--model", default="realesrgan-x4plus", help="Real-ESRGAN model name")
     ap.add_argument("--scale", type=int, choices=(2, 4), default=4)
@@ -393,23 +644,54 @@ def main():
     ap.add_argument("--tile", type=int, default=128, help="Upscaler tile size in source px (lower uses less VRAM, min 32)")
     ap.add_argument("--include", action="append", help="Only texture names matching this glob (e.g. AV*)")
     ap.add_argument("--exclude-list", help="Text file with texture names (no extension) to keep original")
+    ap.add_argument("--safe-list", help="Text file with texture names or globs to upscale without the AI model")
     ap.add_argument("--limit", type=int, default=0, help="Process at most N textures (prototype runs)")
     ap.add_argument("--batch", type=int, default=64, help="Textures per upscaler run")
     ap.add_argument("--preview-dir", help="Also write before/after PNGs here for comparison")
     ap.add_argument("--max-size", type=int, default=MAX_OUTPUT_SIZE, help="Largest output side in px")
     ap.add_argument("--cache-dir", help="Keep upscaled .dds here and reuse them on the next run "
                     "(default: <out name>.cache next to the output)")
+    ap.add_argument("--review-dir", help="Only rank cached results by how much the model changed them "
+                    "and write comparison sheets of the worst ones here; no pack is written")
+    ap.add_argument("--review-count", type=int, default=200, help="Textures in the review sheets")
     ap.add_argument("--terrain", action="store_true",
                     help="Upscale Art/Terrain/ tiles to TGA for the HD terrain loader instead of model textures")
+    ap.add_argument("--lab", metavar="DIR",
+                    help="Only compare upscalers on the loose .dds/.tga files in DIR; sheets go to --lab-out")
+    ap.add_argument("--lab-out", default="hdpack-lab", help="Output folder of --lab")
+    ap.add_argument("--lab-model", action="append", metavar="NAME=MODEL.onnx",
+                    help="4x ONNX model to compare in --lab (repeatable; default: the --onnx model)")
     ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.lab:
+        specs = [m.split("=", 1) for m in args.lab_model] if args.lab_model else (
+            [("x4plus", args.onnx)] if args.upscaler == "onnx" else [])
+        models = {name: onnx_session(path) for name, path in specs}
+        lab(args.lab, args.lab_out, models, args.tile, args.scale)
+        return
+    if not args.game_dir:
+        ap.error("--game-dir is required unless --lab is given")
+    if args.check:
+        archives = collect_archives(args.game_dir)
+        total, problems = check_pack(args.check, archives, args.game_dir)
+        for kind, names in problems.items():
+            for name in names:
+                print(f"  {kind}: {name}")
+        bad = sum(len(v) for v in problems.values())
+        print(f"{total} entries checked, " + ", ".join(f"{len(v)} {k.replace('_', ' ')}" for k, v in problems.items()))
+        sys.exit(1 if bad else 0)
+    if not args.out:
+        ap.error("--out is required unless --check is given")
     MAX_OUTPUT_SIZE = args.max_size
     cache_dir = Path(args.cache_dir) if args.cache_dir else Path(args.out).with_suffix(".cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
     mode = "terrain" if args.terrain else "textures"
     out_ext = ".tga" if args.terrain else ".dds"
     source_dir, source_exts = (TERRAIN_DIR, TERRAIN_EXTS) if args.terrain else (TEXTURE_DIR, TEXTURE_EXTS)
-    settings = f"{args.upscaler}|{args.model}|{args.scale}|{args.max_size}|{mode}|v1".encode()
+    settings = cache_settings(args.upscaler, args.model, args.scale, args.max_size, mode)
+    # "-wrap": safe textures that tile are resized with wrap-around context (seamless).
+    safe_settings = cache_settings("safe", "lanczos-unsharp-wrap", args.scale, args.max_size, mode)
+    safe_patterns = set(SAFE_PATTERNS) | (read_name_list(args.safe_list) if args.safe_list else set())
 
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)
@@ -424,7 +706,7 @@ def main():
                   file=sys.stderr)
             terrain_tiles = None
     if args.exclude_list:
-        excluded |= {l.strip().lower() for l in open(args.exclude_list) if l.strip() and not l.startswith("#")}
+        excluded |= read_name_list(args.exclude_list)
 
     # One source per texture name; a .dds beats a .tga like in the texture loader.
     sources = {}
@@ -441,7 +723,14 @@ def main():
     keys = sorted(sources)
     if args.limit:
         keys = keys[:args.limit]
+    safe = {k for k in keys if matches(k, safe_patterns)} if args.upscaler != "lanczos" else set()
+    soft = {k for k in safe if matches(k, SOFT_PATTERNS)} if Path(args.soft_onnx).is_file() else set()
+    soft_settings = cache_settings("soft", Path(args.soft_onnx).stem, args.scale, args.max_size, mode)
     print(f"{len(archives)} archive entries, {len(ui_textures)} UI textures skipped, {len(keys)} to upscale")
+
+    if args.review_dir:
+        review(sources, [k for k in keys if k not in safe], cache_dir, settings, out_ext, args.review_dir, args.review_count)
+        return
 
     if args.preview_dir:
         os.makedirs(args.preview_dir, exist_ok=True)
@@ -449,6 +738,7 @@ def main():
     output = []
     pairs = []
     session = None
+    soft_session = None
     cached = 0
     skipped = {"too_small": [], "already_max_size": [], "unreadable": []}
     started = time.monotonic()
@@ -459,7 +749,8 @@ def main():
             name = original[:original.rfind(".")] + out_ext
             data = read_entry(sources[stem])
             # Cache key: source bytes plus every setting that changes the result.
-            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}{out_ext}"
+            key_settings = soft_settings if stem in soft else safe_settings if stem in safe else settings
+            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + key_settings).hexdigest()[:16]}{out_ext}"
             if cache_file.is_file():
                 output.append((name, cache_file))
                 cached += 1
@@ -481,15 +772,23 @@ def main():
         if not batch:
             continue
 
-        rgb = {k: v[0].convert("RGB") for k, v in batch.items()}
-        if args.upscaler == "onnx":
+        rgb = {k: v[0].convert("RGB") for k, v in batch.items() if k not in safe}
+        tiles = {k: tile_axes(v[0]) for k, v in batch.items() if k in safe}
+        up_rgb = {k: upscale_safe(batch[k][0].convert("RGB"), target_size(*batch[k][0].size, args.scale), t)
+                  for k, t in tiles.items() if k not in soft}
+        soft_rgb = {k: batch[k][0].convert("RGB") for k in tiles if k in soft}
+        if soft_rgb:
+            if soft_session is None:
+                soft_session = onnx_session(args.soft_onnx)
+            up_rgb |= upscale_rgb_onnx(soft_rgb, soft_session, args.tile, tiles)
+        if rgb and args.upscaler == "onnx":
             if session is None:
                 session = onnx_session(args.onnx)
-            up_rgb = upscale_rgb_onnx(rgb, session, args.tile)
-        elif args.upscaler == "esrgan":
-            up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
+            up_rgb |= upscale_rgb_onnx(rgb, session, args.tile)
+        elif rgb and args.upscaler == "esrgan":
+            up_rgb |= upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
         else:
-            up_rgb = {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
+            up_rgb |= {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
 
         for stem, (img, name, cache_file) in batch.items():
             size = target_size(*img.size, args.scale)
@@ -499,7 +798,8 @@ def main():
             alpha = img.getchannel("A")
             has_alpha = alpha.getextrema()[0] < 255
             result = colour.convert("RGBA")
-            result.putalpha(alpha.resize(size, Image.Resampling.LANCZOS))
+            result.putalpha(wrap_resize(alpha, size, tiles[stem]) if stem in tiles
+                            else alpha.resize(size, Image.Resampling.LANCZOS))
             partial = cache_file.with_suffix(".tmp")
             if args.terrain:
                 # The terrain loader reads plain TGA; drop alpha when the tile has none.
@@ -517,6 +817,7 @@ def main():
     paths = write_big_parts(args.out, output, args.part_size)
     if args.preview_dir:
         comparison_sheets(pairs, args.preview_dir)
+    written = {Path(n.replace("\\", "/")).stem.lower() for n, _ in output}
     report = {
         "textures_written": len(output),
         "reused_from_cache": cached,
@@ -528,6 +829,8 @@ def main():
         "ui_textures_excluded": len(ui_textures),
         "tree_textures_excluded": len(excluded - ui_textures - content_textures) if args.terrain else 0,
         "content_pack_textures_excluded": sorted(content_textures),
+        "safe_upscaled": sorted((safe - soft) & written),  # Lanczos, no AI
+        "soft_upscaled": sorted(soft & written),  # gentle model
         "written_files": sorted(name for name, _ in output),  # names only, for exclude lists
         "parts": {str(p): p.stat().st_size for p in paths},
         "total_bytes": sum(p.stat().st_size for p in paths),

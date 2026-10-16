@@ -144,6 +144,9 @@ public:
 	virtual void allocateShadows(); ///< create shadow resources if not already present. Used by Options screen.
 
   virtual void preloadAssets( TimeOfDay timeOfDay );									///< preload assets
+	// GeneralsX @performance Claude 16/10/2026 The map load preload (GlobalData m_preloadAssets): every time of day
+	// with m_preloadEverything, then the GPU textures of the loaded assets, with a [PRELOAD] line on stderr.
+	void preloadMatchAssets();
 
 	virtual Drawable *getDrawableList() { return m_drawableList; }
 

@@ -54,6 +54,7 @@
 #include "Common/FramePacer.h"
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "Common/PerfTimer.h"
 #include "Common/Xfer.h"
 #include "Common/GameLOD.h"
@@ -378,6 +379,8 @@ WaterRenderObjClass::~WaterRenderObjClass()
 	deleteInstance((WaterTransparencySetting*)TheWaterTransparency.getNonOverloadedPointer());
 	TheWaterTransparency = nullptr;
 	ReleaseResources();
+	// GeneralsX @feature Claude 16/10/2026 Water effect textures (W3DWaterEffects.cpp).
+	releaseWaterEffects();
 
 	delete m_waterTrackSystem;
 }
@@ -436,6 +439,35 @@ WaterRenderObjClass::WaterRenderObjClass()
 	m_waterSparklesTexture=nullptr;
 	m_riverXOffset=0;
 	m_riverYOffset=0;
+
+	// GeneralsX @feature Claude 16/10/2026 Water effects (W3DWaterEffects.cpp), off until init() reads the options.
+	m_effects.reflections = WATER_REFLECTIONS_OFF;
+	m_effects.reflectionScale = 0.5f;
+	m_effects.shoreFoam = FALSE;
+	m_effects.waves = FALSE;
+	m_effectsSupported = FALSE;
+	m_effectReflectionTexture = nullptr;
+	m_effectReflectionWidth = 0;
+	m_effectReflectionHeight = 0;
+	m_effectReflectionValid = FALSE;
+	m_effectReflectionLevel = 0.0f;
+	m_effectReflectionCamera.Make_Identity();
+	m_effectReflectionAge = 0;
+	m_effectFresnelTexture = nullptr;
+	m_effectFoamTexture = nullptr;
+	for (i = 0; i < WATER_WAVE_FRAMES; ++i)
+		m_effectWaveTexture[i] = nullptr;
+	m_effectShoreTexture = nullptr;
+	m_effectShoreWidth = 0;
+	m_effectShoreHeight = 0;
+	m_effectShoreOriginX = 0.0f;
+	m_effectShoreOriginY = 0.0f;
+	m_effectShoreSizeX = 1.0f;
+	m_effectShoreSizeY = 1.0f;
+	m_effectShoreSignature = 0;
+	m_effectShoreBuildTime = 0;
+	m_effectTime = 0.0f;
+	m_effectLayer = FALSE;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -871,6 +903,8 @@ void WaterRenderObjClass::ReleaseResources()
 	REF_PTR_RELEASE(m_indexBuffer);
 
 	REF_PTR_RELEASE(m_pReflectionTexture);
+	// GeneralsX @feature Claude 16/10/2026 The water effects' reflection target lives in the default pool too.
+	releaseWaterEffectTargets();
 	SAFE_RELEASE(m_vertexBufferD3D);
 	SAFE_RELEASE(m_indexBufferD3D);
 
@@ -1003,6 +1037,9 @@ void WaterRenderObjClass::ReAcquireResources()
 		if (hr==0) {
 			hr = 	DX8Wrapper::_Get_D3D_Device8()->CreatePixelShader((DWORD*)compiledShader->GetBufferPointer(), &m_riverWaterPixelShader);
 			compiledShader->Release();
+			// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+			if (SUCCEEDED(hr))
+				PerfStats::addShaderCreated();
 		}
 		shader =
 			"ps.1.1\n \
@@ -1016,6 +1053,9 @@ void WaterRenderObjClass::ReAcquireResources()
 		if (hr==0) {
 			hr = 	DX8Wrapper::_Get_D3D_Device8()->CreatePixelShader((DWORD*)compiledShader->GetBufferPointer(), &m_waterPixelShader);
 			compiledShader->Release();
+			// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+			if (SUCCEEDED(hr))
+				PerfStats::addShaderCreated();
 		}
 		shader =
 			"ps.1.1\n \
@@ -1031,6 +1071,9 @@ void WaterRenderObjClass::ReAcquireResources()
 		if (hr==0) {
 			hr = 	DX8Wrapper::_Get_D3D_Device8()->CreatePixelShader((DWORD*)compiledShader->GetBufferPointer(), &m_trapezoidWaterPixelShader);
 			compiledShader->Release();
+			// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+			if (SUCCEEDED(hr))
+				PerfStats::addShaderCreated();
 		}
 #endif // _WIN32 - Runtime shader compilation
 	}
@@ -1214,6 +1257,9 @@ Int WaterRenderObjClass::init(Real waterLevel, Real dx, Real dy, SceneClass *par
 	m_waterTrackSystem->init();
 #endif
 
+	// GeneralsX @feature Claude 16/10/2026 Reflections, shore foam and waves (W3DWaterEffects.cpp).
+	initWaterEffects();
+
 	return 0;
 }
 
@@ -1319,6 +1365,12 @@ void WaterRenderObjClass::update()
 		m_fBumpFrame += timeScale;
 		if (m_fBumpFrame >= NUM_BUMP_FRAMES)
 			m_fBumpFrame = 0.0f;
+
+		// GeneralsX @feature Claude 16/10/2026 Animation clock of the water effects in seconds, wrapped after an
+		// hour (all effect animations loop well within that).
+		m_effectTime += timeScale / (Real)LOGICFRAMES_PER_SECOND;
+		if (m_effectTime >= 3600.0f)
+			m_effectTime -= 3600.0f;
 
 		// for vertex animated water we need to update the vector field
 		if( m_doWaterGrid && m_meshInMotion == TRUE )
@@ -1509,9 +1561,17 @@ void WaterRenderObjClass::loadSetting( Setting *setting, TimeOfDay timeOfDay )
 void WaterRenderObjClass::updateRenderTargetTextures(CameraClass *cam)
 {
 	// GeneralsX @bugfix Claude 15/10/2026 Skip the mirror pass when the reflection render target could not be created
-	if (m_waterType == WATER_TYPE_2_PVSHADER && m_pReflectionTexture != nullptr && getClippedWaterPlane(cam, nullptr) &&
-		TheTerrainRenderObject && TheTerrainRenderObject->getMap())
-		renderMirror(cam);	//generate texture containing reflected scene
+	if (m_waterType == WATER_TYPE_2_PVSHADER)
+	{
+		if (m_pReflectionTexture != nullptr && getClippedWaterPlane(cam, nullptr) &&
+			TheTerrainRenderObject && TheTerrainRenderObject->getMap())
+			renderMirror(cam);	//generate texture containing reflected scene
+	}
+	else
+	{
+		// GeneralsX @feature Claude 16/10/2026 Reflection of standing water and rivers (W3DWaterEffects.cpp).
+		renderWaterReflection(cam);
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2098,11 +2158,17 @@ Matrix4x4 matProj, matView, matWW3D;
 //-------------------------------------------------------------------------------------------------
 void WaterRenderObjClass::renderWater()
 {
+	// GeneralsX @feature Claude 16/10/2026 The shore texture follows the map and scripted water height changes.
+	// Effects draw over the single water layer, or the top one when the water is feathered.
+	updateShoreTexture();
+
 	for (PolygonTrigger *pTrig=PolygonTrigger::getFirstPolygonTrigger(); pTrig; pTrig = pTrig->getNext()) {
 		if (pTrig->isWaterArea()) {
 			if (pTrig->getNumPoints()>2) {
 				if (pTrig->isRiver()) {
+					m_effectLayer = TRUE;
 					drawRiverWater(pTrig);
+					m_effectLayer = FALSE;
 					continue;
 				}
 				Int k;
@@ -2124,13 +2190,19 @@ void WaterRenderObjClass::renderWater()
 					{
 						for (int r = 0; r < TheGlobalData->m_featherWater; ++r)
 						{
+							m_effectLayer = (r == TheGlobalData->m_featherWater - 1);
 							drawTrapezoidWater(points);
 							points[0].Z += (FEATHER_THICKNESS/TheGlobalData->m_featherWater);
 						}
+						m_effectLayer = FALSE;
 					}
 
 					else
+					{
+						m_effectLayer = TRUE;
 						drawTrapezoidWater(points);
+						m_effectLayer = FALSE;
+					}
 
 
 				}
@@ -3019,7 +3091,12 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 	if (wireframeForDebug) {
 		DX8Wrapper::_Get_D3D_Device8()->SetRenderState(D3DRS_FILLMODE,D3DFILL_WIREFRAME);
 	}
+	// GeneralsX @feature Claude 16/10/2026 Soft shoreline on the fixed function path (stage 1 is free there).
+	if (!m_riverWaterPixelShader)
+		beginSoftShore(1);
 	DX8Wrapper::Draw_Triangles(	0,rectangleCount*2, 0,	(rectangleCount+1)*2);
+	if (!m_riverWaterPixelShader)
+		endSoftShore(1);
 	if (wireframeForDebug) {
 		DX8Wrapper::_Get_D3D_Device8()->SetRenderState(D3DRS_FILLMODE,D3DFILL_SOLID);
 	}
@@ -3029,6 +3106,9 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 	//restore blend mode to what W3D expects.
 	if (TheWaterTransparency->m_additiveBlend)
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE );
+
+	// GeneralsX @feature Claude 16/10/2026 Reflection and foam over the river.
+	drawWaterEffectPasses((rectangleCount+1)*2, rectangleCount*2, (Real)pTrig->getPoint(0)->z);
 
 	DX8Wrapper::_Get_D3D_Device8()->SetRenderState(D3DRS_CULLMODE, cull);
 
@@ -3398,7 +3478,12 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 //		}
 //#endif // FEATHER_WATER
 //#endif //WAVY_WATER
+		// GeneralsX @feature Claude 16/10/2026 Soft shoreline on the fixed function path (stage 1 is free there).
+		if (!m_trapezoidWaterPixelShader)
+			beginSoftShore(1);
 		DX8Wrapper::Draw_Triangles(	0,rectangleCount*2, 0,	(rectangleCount+1)*2);//lorenzen thinks this is where to itereate the soft shoreline effect
+		if (!m_trapezoidWaterPixelShader)
+			endSoftShore(1);
 	}
 
 
@@ -3447,6 +3532,10 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 			W3DShaderManager::resetShader(W3DShaderManager::ST_SHROUD_TEXTURE);
 		}
 	}
+
+	// GeneralsX @feature Claude 16/10/2026 Reflection and foam over the standing water.
+	drawWaterEffectPasses((rectangleCount+1)*2, rectangleCount*2, points[3].Z);
+
 	DX8Wrapper::_Get_D3D_Device8()->SetRenderState(D3DRS_CULLMODE, cull);
 }
 

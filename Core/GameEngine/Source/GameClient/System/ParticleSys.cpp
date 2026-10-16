@@ -1478,6 +1478,21 @@ void ParticleSystem::getPosition( Coord3D *pos )
 }
 
 // ------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 Emitter position in the world, from the composite transform of the parent
+// drawable and the local transform (as of the last update). Used by the effect lights; changes nothing.
+// ------------------------------------------------------------------------------------------------
+void ParticleSystem::getWorldPosition( Coord3D *pos ) const
+{
+	if (!pos)
+		return;
+	Vector3 vec;
+	m_transform.Get_Translation(&vec);
+	pos->x = vec.X;
+	pos->y = vec.Y;
+	pos->z = vec.Z;
+}
+
+// ------------------------------------------------------------------------------------------------
 /** Set the position of the particle system */
 // ------------------------------------------------------------------------------------------------
 void ParticleSystem::setPosition( const Coord3D *pos )

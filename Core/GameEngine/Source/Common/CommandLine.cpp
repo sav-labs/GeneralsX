@@ -32,6 +32,7 @@
 
 #include "Common/ArchiveFileSystem.h"
 #include "Common/CommandLine.h"
+#include "Common/PerfStats.h"
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
 #include "Common/OptionPreferences.h"
@@ -147,6 +148,45 @@ Int parseRenderScale(char *args[], int num)
 		Int scale = atoi(args[1]);
 		if (scale > 0)
 			TheWritableGlobalData->m_renderScale = clamp((Int)OptionPreferences::RENDER_SCALE_MIN, scale, (Int)OptionPreferences::RENDER_SCALE_OFF);
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 16/10/2026 -upscaler fsr3|fsr2|fsr1|off overrides Options.ini Upscaler, so the upscalers
+// can be compared on the same machine without editing Options.ini. dlss is accepted and falls back to FSR 2.
+Int parseUpscaler(char *args[], int num)
+{
+	if (num > 1)
+	{
+		OptionPreferences::UpscalerType upscaler = OptionPreferences::parseUpscaler(args[1]);
+		if (upscaler != OptionPreferences::UPSCALER_DEFAULT)
+			TheWritableGlobalData->m_upscaler = upscaler;
+		else
+		{
+			fprintf(stderr, "[FSR2] unknown -upscaler value '%s', expected fsr3, fsr2, fsr1 or off\n", args[1]);
+			fflush(stderr);
+		}
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 16/10/2026 -framegen on|off overrides Options.ini FrameGeneration (FSR 3 frame
+// generation, only with -upscaler fsr3 or Upscaler = FSR3). Render only.
+Int parseFrameGeneration(char *args[], int num)
+{
+	if (num > 1)
+	{
+		if (stricmp(args[1], "on") == 0 || stricmp(args[1], "yes") == 0 || stricmp(args[1], "1") == 0)
+			TheWritableGlobalData->m_frameGeneration = 1;
+		else if (stricmp(args[1], "off") == 0 || stricmp(args[1], "no") == 0 || stricmp(args[1], "0") == 0)
+			TheWritableGlobalData->m_frameGeneration = 0;
+		else
+		{
+			fprintf(stderr, "[FSR3] unknown -framegen value '%s', expected on or off\n", args[1]);
+			fflush(stderr);
+		}
 		return 2;
 	}
 	return 1;
@@ -842,6 +882,9 @@ Int parseSkirmishStartPos(char *args[], int num)
 // Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
 // GeneralsX @feature Claude 15/10/2026 A trailing "close" token (-camtest close, -camtest 8 close) selects the
 // close-up flight, the same as -camclose.
+// GeneralsX @feature Claude 16/10/2026 Further tokens, in any order: "battle" spawns a hostile column of an enemy player
+// facing the convoy and orbits the fight, a number after "battle" is the number of units in the battle scene (both sides
+// together, split evenly), and "night" switches the match to night: -camtest 10 battle 60 night.
 Int parseCameraTest(char *args[], int num)
 {
 	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
@@ -856,9 +899,29 @@ Int parseCameraTest(char *args[], int num)
 		}
 		++consumed;
 	}
-	if (num > consumed && stricmp(args[consumed], "close") == 0)
+	while (num > consumed)
 	{
-		TheWritableGlobalData->m_cameraTestClose = TRUE;
+		const char *token = args[consumed];
+		if (stricmp(token, "close") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestClose = TRUE;
+		}
+		else if (stricmp(token, "battle") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestBattle = TRUE;
+		}
+		else if (stricmp(token, "night") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestNight = TRUE;
+		}
+		else if (TheWritableGlobalData->m_cameraTestBattle && token[0] >= '0' && token[0] <= '9')
+		{
+			TheWritableGlobalData->m_cameraTestBattleUnits = atoi(token);
+		}
+		else
+		{
+			break;
+		}
 		++consumed;
 	}
 	return consumed;
@@ -875,6 +938,43 @@ Int parseCameraTestClose(char *args[], int num)
 		TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
 	}
 	return 1;
+}
+
+// GeneralsX @performance Claude 16/10/2026 -perf [seconds]: print a [PERF] frame profile to stderr every few
+// seconds (default 5, or Options.ini PerfInterval). Release builds included; render and client timing only.
+Int parsePerf(char *args[], int num)
+{
+	Real seconds = 0.0f;
+	Int consumed = 1;
+	if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
+	{
+		seconds = (Real)atof(args[consumed]);
+		++consumed;
+	}
+	PerfStats::enableFromCommandLine(seconds);
+	return consumed;
+}
+
+// GeneralsX @performance Claude 16/10/2026 -perfdump <seconds> [delay]: like -perf, and writes one CSV row per
+// frame for the given seconds of the next match, starting delay seconds after the match begins, into the
+// capture folder (Options.ini CapturePath) as perf_<date>_<time>.csv.
+Int parsePerfDump(char *args[], int num)
+{
+	Int consumed = 1;
+	Real seconds = 60.0f;
+	Real delay = 0.0f;
+	if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
+	{
+		seconds = (Real)atof(args[consumed]);
+		++consumed;
+		if (num > consumed && args[consumed][0] >= '0' && args[consumed][0] <= '9')
+		{
+			delay = (Real)atof(args[consumed]);
+			++consumed;
+		}
+	}
+	PerfStats::enableDump(seconds, delay);
+	return consumed;
 }
 
 Int parseLoadReplay(char *args[], int num)
@@ -1313,6 +1413,8 @@ static CommandLineParam paramsForStartup[] =
 	{ "-win", parseWin },
 	{ "-upscale", parseUpscale },
 	{ "-renderscale", parseRenderScale },
+	{ "-upscaler", parseUpscaler },
+	{ "-framegen", parseFrameGeneration },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
@@ -1378,6 +1480,9 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-camtest", parseCameraTest },
 	// GeneralsX @feature Claude 15/10/2026 Close-up variant of the -camtest flight.
 	{ "-camclose", parseCameraTestClose },
+	// GeneralsX @performance Claude 16/10/2026 Frame profiler: stderr summary and per frame CSV.
+	{ "-perf", parsePerf },
+	{ "-perfdump", parsePerfDump },
 
 	// TheSuperHackers @feature xezon 03/08/2025 Force full viewport for 'Control Bar Pro' Addons like GenTool did it.
 	{ "-forcefullviewport", parseFullViewport },

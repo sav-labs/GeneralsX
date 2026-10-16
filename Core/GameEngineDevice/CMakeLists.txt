@@ -43,6 +43,7 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DDisplay.h
     Include/W3DDevice/GameClient/W3DDisplayString.h
     Include/W3DDevice/GameClient/W3DDisplayStringManager.h
+    Include/W3DDevice/GameClient/W3DEffectLights.h
 #    Include/W3DDevice/GameClient/W3DDynamicLight.h
 #    Include/W3DDevice/GameClient/W3DFileSystem.h
     Include/W3DDevice/GameClient/W3DGadget.h
@@ -64,15 +65,18 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/W3DScene.h
     Include/W3DDevice/GameClient/W3DShaderManager.h
 #    Include/W3DDevice/GameClient/W3DShadow.h
+    Include/W3DDevice/GameClient/W3DSkinnedShadow.h
 #    Include/W3DDevice/GameClient/W3DShroud.h
     Include/W3DDevice/GameClient/W3DSmudge.h
     Include/W3DDevice/GameClient/W3DSnow.h
 #    Include/W3DDevice/GameClient/W3DStatusCircle.h
     Include/W3DDevice/GameClient/W3DTerrainBackground.h
+    Include/W3DDevice/GameClient/W3DTerrainDetail.h
     Include/W3DDevice/GameClient/W3DTerrainTracks.h
     Include/W3DDevice/GameClient/W3DTerrainVisual.h
     Include/W3DDevice/GameClient/W3DTreeBuffer.h
     Include/W3DDevice/GameClient/W3DVideoBuffer.h
+    Include/W3DDevice/GameClient/W3DUpscaler.h
     Include/W3DDevice/GameClient/W3DView.h
     Include/W3DDevice/GameClient/W3DScreenshot.h
     Include/W3DDevice/GameClient/W3DCapture.h
@@ -141,6 +145,7 @@ set(GAMEENGINEDEVICE_SRC
 #    Source/W3DDevice/GameClient/Shadow/W3DBufferManager.cpp
 #    Source/W3DDevice/GameClient/Shadow/W3DProjectedShadow.cpp
 #    Source/W3DDevice/GameClient/Shadow/W3DShadow.cpp
+    Source/W3DDevice/GameClient/Shadow/W3DSkinnedShadow.cpp
 #    Source/W3DDevice/GameClient/Shadow/W3DVolumetricShadow.cpp
     Source/W3DDevice/GameClient/TerrainTex.cpp
     Source/W3DDevice/GameClient/TileData.cpp
@@ -153,6 +158,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DDisplay.cpp
     Source/W3DDevice/GameClient/W3DDisplayString.cpp
     Source/W3DDevice/GameClient/W3DDisplayStringManager.cpp
+    Source/W3DDevice/GameClient/W3DEffectLights.cpp
 #    Source/W3DDevice/GameClient/W3DDynamicLight.cpp
 #    Source/W3DDevice/GameClient/W3DFileSystem.cpp
 #    Source/W3DDevice/GameClient/W3DGameClient.cpp
@@ -171,10 +177,12 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DSnow.cpp
 #    Source/W3DDevice/GameClient/W3DStatusCircle.cpp
     Source/W3DDevice/GameClient/W3DTerrainBackground.cpp
+    Source/W3DDevice/GameClient/W3DTerrainDetail.cpp
     Source/W3DDevice/GameClient/W3DTerrainTracks.cpp
     Source/W3DDevice/GameClient/W3DTerrainVisual.cpp
     Source/W3DDevice/GameClient/W3DTreeBuffer.cpp
     Source/W3DDevice/GameClient/W3DVideoBuffer.cpp
+    Source/W3DDevice/GameClient/W3DUpscaler.cpp
     Source/W3DDevice/GameClient/W3DView.cpp
     Source/W3DDevice/GameClient/W3DScreenshot.cpp
     Source/W3DDevice/GameClient/W3DCapture.cpp
@@ -182,6 +190,7 @@ set(GAMEENGINEDEVICE_SRC
 #    Source/W3DDevice/GameClient/W3dWaypointBuffer.cpp
 #    Source/W3DDevice/GameClient/W3DWebBrowser.cpp
     Source/W3DDevice/GameClient/Water/W3DWater.cpp
+    Source/W3DDevice/GameClient/Water/W3DWaterEffects.cpp
     Source/W3DDevice/GameClient/Water/W3DWaterTracks.cpp
     Source/W3DDevice/GameClient/WorldHeightMap.cpp
 #    Source/W3DDevice/GameLogic/W3DGameLogic.cpp

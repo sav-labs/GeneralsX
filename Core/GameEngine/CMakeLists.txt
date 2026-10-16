@@ -84,6 +84,7 @@ set(GAMEENGINE_SRC
 #    Include/Common/NameKeyGenerator.h
     Include/Common/ObjectStatusTypes.h
     Include/Common/OptionPreferences.h
+    Include/Common/PerfStats.h
 #    Include/Common/OSDisplay.h
 #    Include/Common/Overridable.h
 #    Include/Common/Override.h
@@ -171,6 +172,7 @@ set(GAMEENGINE_SRC
 #    Include/GameClient/FontDesc.h
     Include/GameClient/FXList.h
     Include/GameClient/Gadget.h
+    Include/GameClient/EffectLights.h
     Include/GameClient/GadgetCheckBox.h
     Include/GameClient/GadgetComboBox.h
     Include/GameClient/GadgetListBox.h
@@ -632,6 +634,7 @@ set(GAMEENGINE_SRC
 #    Source/Common/MultiplayerSettings.cpp
 #    Source/Common/NameKeyGenerator.cpp
     Source/Common/OptionPreferences.cpp
+    Source/Common/PerfStats.cpp
 #    Source/Common/PartitionSolver.cpp
     Source/Common/PerfTimer.cpp
     Source/Common/RandomValue.cpp
@@ -721,6 +724,7 @@ set(GAMEENGINE_SRC
     Source/GameClient/Drawable/Update/BeaconClientUpdate.cpp
     Source/GameClient/Drawable/Update/SwayClientUpdate.cpp
     Source/GameClient/DrawGroupInfo.cpp
+    Source/GameClient/EffectLights.cpp
 #    Source/GameClient/Eva.cpp
     Source/GameClient/FXList.cpp
 #    Source/GameClient/GameClient.cpp

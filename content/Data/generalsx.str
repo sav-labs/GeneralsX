@@ -3,3 +3,27 @@
 GENERALSX:ContentVersion
 "GeneralsX content 1"
 END
+
+MAP:GXTwinRiversFortress
+"Twin Rivers Fortress"
+END
+
+MAP:GXMountainPass
+"Mountain Pass"
+END
+
+MAP:GXDesertOasis
+"Desert Oasis"
+END
+
+MAP:GXFrozenDivide
+"Frozen Divide"
+END
+
+MAP:GXCityLines
+"City Lines"
+END
+
+MAP:GXForestDuel
+"Forest Duel"
+END
