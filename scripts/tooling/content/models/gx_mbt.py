@@ -22,20 +22,8 @@ def turret_ring(points, z):
     return [(x + TURRET_X, y, z) for x, y in points]
 
 
-def build(name, body_texture, tread_texture, team_texture, flash_texture, variant="mbt"):
-    """variant "mbt" replaces the Crusader; "paladin" adds reactive armour and a laser defence turret."""
-    turret_bone = "TURRET01" if variant == "paladin" else "TURRET"
-    model = Model(name)
-    model.add_bone(turret_bone, "ROOTTRANSFORM", (TURRET_X, 0, TURRET_Z))
-    model.add_bone("BARREL", turret_bone, (TURRET_X + 9.8, 0, GUN_Z))
-    model.add_bone("TURRETMS", "BARREL", (TURRET_X + 30.4, 0, GUN_Z))
-    model.add_bone("TURRETFX", "BARREL", (TURRET_X + 30.4, 0, GUN_Z))
-
-    body = Material("GXBody", body_texture, specular=(60, 60, 55), shininess=12.0)
-    team = Material("GXTeam", team_texture)
-    tread = Material("GXTread", tread_texture, scroll_mapper=True)
-    flash = Material("GXFlash", flash_texture, shader=ADDITIVE, emissive=(255, 255, 255))
-
+def hull(model, body, tread, team):
+    """Hull, running gear, TREADSL/TREADSR and the hull team panels (HOUSECOLOR02); shared with the microwave tank."""
     # --- Hull -------------------------------------------------------------------------------
     hull = Mesh("HULL", body)
     b = Builder(hull, ShadeFn(height=7.0))
@@ -73,6 +61,29 @@ def build(name, body_texture, tread_texture, team_texture, flash_texture, varian
                      uv_fn=lambda p, d=direction: (d * p[0] / 6.0, (p[1] - 4.6 if p[1] > 0 else p[1] + 6.98) / 2.4))
         tb.extrude_y(track_profile, y0, y1)
         model.attach("ROOTTRANSFORM", mesh)
+
+    team_hull = Mesh("HOUSECOLOR02", team)
+    th = Builder(team_hull, ShadeFn(height=7.0, floor=0.75))
+    for y0, y1 in ((-7.48, -7.4), (7.4, 7.48)):
+        th.box((-12.0, y0, 3.7), (8.0, y1, 4.25), Region(0, 0, 1, 1, world_size=8.0))
+    model.attach("ROOTTRANSFORM", team_hull)
+
+
+def build(name, body_texture, tread_texture, team_texture, flash_texture, variant="mbt"):
+    """variant "mbt" replaces the Crusader; "paladin" adds reactive armour and a laser defence turret."""
+    turret_bone = "TURRET01" if variant == "paladin" else "TURRET"
+    model = Model(name)
+    model.add_bone(turret_bone, "ROOTTRANSFORM", (TURRET_X, 0, TURRET_Z))
+    model.add_bone("BARREL", turret_bone, (TURRET_X + 9.8, 0, GUN_Z))
+    model.add_bone("TURRETMS", "BARREL", (TURRET_X + 30.4, 0, GUN_Z))
+    model.add_bone("TURRETFX", "BARREL", (TURRET_X + 30.4, 0, GUN_Z))
+
+    body = Material("GXBody", body_texture, specular=(60, 60, 55), shininess=12.0)
+    team = Material("GXTeam", team_texture)
+    tread = Material("GXTread", tread_texture, scroll_mapper=True)
+    flash = Material("GXFlash", flash_texture, shader=ADDITIVE, emissive=(255, 255, 255))
+
+    hull(model, body, tread, team)
 
     # --- Turret ------------------------------------------------------------------------------
     turret = Mesh("TURRETBODY", body)
@@ -131,12 +142,6 @@ def build(name, body_texture, tread_texture, team_texture, flash_texture, varian
     for y0, y1 in ((-4.85, -4.8), (4.4, 4.45)):
         tt.box((tx - 12.9, y0, 6.5), (tx - 11.2, y1, 7.0), Region(0, 0, 1, 1, world_size=8.0))
     model.attach(turret_bone, team_turret)
-
-    team_hull = Mesh("HOUSECOLOR02", team)
-    th = Builder(team_hull, ShadeFn(height=7.0, floor=0.75))
-    for y0, y1 in ((-7.48, -7.4), (7.4, 7.48)):
-        th.box((-12.0, y0, 3.7), (8.0, y1, 4.25), Region(0, 0, 1, 1, world_size=8.0))
-    model.attach("ROOTTRANSFORM", team_hull)
 
     # --- Gun ---------------------------------------------------------------------------------
     gun = Mesh("GUN", body)

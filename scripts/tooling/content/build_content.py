@@ -22,13 +22,16 @@ sys.path.insert(0, os.path.join(HERE, "models"))
 import textures  # noqa: E402
 from PIL import Image  # noqa: E402
 from render import render  # noqa: E402
+import gx_ambulance  # noqa: E402
 import gx_apache  # noqa: E402
 import gx_buildings  # noqa: E402
 import gx_chinook  # noqa: E402
 import gx_dozer  # noqa: E402
+import gx_jets  # noqa: E402
 import gx_jltv  # noqa: E402
 import gx_mlrs  # noqa: E402
 import gx_mbt  # noqa: E402
+import gx_microwave  # noqa: E402
 
 PACK_NAME = "GeneralsXContent.big"
 
@@ -53,6 +56,7 @@ def write_big(path, files):
 TAN = [(176, 160, 118), (128, 116, 82), (92, 86, 64)]
 WOODLAND = [(98, 104, 74), (70, 64, 46), (44, 46, 38)]
 HELI = [(92, 98, 88), (78, 84, 76), (64, 70, 64)]
+JET = [(150, 156, 162), (128, 134, 140), (108, 114, 120)]
 
 
 def build_textures(tex_dir):
@@ -60,7 +64,8 @@ def build_textures(tex_dir):
     out["gxmbt_body.tga"] = textures.camo_atlas(1024, seed=11, palette=TAN)
     out["gxpal_body.tga"] = textures.camo_atlas(1024, seed=21, palette=WOODLAND)
     out["gxheli_body.tga"] = textures.camo_atlas(1024, seed=31, palette=HELI)
-    for name in ("gxmbt_body", "gxpal_body", "gxheli_body"):
+    out["gxjet_body.tga"] = textures.camo_atlas(1024, seed=51, palette=JET)
+    for name in ("gxmbt_body", "gxpal_body", "gxheli_body", "gxjet_body"):
         out[name + "d.tga"] = textures.burnt(out[name + ".tga"], seed=12)
     out["gxmbt_tread.tga"] = textures.tread(256, 64, links=8, seed=13)
     out["gxteam.tga"] = textures.team_panel(128, seed=14)
@@ -91,6 +96,12 @@ def build_models(w3d_dir, tex):
             "AVGXCHINOOK" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxrotor.tga")
         models["AVGXAPACHE" + suffix] = gx_apache.build(
             "AVGXAPACHE" + suffix, f"gxheli_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", "gxrotor.tga")
+        models["AVGXMICRO" + suffix] = gx_microwave.build(
+            "AVGXMICRO" + suffix, f"gxpal_body{d}.tga", "gxmbt_tread.tga", "gxteam.tga", "gxglass.tga")
+        models["AVGXMEDIC" + suffix] = gx_ambulance.build("AVGXMEDIC" + suffix, f"gxmbt_body{d}.tga", "gxteam.tga", "gxglass.tga")
+        for jet, variant in (("AVGXF35", "f35"), ("AVGXWING", "wing"), ("AVGXHYPER", "hyper")):
+            models[jet + suffix] = gx_jets.build(
+                jet + suffix, f"gxjet_body{d}.tga", "gxteam.tga", "gxglass.tga", "gxflash.tga", variant=variant)
     for name, builder in gx_buildings.BUILDERS.items():
         for variant, texture in (("", "gxbld_wall.tga"), ("D", "gxbld_walld.tga"), ("E", "gxbld_walld.tga")):
             full = name + (f"_{variant}" if variant else "")
@@ -110,11 +121,44 @@ CAMEOS = {
     "GXCameo_JLTV": "AVGXJLTV",
     "GXCameo_MLRS": "AVGXMLRS",
     "GXCameo_Chinook": "AVGXCHINOOK",
+    "GXCameo_Microwave": "AVGXMICRO",
+    "GXCameo_Medic": "AVGXMEDIC",
+    "GXCameo_F35": "AVGXF35",
+    "GXCameo_Wing": "AVGXWING",
+    "GXCameo_Hyper": "AVGXHYPER",
     "GXCameo_PowerPlant": "ABGXPWR",
     "GXCameo_Barracks": "ABGXBARRACKS",
     "GXCameo_WarFactory": "ABGXWARFACT",
     "GXCameo_Supply": "ABGXSUPPLY",
     "GXCameo_CommandCenter": "ABGXCMDHQ",
+    "GXCameo_Patriot": "ABGXPATRIOT",
+    "GXCameo_FireBase": "ABGXFIREBASE",
+    "GXCameo_DropZone": "ABGXDROPZONE",
+}
+# Retail command bar images redrawn with our cameos. The retail MappedImages load from TextureSize_*
+# before HandCreated, so redefining them here swaps the picture on every button and portrait that uses
+# them, the generals' variants included, without overriding any Object or CommandButton.
+RETAIL_CAMEOS = {
+    "GXCameo_MBT": ["SACLeopard"],
+    "GXCameo_Paladin": ["SAPaladin"],
+    "GXCameo_Dozer": ["SACDozer"],
+    "GXCameo_Apache": ["SACCommanche"],
+    "GXCameo_JLTV": ["SAHummer"],
+    "GXCameo_MLRS": ["SACTomahawk"],
+    "GXCameo_Chinook": ["SAChinook", "SAComChinok"],
+    "GXCameo_Microwave": ["SAThunderBolt"],
+    "GXCameo_Medic": ["SAAmbulance"],
+    "GXCameo_F35": ["SACRaptor", "SAKingRap"],
+    "GXCameo_Wing": ["SAStealth"],
+    "GXCameo_Hyper": ["SAAurora", "SAFulArAurora"],
+    "GXCameo_PowerPlant": ["SAPowerPlant"],
+    "GXCameo_Barracks": ["SABarracks"],
+    "GXCameo_WarFactory": ["SACWeaponsfact"],
+    "GXCameo_Supply": ["SASupplyCntr"],
+    "GXCameo_CommandCenter": ["SAComCentr"],
+    "GXCameo_Patriot": ["SAPatriot"],
+    "GXCameo_FireBase": ["SAFirebase"],
+    "GXCameo_DropZone": ["SADropZone"],
 }
 # Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
 DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}
@@ -157,8 +201,9 @@ def build_cameos(stage, tex_dir, models, tex):
         portrait = textures.cameo_frame(fit(render(model, tex, size=(640, 640), yaw=30, pitch=20, hide=DEFAULT_HIDDEN), (216, 178)), (216, 178))
         sheet.paste(button, (x, y))
         sheet.paste(portrait, (x + 128, y))
-        mapped(cameo, texture, x, y, x + 120, y + 96)
-        mapped(cameo + "_L", texture, x + 128, y, x + 344, y + 178)
+        for name in [cameo] + RETAIL_CAMEOS.get(cameo, []):
+            mapped(name, texture, x, y, x + 120, y + 96)
+            mapped(name + "_L", texture, x + 128, y, x + 344, y + 178)
     for page, sheet in enumerate(sheets):
         textures.save_tga(sheet, os.path.join(tex_dir, "gxcameos.tga" if page == 0 else f"gxcameos{page + 1}.tga"))
     ini_dir = os.path.join(stage, "Data", "INI", "MappedImages", "HandCreated")
