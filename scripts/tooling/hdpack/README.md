@@ -40,7 +40,7 @@ Useful options:
 - `--limit 30`: stop after N textures
 - `--preview-dir previews`: write `<name>_before.png` / `<name>_after.png` pairs and `compare_001.jpg`, `compare_002.jpg`, ... (40 textures per sheet, 1:1 crops, bicubic on the left, pack on the right)
 - `--exclude-list keep.txt`: texture names that keep the original (one per line)
-- `--safe-list safe.txt`: texture names or globs (one per line, `#` comments) upscaled with Lanczos and a light unsharp mask instead of the AI model, for lettering the model would warp. Names with sign, text, logo, letter, number, digit, font, billboard, poster, banner or decal always take this path. The report lists them under `safe_upscaled`.
+- `--safe-list safe.txt`: texture names or globs (one per line, `#` comments) upscaled with Lanczos and a light unsharp mask instead of the AI model, for lettering the model would warp. Built-in patterns (`SAFE_PATTERNS` in hdpack.py, from the review of the full retail set) always take this path: lettering, flags and emblems, water caustics, fine ground and snow noise, night light maps and a few textures the model fills with invented patterns. The report lists them under `safe_upscaled`.
 - `--check <pack>`: check a built pack (repeat for each `_01`, `_02` part) without building. Lists tree textures (magenta trees), UI textures and GeneralsX content pack textures in it and exits 1 if there are any. Needs `--game-dir` only.
 - `--upscaler lanczos`: plain resize, to check the pipeline without a GPU
 - `--scale 2`: 2x instead of 4x
