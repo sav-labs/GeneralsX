@@ -265,10 +265,87 @@ def check_pack(paths, archives, game_dirs):
 
 # ---------------------------------------------------------------- upscaling
 
-def upscale_safe(img, size):
-    """Lanczos plus a light unsharp mask: sharper than plain resize, never invents shapes."""
+def tile_axes(img, ratio=1.6):
+    """(x, y): whether the texture wraps around seamlessly along each axis, i.e. the jump
+    from the last column (row) to the first is no larger than between neighbours inside."""
+    import numpy as np
+    a = np.asarray(img.convert("RGB"), dtype=np.float32)
+    if min(a.shape[:2]) < 4:
+        return False, False
+    def wraps(axis):
+        inner = np.abs(np.diff(a, axis=axis)).mean()
+        edge = np.abs(np.take(a, 0, axis=axis) - np.take(a, -1, axis=axis)).mean()
+        return bool(edge <= ratio * max(inner, 1.0))
+    return wraps(1), wraps(0)
+
+
+def pad_hw(arr, pad, tiles):
+    """Pad an HxW(xC) array by `pad` px: wrapped along tiling axes, edge-replicated otherwise."""
+    import numpy as np
+    rest = [(0, 0)] * (arr.ndim - 2)
+    arr = np.pad(arr, [(pad, pad), (0, 0)] + rest, mode="wrap" if tiles[1] else "edge")
+    return np.pad(arr, [(0, 0), (pad, pad)] + rest, mode="wrap" if tiles[0] else "edge")
+
+
+RESIZE_PAD = 8
+
+
+def wrap_resize(img, size, tiles=(False, False), sharpen=False):
+    """Lanczos resize with wrap-around context along tiling axes, so a tileable texture
+    still tiles without a seam (a plain resize clamps at the border)."""
+    import numpy as np
     from PIL import ImageFilter
-    return img.resize(size, Image.Resampling.LANCZOS).filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
+    w, h = img.size
+    fx, fy = size[0] / w, size[1] / h
+    padded = Image.fromarray(pad_hw(np.asarray(img), RESIZE_PAD, tiles), img.mode)
+    out = padded.resize((round(padded.width * fx), round(padded.height * fy)), Image.Resampling.LANCZOS)
+    if sharpen:
+        out = out.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
+    x, y = round(RESIZE_PAD * fx), round(RESIZE_PAD * fy)
+    return out.crop((x, y, x + size[0], y + size[1]))
+
+
+def upscale_safe(img, size, tiles=(False, False)):
+    """Lanczos plus a light unsharp mask: sharper than plain resize, never invents shapes."""
+    return wrap_resize(img, size, tiles, sharpen=True)
+
+
+def gaussian(arr, sigma, tiles):
+    """Separable Gaussian blur of an HxWxC float array, wrapping along tiling axes."""
+    import numpy as np
+    r = max(1, int(sigma * 3))
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2).astype(np.float32)
+    k /= k.sum()
+    h, w = arr.shape[:2]
+    padded = pad_hw(arr, r, tiles)
+    rows = sum(k[i] * padded[i:i + h] for i in range(len(k)))
+    return sum(k[i] * rows[:, i:i + w] for i in range(len(k)))
+
+
+GUIDE_SIGMA = 2.0      # output px; about half a source pixel at 4x
+GUIDE_STRENGTH = 0.8   # share of the model's fine detail where it agrees with the source
+GUIDE_LIMIT = 0.25     # largest detail step the model may add (0..1 colour)
+GUIDE_AGREE = 0.05     # coarse colour difference at which the model's detail is dropped
+
+
+def guided_detail(lanczos, model, tiles=(False, False)):
+    """Lanczos shapes with the model's fine detail, only where the model agrees with the source.
+
+    Both results are split into a coarse band (Gaussian, about a source pixel) and a
+    fine band. The coarse band always comes from Lanczos, so letters, emblems, glows and
+    patterns keep the source's shapes. The fine band is the model's (clamped), faded out
+    wherever the model's coarse band moved away from Lanczos, which is exactly where it
+    repainted something instead of sharpening it.
+    """
+    import numpy as np
+    lan = np.asarray(lanczos.convert("RGB"), dtype=np.float32) / 255.0
+    mod = np.asarray(model.convert("RGB").resize(lanczos.size, Image.Resampling.LANCZOS), dtype=np.float32) / 255.0
+    lan_low, mod_low = gaussian(lan, GUIDE_SIGMA, tiles), gaussian(mod, GUIDE_SIGMA, tiles)
+    disagree = gaussian(np.abs(mod_low - lan_low).mean(axis=2, keepdims=True), GUIDE_SIGMA * 2, tiles)
+    gate = GUIDE_STRENGTH * np.exp(-(disagree / GUIDE_AGREE) ** 2)
+    fine = gate * np.clip(mod - mod_low, -GUIDE_LIMIT, GUIDE_LIMIT) + (1 - gate) * (lan - lan_low)
+    out = np.clip(lan_low + fine, 0.0, 1.0)
+    return Image.fromarray((out * 255.0).round().astype(np.uint8), "RGB")
 
 
 def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
@@ -313,18 +390,20 @@ def onnx_session(model):
     return session
 
 
-def upscale_rgb_onnx(images, session, tile):
+def upscale_rgb_onnx(images, session, tile, wrap=None):
     """4x upscale with the Real-ESRGAN ONNX model, tile by tile to bound GPU memory.
 
-    Each tile is read with TILE_PAD px of context on every side (edge-replicated at
-    the image border) and only its centre is kept, so tile seams do not show.
+    Each tile is read with TILE_PAD px of context on every side and only its centre is
+    kept, so tile seams do not show. At the image border the context is edge-replicated,
+    or wrapped around along the axes `wrap[key]` says tile (see tile_axes), so those still tile.
     """
     import numpy as np
     out = {}
     for key, img in images.items():
-        src = np.asarray(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
-        _, h, w = src.shape
-        padded = np.pad(src, ((0, 0), (TILE_PAD, TILE_PAD), (TILE_PAD, TILE_PAD)), mode="edge")
+        src = np.asarray(img, dtype=np.float32) / 255.0
+        h, w = src.shape[:2]
+        tiles = (wrap or {}).get(key, (False, False))
+        padded = pad_hw(src, TILE_PAD, tiles).transpose(2, 0, 1)
         result = np.zeros((3, h * 4, w * 4), dtype=np.float32)
         for y in range(0, h, tile):
             for x in range(0, w, tile):
@@ -476,6 +555,67 @@ def review(sources, keys, cache_dir, settings, out_ext, review_dir, count):
     print(f"reviewed {len(keys)} textures, worst {len(worst)} written to {review_dir}")
 
 
+def lab(src_dir, out_dir, session, tile, scale):
+    """Compare upscalers on loose texture files: source, Lanczos (current safe path),
+    the raw model and the guided blend, plus a 2x2 tiling crop for tileable textures.
+    Writes lab_001.jpg, ... and lab.json with the drift of each method."""
+    from PIL import ImageDraw
+    os.makedirs(out_dir, exist_ok=True)
+    files = sorted(f for f in Path(src_dir).iterdir() if f.suffix.lower() in (".dds", ".tga"))
+    cell = SHEET_CELL
+    rows, scores = [], []
+    for f in files:
+        stem = f.stem.lower()
+        try:
+            img = decode(f.read_bytes())
+        except Exception as e:
+            print(f"  skip {stem}: {e}", file=sys.stderr)
+            continue
+        if min(img.size) < MIN_SOURCE_SIZE:
+            continue
+        size = target_size(*img.size, scale)
+        rgb = img.convert("RGB")
+        tiles = tile_axes(rgb)
+        tileable = any(tiles)
+        lan = upscale_safe(rgb, size, tiles)
+        if session is not None:
+            mod = upscale_rgb_onnx({stem: rgb}, session, tile, {stem: tiles})[stem]
+            mod = mod.resize(size, Image.Resampling.LANCZOS) if mod.size != size else mod
+        else:
+            mod = lan
+        gui = guided_detail(wrap_resize(rgb, size, tiles), mod, tiles)
+        results = {"lanczos": lan, "model": mod, "guided": gui}
+        score = {k: round(drift(img, v.convert("RGBA")), 2) for k, v in results.items()}
+        scores.append({"texture": stem, "tiles": tiles, **score})
+        w, h = size
+        cw, ch = min(cell, w), min(cell, h)
+        box = ((w - cw) // 2, (h - ch) // 2, (w - cw) // 2 + cw, (h - ch) // 2 + ch)
+        cells = [rgb.resize(size, Image.Resampling.NEAREST).crop(box)] + [v.crop(box) for v in results.values()]
+        if tileable:
+            for v in (lan, gui):
+                quad = Image.new("RGB", (w * 2, h * 2))
+                for y in range(2):
+                    for x in range(2):
+                        quad.paste(v, (x * w, y * h))
+                cells.append(quad.crop((w - cw // 2, h - ch // 2, w + cw // 2, h + ch // 2)))
+        label = f"{stem}  drift lanczos {score['lanczos']}  model {score['model']}  guided {score['guided']}"
+        rows.append((label, cells))
+    names = "source x4 nearest | lanczos (now) | model | guided | seam: lanczos | seam: guided"
+    for page, first in enumerate(range(0, len(rows), SHEET_ROWS // 2), start=1):
+        chunk = rows[first:first + SHEET_ROWS // 2]
+        sheet = Image.new("RGB", (6 * (cell + 6), 20 + len(chunk) * (cell + 22)), (32, 32, 32))
+        draw = ImageDraw.Draw(sheet)
+        draw.text((4, 4), names, fill=(255, 255, 255))
+        for row, (label, cells) in enumerate(chunk):
+            y = 20 + row * (cell + 22)
+            draw.text((4, y + 2), label, fill=(255, 255, 0))
+            for col, c in enumerate(cells):
+                sheet.paste(c, (col * (cell + 6), y + 18))
+        sheet.save(Path(out_dir, f"lab_{page:03d}.jpg"), quality=90)
+    Path(out_dir, "lab.json").write_text(json.dumps(scores, indent=2))
+    print(f"lab: {len(rows)} textures compared, sheets in {out_dir}")
+
+
 # ---------------------------------------------------------------- main
 
 def decode(data):
@@ -504,7 +644,7 @@ def default_esrgan():
 def main():
     global MAX_OUTPUT_SIZE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--game-dir", action="append", required=True,
+    ap.add_argument("--game-dir", action="append",
                     help="Folder with the retail .big files (repeat for Generals + Zero Hour; later wins)")
     ap.add_argument("--out", help="Output archive, e.g. <game>/!HDTextures.big")
     ap.add_argument("--check", action="append", metavar="PACK",
@@ -532,8 +672,17 @@ def main():
     ap.add_argument("--review-count", type=int, default=200, help="Textures in the review sheets")
     ap.add_argument("--terrain", action="store_true",
                     help="Upscale Art/Terrain/ tiles to TGA for the HD terrain loader instead of model textures")
+    ap.add_argument("--lab", metavar="DIR",
+                    help="Only compare upscalers on the loose .dds/.tga files in DIR; sheets go to --lab-out")
+    ap.add_argument("--lab-out", default="hdpack-lab", help="Output folder of --lab")
     ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.lab:
+        session = onnx_session(args.onnx) if args.upscaler == "onnx" else None
+        lab(args.lab, args.lab_out, session, args.tile, args.scale)
+        return
+    if not args.game_dir:
+        ap.error("--game-dir is required unless --lab is given")
     if args.check:
         archives = collect_archives(args.game_dir)
         total, problems = check_pack(args.check, archives, args.game_dir)

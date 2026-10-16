@@ -51,3 +51,18 @@ Useful options:
 - `--review-dir <dir>`: check quality before shipping. Ranks the cached results by how much the model changed them compared with a plain Lanczos upscale (8 px blocks, 99th percentile), and writes `compare_NNN.jpg` (left: plain upscale with name and score, right: pack result) and `review.json` for the worst `--review-count` (default 200). No pack is written. Bad ones go into `--exclude-list`.
 - `--terrain`: build a terrain pack instead (`--out "<game>\!HDTerrain.big"`): Art/Terrain/ tiles are upscaled to exactly 4x (2x when 4x would pass `--max-size`) and written as RLE TGA under their original names, which the HD terrain loader picks up. Only sheets that `Data/INI/Terrain.ini` uses as terrain textures are upscaled; tree textures (`TextureName` of W3DTreeDraw) stay retail, because the tree atlas reads them as 64 px cells and an upscaled sheet makes every tree render magenta. Use its own `--cache-dir` or the default next to the output.
 - `--tile 64`: smaller Real-ESRGAN tiles if the GPU runs out of memory (default 128)
+
+## Comparing upscalers on the safe textures (`--lab`)
+
+Textures on the safe list (lettering, flags, water caustics, ground strips, noise and night maps) skip the AI model and get Lanczos. To try better methods on them without building a pack, put loose `.dds`/`.tga` copies in a folder and run:
+
+```
+hdpack.exe --lab <folder> --lab-out <sheets folder>
+```
+
+Each row of `lab_001.jpg`, ... shows the source (4x nearest), Lanczos (the current safe path), the raw model and the guided blend, plus a 2x2 tiling crop of Lanczos and guided for textures that tile. `lab.json` holds the drift of each method (lower is closer to the source).
+
+- Tiling is detected per axis (`tile_axes`): the jump from the last column or row to the first is compared with the jumps inside. Tiling textures are resized and upscaled with wrap-around context, so they stay seamless.
+- Guided blend (`guided_detail`): the coarse band (about one source pixel) always comes from Lanczos, so shapes stay as in the source; the model only adds fine detail, and only where its coarse band agrees with Lanczos.
+
+The lab does not change what goes into the pack.
