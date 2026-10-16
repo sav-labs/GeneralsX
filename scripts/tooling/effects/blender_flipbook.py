@@ -52,55 +52,64 @@ def setup_explosion(g, rng):
 
 
 def setup_smoke(g, rng):
+    # A hot soot burst with no fuel: the same rolling billows as the explosion's late frames.
     nx, ny, nz = g.shape
-    g.buoyancy, g.weight, g.vorticity = 3.0, 0.2, 3.0
-    g.cooling, g.expansion = 0.6, 0.0
-    c = (nx / 2, ny / 2, nz * 0.12)
-    m = g.blob(c, nx * 0.11, 0.6)
-    g.density += m * 2.2
-    g.temp += m * 1.2
-    g.radial(c, m, 1.2, 0.5)
-    g.turbulence(m, 2.5)
+    g.buoyancy, g.weight, g.vorticity = 4.0, 0.0, 6.0
+    g.cooling, g.expansion = 0.7, 0.0
+    base = (nx / 2, ny / 2, nz * 0.16)
+    for i in range(7):
+        off = rng.normal(0, nx * 0.05, 3) * (1, 1, 0.6)
+        c = (base[0] + off[0], base[1] + off[1], base[2] + abs(off[2]))
+        m = g.blob(c, nx * rng.uniform(0.05, 0.08), 0.5)
+        g.density += m * 2.0
+        g.temp += m * 1.6
+        g.expand += m * 50.0
+        g.radial(c, m, rng.uniform(3.0, 5.0), 1.0)
+    g.turbulence(np.clip(g.density, 0, 1), 3.0)
     return dict(frames=96, substeps=2, dt=1 / 60.0, emit=None)
 
 
 def setup_fire(g, rng):
     nx, ny, nz = g.shape
-    g.buoyancy, g.weight, g.vorticity = 14.0, 0.1, 6.0
-    g.burn_rate, g.heat, g.soot, g.expansion, g.cooling = 2.5, 2.0, 0.35, 0.2, 1.6
-    g.density_decay = 0.5
-    c = (nx / 2, ny / 2, nz * 0.08)
-    src = g.blob(c, nx * 0.12, 0.5) * (g.gz < nz * 0.12)
+    g.buoyancy, g.weight, g.vorticity = 12.0, 0.0, 7.0
+    g.burn_rate, g.heat, g.soot, g.expansion, g.cooling = 3.0, 1.6, 0.25, 0.3, 1.8
+    g.flame_decay, g.glow_temp = 5.0, 1.3
+    g.density_decay = 1.5
+    c = (nx / 2, ny / 2, nz * 0.06)
+    src = g.blob(c, nx * 0.2, 0.6) * (g.gz < nz * 0.1)
 
     def emit(frame):
-        # Feed the flame for the first half so the lick grows, then let it burn out.
-        if frame < 24:
-            g.fuel += src * 0.35
-            g.temp += src * 0.5
-            g.turbulence(src, 1.5)
-    return dict(frames=64, substeps=2, dt=1 / 60.0, emit=emit)
+        # Steady burning: the atlas loops a fully developed fire, so feed it for the whole run.
+        g.fuel += src * 0.6
+        g.temp += src * 0.8
+        g.turbulence(src, 2.5)
+    return dict(frames=88, warmup=24, substeps=2, dt=1 / 60.0, emit=emit)
 
 
 def setup_dust(g, rng):
+    # Ground burst: blobs hugging the floor thrown outward, little lift.
     nx, ny, nz = g.shape
-    g.buoyancy, g.weight, g.vorticity = 0.6, 0.05, 2.0
-    g.cooling, g.expansion, g.drag = 0.8, 0.0, 0.04
-    c = (nx / 2, ny / 2, nz * 0.05)
-    m = g.blob(c, nx * 0.1, 0.6)
-    g.density += m * 1.8
-    g.temp += m * 0.6
-    g.expand += m * 30.0
-    g.radial(c, m, 5.0, 0.8)
-    g.turbulence(m, 2.0)
+    g.buoyancy, g.weight, g.vorticity = 1.2, 0.0, 6.0
+    g.cooling, g.expansion, g.drag = 0.8, 0.0, 0.03
+    base = (nx / 2, ny / 2, nz * 0.08)
+    for i in range(8):
+        off = rng.normal(0, nx * 0.05, 3) * (1, 1, 0.3)
+        c = (base[0] + off[0], base[1] + off[1], base[2] + abs(off[2]))
+        m = g.blob(c, nx * rng.uniform(0.04, 0.07), 0.5)
+        g.density += m * 1.8
+        g.temp += m * 0.8
+        g.expand += m * 70.0
+        g.radial(c, m, rng.uniform(6.0, 9.0), 1.5)
+    g.turbulence(np.clip(g.density, 0, 1), 3.0)
     return dict(frames=80, substeps=2, dt=1 / 60.0, emit=None)
 
 
 KINDS = {
     # grid shape at scale 1, cell size, smoke colour, density gain, fire emission gain, view framing
     "explosion": dict(setup=setup_explosion, shape=(80, 80, 128), smoke=(0.42, 0.39, 0.36), dens=2.0, fire=12.0),
-    "smoke": dict(setup=setup_smoke, shape=(64, 64, 96), smoke=(0.07, 0.065, 0.06), dens=4.0, fire=0.0),
-    "fire": dict(setup=setup_fire, shape=(56, 56, 96), smoke=(0.06, 0.05, 0.045), dens=3.0, fire=26.0),
-    "dust": dict(setup=setup_dust, shape=(80, 80, 56), smoke=(0.45, 0.39, 0.31), dens=3.0, fire=0.0),
+    "smoke": dict(setup=setup_smoke, shape=(72, 72, 112), smoke=(0.36, 0.34, 0.32), dens=2.5, fire=0.0),
+    "fire": dict(setup=setup_fire, shape=(64, 64, 112), smoke=(0.06, 0.05, 0.045), dens=3.0, fire=26.0),
+    "dust": dict(setup=setup_dust, shape=(96, 96, 56), smoke=(0.78, 0.68, 0.52), dens=2.0, fire=0.0),
 }
 
 
@@ -128,7 +137,8 @@ def simulate(kind, scale, seed, grid):
     rng = np.random.default_rng(seed)
     run = cfg["setup"](g, rng)
     n = grid * grid
-    pick = set(int(round(1 + i * (run["frames"] - 1) / (n - 1))) for i in range(n))
+    first = run.get("warmup", 0) + 1
+    pick = set(int(round(first + i * (run["frames"] - first) / (n - 1))) for i in range(n))
     frames = []
     t = time.time()
     for f in range(1, run["frames"] + 1):
@@ -347,7 +357,7 @@ def setup_scene(shape, dx, tile, samples, view):
     scene.cycles.device = "CPU"
     scene.cycles.samples = samples
     scene.cycles.use_denoising = True
-    scene.cycles.volume_bounces = 1
+    scene.cycles.volume_bounces = 3
     scene.cycles.volume_step_rate = 2.0
     scene.cycles.max_bounces = 4
     scene.render.film_transparent = True
@@ -388,6 +398,17 @@ def setup_scene(shape, dx, tile, samples, view):
     scene.collection.objects.link(cam)
     scene.camera = cam
     return scene
+
+
+def keep_glow(px):
+    """Cycles' alpha only counts absorption, so pure fire would vanish under alpha blending: raise
+    alpha to the brightness and divide the colour back so it reads as opaque glowing gas."""
+    rgb, a = px[..., :3], px[..., 3:]
+    premul = rgb * a
+    lum = premul.max(-1, keepdims=True)
+    a2 = np.clip(np.maximum(a, lum * 1.15), 0, 1)
+    rgb2 = np.where(a2 > 1e-4, premul / np.maximum(a2, 1e-4), 0)
+    return np.concatenate([np.clip(rgb2, 0, 1), a2], -1)
 
 
 def pack_tiles(raw, grid, tile):
@@ -450,7 +471,7 @@ def render_atlas(kind, frames, shape, dx, grid, tile, samples, out, only=None):
         bpy.data.images.remove(img)
         print("render %s %d/%d" % (kind, i + 1, len(frames)), flush=True)
     if only is not None:
-        strip = np.concatenate(raw, 1)
+        strip = keep_glow(np.concatenate(raw, 1))
         img = bpy.data.images.new("strip", strip.shape[1], strip.shape[0], alpha=True)
         img.pixels = strip[::-1].ravel()
         img.filepath_raw = out
@@ -458,12 +479,7 @@ def render_atlas(kind, frames, shape, dx, grid, tile, samples, out, only=None):
         img.save()
         return
     atlas = pack_tiles(raw, grid, tile)
-    rgb, a = atlas[..., :3], atlas[..., 3:]
-    premul = rgb * a
-    lum = premul.max(-1, keepdims=True)
-    a2 = np.clip(np.maximum(a, lum * 1.15), 0, 1)
-    rgb2 = np.where(a2 > 1e-4, premul / np.maximum(a2, 1e-4), 0)
-    atlas = np.concatenate([np.clip(rgb2, 0, 1), a2], -1)
+    atlas = keep_glow(atlas)
     yy, xx = np.mgrid[0:tile, 0:tile] / (tile - 1) * 2 - 1
     edge = np.clip((1.0 - np.maximum(abs(xx), abs(yy))) / 0.06, 0, 1)
     for r in range(grid):
