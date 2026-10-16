@@ -239,6 +239,14 @@ jobs:
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
           "@ | Set-Content artifacts/INSTALL.txt
+          # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
+          @"
+          commit=${{ github.sha }}
+          branch=${{ github.ref_name }}
+          run_id=${{ github.run_id }}
+          built_utc=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
+          "@ | Set-Content artifacts/version.txt
+          Copy-Item artifacts/version.txt version.txt
           Compress-Archive -Path artifacts/* -DestinationPath windows-x64-GeneralsXZH.zip
 
       - name: Upload runtime
@@ -248,3 +256,40 @@ jobs:
           path: windows-x64-GeneralsXZH.zip
           archive: false
           retention-days: 7
+
+  # GeneralsX @build Claude 16/10/2026 Every green build of main replaces the zip on the "nightly-x64" release, so the
+  # test PC downloads the latest main build from a fixed public link without a token or another machine:
+  # https://github.com/sav-labs/GeneralsX/releases/download/nightly-x64/windows-x64-GeneralsXZH.zip
+  publish-nightly:
+    name: Publish nightly-x64 release
+    needs: build-windows-x64
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-nightly-x64
+      cancel-in-progress: false
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-x64-GeneralsXZH.zip
+          path: package
+
+      - name: Update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          zip=$(find package -name 'windows-x64-GeneralsXZH.zip' | head -n 1)
+          unzip -p "$zip" version.txt > version.txt
+          cat version.txt
+          if ! gh release view nightly-x64 >/dev/null 2>&1; then
+            gh release create nightly-x64 --target "$GITHUB_SHA" --prerelease \
+              --title "Nightly Windows x64" --notes "Latest green Windows x64 build of main."
+          fi
+          gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly-x64" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          gh release edit nightly-x64 --notes "Latest green Windows x64 build of main: commit $GITHUB_SHA, run $GITHUB_RUN_ID ($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID)."
+          gh release upload nightly-x64 "$zip" version.txt --clobber
