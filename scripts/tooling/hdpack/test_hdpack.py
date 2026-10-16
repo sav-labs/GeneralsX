@@ -125,6 +125,25 @@ def main():
         tile = Image.open(io.BytesIO(data))
         assert tile.size == (256, 512) and tile.mode == "RGB", (tile.size, tile.mode)
 
+        # Textures in GeneralsX content packs stay with the content pack, never in the HD pack.
+        game2 = Path(tmp, "game2")
+        game2.mkdir()
+        hdpack.write_big(game2 / "Textures.big", [
+            ("Art\\Textures\\AVTank.tga", tga((64, 64), (90, 120, 60, 255))),
+            ("Art\\Textures\\AVJeep.tga", tga((64, 64), (60, 60, 60, 255))),
+        ])
+        hdpack.write_big(game2 / "GeneralsXContent.big", [
+            ("Art\\Textures\\AVJeep.tga", tga((64, 64), (200, 0, 0, 255))),
+            ("Art\\Textures\\GXTank.tga", tga((64, 64), (0, 200, 0, 255))),
+        ])
+        content_out = Path(tmp, "!HDContent.big")
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game2), "--out", str(content_out),
+                        "--upscaler", "lanczos"], check=True, capture_output=True)
+        assert list(hdpack.read_big(content_out)) == ["art/textures/avtank.dds"], list(hdpack.read_big(content_out))
+        report = json.loads(Path(tmp, "!HDContent.report.json").read_text())
+        assert report["content_pack_textures_excluded"] == ["avjeep", "gxtank"], report
+        assert report["written_files"] == ["Art\\Textures\\AVTank.dds"], report["written_files"]
+
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
         subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(onnx_out),
