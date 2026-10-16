@@ -848,6 +848,27 @@ static void applyRenderScale()
 	}
 }
 
+// applyPostEffects ===========================================================
+// GeneralsX @feature Claude 16/10/2026 Options.ini PostEffects (on by default) sets DXVK_POST, bloom and a
+// light colour grade in the DXVK present pass, and DXVK_FXAA, FXAA when the back buffer is not multisampled.
+// Like DXVK_FSR they must be in the process environment before the D3D8 device exists. Values the player
+// set already are kept.
+//=============================================================================
+static void applyPostEffects()
+{
+	if (TheGlobalData->m_headless)
+		return;
+
+	OptionPreferences optionPref;
+	const char *value = optionPref.getPostEffectsEnabled() ? "1" : "0";
+
+	if (GetEnvironmentVariableA( "DXVK_POST", nullptr, 0 ) == 0)
+		SetEnvironmentVariableA( "DXVK_POST", value );
+
+	if (GetEnvironmentVariableA( "DXVK_FXAA", nullptr, 0 ) == 0)
+		SetEnvironmentVariableA( "DXVK_FXAA", value );
+}
+
 // WinMain ====================================================================
 /** Application entry point */
 //=============================================================================
@@ -911,6 +932,7 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		MiniDumper::initMiniDumper(TheGlobalData->getPath_UserData());
 #endif
 		applyRenderScale();
+		applyPostEffects();
 
 		// register windows class and create application window
 		if(!TheGlobalData->m_headless && initializeAppWindows(hInstance, nCmdShow, TheGlobalData->m_windowed) == false)

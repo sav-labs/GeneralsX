@@ -1051,6 +1051,17 @@ Real OptionPreferences::getFSRSharpness() const
 	return clamp(0.0f, sharpness, 2.0f);
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini PostEffects turns the DXVK present pass effects on or off:
+// bloom with a light colour grade, and FXAA when anti-aliasing is off. On unless set to "no".
+Bool OptionPreferences::getPostEffectsEnabled() const
+{
+	OptionPreferences::const_iterator it = find("PostEffects");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
 // GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
 // overrides the default, D:\GeneralsX\bugs on Windows. Elsewhere there is no default and the capture code
 // uses a bugs folder in the user data folder.

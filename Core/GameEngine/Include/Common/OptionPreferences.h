@@ -156,6 +156,8 @@ public:
 	static Bool getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres);
 	// GeneralsX @feature Claude 15/10/2026 FSR RCAS sharpening in stops (Options.ini FSRSharpness, 0 = sharpest)
 	Real getFSRSharpness() const;
+	// GeneralsX @feature Claude 16/10/2026 DXVK bloom, colour grade and FXAA (Options.ini PostEffects, default yes)
+	Bool getPostEffectsEnabled() const;
 	// GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos (Options.ini CapturePath).
 	AsciiString getCapturePath() const;
 };
