@@ -6,7 +6,11 @@ command-bar cameos, copies the INI and string sources from content/ and packs ev
 one .big next to the game executable. Nothing from the retail game goes into the pack: the INI
 only references retail names (sounds, effects, weapons), which load from the player's own copy.
 
-Usage: build_content.py <repo root> <output dir> [--preview <dir>]
+Usage: build_content.py <repo root> <output dir> [--art] [--preview <dir>]
+
+GeneralsX @tweak Claude 16/10/2026 The procedural USA models fell short of the art bar, so the pack ships
+without them (and without their ArtRemap INI and cameos): the game draws the retail art. --art still
+builds the models and cameos into the pack, for the self-test and for previews.
 """
 
 import argparse
@@ -235,6 +239,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("repo")
     parser.add_argument("out")
+    parser.add_argument("--art", action="store_true", help="also build the procedural models and cameos")
     parser.add_argument("--preview")
     args = parser.parse_args()
 
@@ -246,9 +251,11 @@ def main():
     os.makedirs(tex_dir, exist_ok=True)
     os.makedirs(w3d_dir, exist_ok=True)
 
-    tex = build_textures(tex_dir)
-    models = build_models(w3d_dir, tex)
-    build_cameos(stage, tex_dir, models, tex)
+    models, tex = {}, None
+    if args.art or args.preview:
+        tex = build_textures(tex_dir)
+        models = build_models(w3d_dir, tex)
+        build_cameos(stage, tex_dir, models, tex)
 
     write_big(os.path.join(args.out, PACK_NAME), collect(stage))
 
