@@ -93,6 +93,11 @@ public:
 	static TextureClass *getShaderTexture(Int stage) { return m_Textures[stage];}	///<returns currently selected texture for given stage
 	///Return last activated shader.
 	static ShaderTypes getCurrentShader() {return m_currentShader;}
+	// GeneralsX @feature Claude 16/10/2026 Detail terrain shader (W3DTerrainDetail) for the three-texture blend
+	// tiles, drawn in place of the road shader when the detail terrain shader is active.
+	static Bool isTerrainDetailActive();
+	static void setTerrainDetailExtraBlend(TextureClass *tile, TextureClass *cloud, TextureClass *lightMap);
+	static void resetTerrainDetailExtraBlend();
 	/// Loads a .vso file and creates a vertex shader for it
 	static HRESULT LoadAndCreateD3DShader(const char* strFilePath, const DWORD* pDeclaration, DWORD Usage, Bool ShaderType, DWORD* pHandle);
 
