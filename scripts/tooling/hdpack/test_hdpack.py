@@ -63,9 +63,8 @@ def check_onnx_tiling(tmp):
 
 
 def check_safe_upscale(tmp, model):
-    """Tile detection, seamless resize, guided blend and the --lab sheets."""
+    """Tile detection, seamless resize and the --lab sheets."""
     import numpy as np
-    rng = np.random.default_rng(2)
     # A smooth periodic pattern tiles; the same pattern plus a ramp does not along x.
     yy, xx = np.mgrid[0:64, 0:64]
     wave = 128 + 60 * np.sin(xx * 2 * np.pi / 16) * np.cos(yy * 2 * np.pi / 32)
@@ -77,25 +76,16 @@ def check_safe_upscale(tmp, model):
     up = np.asarray(hdpack.wrap_resize(tile, (256, 256), (True, True)), dtype=np.float32)
     inner = np.abs(np.diff(up, axis=1)).max()
     assert np.abs(up[:, 0] - up[:, -1]).max() <= inner + 1, (np.abs(up[:, 0] - up[:, -1]).max(), inner)
-    # With a model that agrees with Lanczos the blend stays Lanczos.
-    lan = hdpack.wrap_resize(tile, (256, 256), (True, True))
-    same = np.asarray(hdpack.guided_detail(lan, lan, (True, True)), dtype=np.float32)
-    assert np.abs(same - np.asarray(lan, dtype=np.float32)).max() <= 2
-    # A model that repaints shapes (noise unrelated to the source) is mostly rejected.
-    junk = Image.fromarray(rng.integers(0, 256, (256, 256, 3), dtype=np.uint8), "RGB")
-    mixed = np.asarray(hdpack.guided_detail(lan, junk, (True, True)), dtype=np.float32)
-    assert np.abs(mixed - np.asarray(lan, dtype=np.float32)).mean() < 0.25 * np.abs(
-        np.asarray(junk, dtype=np.float32) - np.asarray(lan, dtype=np.float32)).mean()
-
     loose = Path(tmp, "loose")
     loose.mkdir()
     tile.save(loose / "trtile.tga")
     ramp.save(loose / "nbsign.tga")
     out = Path(tmp, "lab")
     subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--lab", str(loose), "--lab-out", str(out),
-                    "--onnx", str(model), "--tile", "32"], check=True)
+                    "--lab-model", f"a={model}", "--lab-model", f"b={model}", "--tile", "32"], check=True)
     scores = json.loads(Path(out, "lab.json").read_text())
     assert [s["texture"] for s in scores] == ["nbsign", "trtile"], scores
+    assert set(scores[1]) == {"texture", "tiles", "lanczos", "a", "b"}, scores[1]
     assert Path(out, "lab_001.jpg").is_file()
 
 
@@ -215,6 +205,15 @@ def main():
         # Listed textures (lettering) skip the AI model.
         report = json.loads(Path(tmp, "!HDTexturesOnnx.report.json").read_text())
         assert report["safe_upscaled"] == ["avhouse"], report["safe_upscaled"]
+        # Safe ground textures go through the gentle model when it is there.
+        game3 = Path(tmp, "game3")
+        game3.mkdir()
+        hdpack.write_big(game3 / "Textures.big", [("Art\\Textures\\TRDirtRoad.tga", tga((64, 64), (150, 120, 80, 255)))])
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game3), "--out", str(Path(tmp, "!Soft.big")),
+                        "--upscaler", "onnx", "--onnx", str(model), "--soft-onnx", str(model), "--tile", "32"],
+                       check=True, capture_output=True)
+        report = json.loads(Path(tmp, "!Soft.report.json").read_text())
+        assert report["soft_upscaled"] == ["trdirtroad"] and report["safe_upscaled"] == [], report
     print("hdpack self-test passed")
 
 
