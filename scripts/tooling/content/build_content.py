@@ -106,6 +106,7 @@ def build_models(w3d_dir, tex):
         for variant, texture in (("", "gxbld_wall.tga"), ("D", "gxbld_walld.tga"), ("E", "gxbld_walld.tga")):
             full = name + (f"_{variant}" if variant else "")
             models[full] = builder(full, texture, "gxteam.tga", "gxglass.tga", variant=variant)
+    models["ABGXSTRATGUN"] = gx_buildings.strategy_gun("ABGXSTRATGUN", "gxbld_wall.tga", "gxteam.tga", "gxglass.tga")
     for name, model in models.items():
         with open(os.path.join(w3d_dir, name + ".w3d"), "wb") as f:
             f.write(model.pack())
@@ -134,6 +135,9 @@ CAMEOS = {
     "GXCameo_Patriot": "ABGXPATRIOT",
     "GXCameo_FireBase": "ABGXFIREBASE",
     "GXCameo_DropZone": "ABGXDROPZONE",
+    "GXCameo_Strategy": "ABGXSTRATCTR",
+    "GXCameo_Airfield": "ABGXAIRFIELD",
+    "GXCameo_Uplink": "ABGXUPLINK",
 }
 # Retail command bar images redrawn with our cameos. The retail MappedImages load from TextureSize_*
 # before HandCreated, so redefining them here swaps the picture on every button and portrait that uses
@@ -159,6 +163,9 @@ RETAIL_CAMEOS = {
     "GXCameo_Patriot": ["SAPatriot"],
     "GXCameo_FireBase": ["SAFirebase"],
     "GXCameo_DropZone": ["SADropZone"],
+    "GXCameo_Strategy": ["SAStrategyCenter"],
+    "GXCameo_Airfield": ["SAACommand"],
+    "GXCameo_Uplink": ["SAUplink"],
 }
 # Sub-objects the Draw module hides in the default state (upgrades), left out of cameos and previews.
 DEFAULT_HIDDEN = {"TURRETUP01", "HOUSECOLOR03", "MISSILEUPGRADE"}
@@ -248,7 +255,7 @@ def main():
     if args.preview:
         os.makedirs(args.preview, exist_ok=True)
         for name, model in models.items():
-            if name.endswith("_D") or name.endswith("_E"):
+            if name.endswith("_D") or name.endswith("_E") or name == "ABGXSTRATGUN":
                 continue
             for yaw in (35, 150):
                 render(model, tex, size=(960, 720), yaw=yaw, pitch=26, background=(70, 78, 70, 255), hide=DEFAULT_HIDDEN).save(
