@@ -34,8 +34,9 @@ import openvdb  # noqa: E402
 
 def setup_explosion(g, rng):
     nx, ny, nz = g.shape
-    g.buoyancy, g.weight, g.vorticity = 5.0, 0.15, 6.0
+    g.buoyancy, g.weight, g.vorticity = 5.0, 0.0, 6.0
     g.burn_rate, g.heat, g.soot, g.expansion, g.cooling = 2.0, 1.5, 0.9, 0.8, 0.9
+    g.flame_decay, g.glow_temp = 2.5, 1.1
     base = (nx / 2, ny / 2, nz * 0.14)
     for i in range(9):
         off = rng.normal(0, nx * 0.05, 3) * (1, 1, 0.6)
@@ -96,7 +97,7 @@ def setup_dust(g, rng):
 
 KINDS = {
     # grid shape at scale 1, cell size, smoke colour, density gain, fire emission gain, view framing
-    "explosion": dict(setup=setup_explosion, shape=(80, 80, 128), smoke=(0.32, 0.29, 0.26), dens=2.5, fire=10.0),
+    "explosion": dict(setup=setup_explosion, shape=(80, 80, 128), smoke=(0.42, 0.39, 0.36), dens=2.0, fire=12.0),
     "smoke": dict(setup=setup_smoke, shape=(64, 64, 96), smoke=(0.07, 0.065, 0.06), dens=4.0, fire=0.0),
     "fire": dict(setup=setup_fire, shape=(56, 56, 96), smoke=(0.06, 0.05, 0.045), dens=3.0, fire=26.0),
     "dust": dict(setup=setup_dust, shape=(80, 80, 56), smoke=(0.45, 0.39, 0.31), dens=3.0, fire=0.0),
@@ -115,6 +116,7 @@ def parse_args():
     p.add_argument("--scale", type=float, default=1.0)
     p.add_argument("--samples", type=int, default=48)
     p.add_argument("--seed", type=int, default=3)
+    p.add_argument("--only", help="comma list of atlas frames: render just these into a strip (tuning)")
     p.add_argument("--reuse", action="store_true", help="render the cached simulation again")
     return p.parse_args(argv)
 
@@ -171,7 +173,7 @@ def material(cfg):
     tex.inputs["Scale"].default_value = 3.0
     coords = nt.nodes.new("ShaderNodeTexCoord")
     nt.links.new(coords.outputs["Object"], tex.inputs["Vector"])
-    tex.inputs["Detail"].default_value = 8.0
+    tex.inputs["Detail"].default_value = 4.0
     tex.inputs["Roughness"].default_value = 0.62
     shape = nt.nodes.new("ShaderNodeMapRange")
     shape.inputs["From Min"].default_value = 0.3
@@ -196,11 +198,11 @@ def material(cfg):
         fsum = nt.nodes.new("ShaderNodeMath")
         fsum.operation = "MULTIPLY_ADD"
         nt.links.new(heat.outputs["Fac"], fsum.inputs[0])
-        fsum.inputs[1].default_value = 0.08
+        fsum.inputs[1].default_value = 0.025
         fsum.use_clamp = True
         fl = nt.nodes.new("ShaderNodeMath")
         fl.operation = "MULTIPLY"
-        fl.inputs[1].default_value = 0.7
+        fl.inputs[1].default_value = 0.85
         nt.links.new(flame.outputs["Fac"], fl.inputs[0])
         nt.links.new(fl.outputs[0], fsum.inputs[2])
         fmod = nt.nodes.new("ShaderNodeMath")
@@ -224,7 +226,7 @@ def material(cfg):
         nt.links.new(fsum.outputs[0], inv.inputs[1])
         tint = nt.nodes.new("ShaderNodeMix")
         tint.data_type = "RGBA"
-        tint.inputs["A"].default_value = (0.02, 0.01, 0.005, 1)
+        tint.inputs["A"].default_value = (0.05, 0.035, 0.025, 1)
         tint.inputs["B"].default_value = (*cfg["smoke"], 1)
         nt.links.new(inv.outputs[0], tint.inputs["Factor"])
         nt.links.new(tint.outputs["Result"], pv.inputs["Color"])
@@ -234,10 +236,36 @@ def material(cfg):
         gain.inputs[1].default_value = cfg["fire"]
         sq = nt.nodes.new("ShaderNodeMath")
         sq.operation = "POWER"
-        sq.inputs[1].default_value = 2.0
+        sq.inputs[1].default_value = 2.6
         nt.links.new(fmod.outputs[0], sq.inputs[0])
         nt.links.new(sq.outputs[0], gain.inputs[0])
-        nt.links.new(gain.outputs[0], pv.inputs["Emission Strength"])
+        # Patchy fire: a second, coarser noise opens and closes glowing pockets inside the smoke.
+        pn = nt.nodes.new("ShaderNodeTexNoise")
+        pn.noise_dimensions = "3D"
+        pn.inputs["Scale"].default_value = 1.4
+        pn.inputs["Detail"].default_value = 3.0
+        nt.links.new(coords.outputs["Object"], pn.inputs["Vector"])
+        patch = nt.nodes.new("ShaderNodeMapRange")
+        patch.interpolation_type = "SMOOTHSTEP"
+        patch.inputs["From Min"].default_value = 0.42
+        patch.inputs["From Max"].default_value = 0.62
+        patch.inputs["To Min"].default_value = 0.08
+        patch.inputs["To Max"].default_value = 1.0
+        nt.links.new(pn.outputs["Fac"], patch.inputs["Value"])
+        # Hottest gas glows everywhere; cooler fire only in the pockets.
+        hot = nt.nodes.new("ShaderNodeMath")
+        hot.operation = "MAXIMUM"
+        nt.links.new(patch.outputs["Result"], hot.inputs[0])
+        hotr = nt.nodes.new("ShaderNodeMapRange")
+        hotr.inputs["From Min"].default_value = 0.75
+        hotr.inputs["From Max"].default_value = 1.0
+        nt.links.new(fsum.outputs[0], hotr.inputs["Value"])
+        nt.links.new(hotr.outputs["Result"], hot.inputs[1])
+        em = nt.nodes.new("ShaderNodeMath")
+        em.operation = "MULTIPLY"
+        nt.links.new(gain.outputs[0], em.inputs[0])
+        nt.links.new(hot.outputs[0], em.inputs[1])
+        nt.links.new(em.outputs[0], pv.inputs["Emission Strength"])
     nt.links.new(pv.outputs["Volume"], out.inputs["Volume"])
     return mat
 
@@ -338,7 +366,7 @@ def setup_scene(shape, dx, tile, samples, view):
     bg.inputs["Color"].default_value = (0.42, 0.48, 0.58, 1)
     bg.inputs["Strength"].default_value = 0.7
     sun_data = bpy.data.lights.new("Sun", "SUN")
-    sun_data.energy = 5.0
+    sun_data.energy = 9.0
     sun_data.angle = math.radians(4)
     sun_data.color = (1.0, 0.95, 0.88)
     sun = bpy.data.objects.new("Sun", sun_data)
@@ -362,18 +390,48 @@ def setup_scene(shape, dx, tile, samples, view):
     return scene
 
 
-def render_atlas(kind, frames, shape, dx, grid, tile, samples, out):
+def pack_tiles(raw, grid, tile):
+    """Crop every frame to the square that holds all of them, then scale it to the tile size, so the
+    effect fills the sprite instead of floating in empty margin."""
+    from PIL import Image
+    occ = np.zeros(raw[0].shape[:2], bool)
+    for px in raw:
+        occ |= px[..., 3] > 0.2
+    ys, xs = np.nonzero(occ)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    size = int(max(y1 - y0, x1 - x0) * 1.06)
+    cy, cx = (y0 + y1) // 2, (x0 + x1) // 2
+    top = max(0, min(raw[0].shape[0] - size, cy - size // 2))
+    left = max(0, min(raw[0].shape[1] - size, cx - size // 2))
+    atlas = np.zeros((grid * tile, grid * tile, 4), np.float32)
+    for i, px in enumerate(raw):
+        crop = px[top:top + size, left:left + size]
+        premul = np.concatenate([crop[..., :3] * crop[..., 3:], crop[..., 3:]], -1)
+        chans = [np.asarray(Image.fromarray(premul[..., k]).resize((tile, tile), Image.LANCZOS)) for k in range(4)]
+        out = np.clip(np.stack(chans, -1), 0, None)
+        a = np.clip(out[..., 3:], 0, 1)
+        out[..., :3] = np.where(a > 1e-4, out[..., :3] / np.maximum(a, 1e-4), 0)
+        out[..., 3:] = a
+        r, c = divmod(i, grid)
+        atlas[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile] = out
+    return atlas
+
+
+def render_atlas(kind, frames, shape, dx, grid, tile, samples, out, only=None):
     cfg = KINDS[kind]
-    scene = setup_scene(shape, dx, tile, samples, framing(frames, dx))
+    big = int(tile * 1.6)
+    scene = setup_scene(shape, dx, big, samples, framing(frames, dx))
     mat = material(cfg)
     tmp = tempfile.mkdtemp(prefix="fx" + kind)
-    atlas = np.zeros((grid * tile, grid * tile, 4), np.float32)
+    raw = []
     up = Upres(shape)
     dx_hi = dx / up.factor
     for i, (dens, flame, temp) in enumerate(frames):
+        if only is not None and i not in only:
+            continue
         dens, flame, temp = up([dens, flame, temp], i * 0.25)
         # Firm up billow edges: thin wisps fade, bodies keep their density.
-        dens = dens * np.clip(dens / 0.25, 0, 1) ** 0.6
+        dens = dens * np.clip((dens - 0.12) / 0.5, 0, 1) ** 0.9
         vdb = os.path.join(tmp, "f%03d.vdb" % i)
         wall = wall_fade(dens.shape)
         write_vdb(vdb, dx_hi, {"density": dens * wall, "flame": flame * wall, "temperature": temp * wall})
@@ -388,11 +446,18 @@ def render_atlas(kind, frames, shape, dx, grid, tile, samples, out):
         bpy.data.objects.remove(obj)
         bpy.data.volumes.remove(vol)
         img = bpy.data.images.load(png)
-        px = np.array(img.pixels[:], np.float32).reshape(tile, tile, 4)[::-1]
+        raw.append(np.array(img.pixels[:], np.float32).reshape(big, big, 4)[::-1])
         bpy.data.images.remove(img)
-        r, c = divmod(i, grid)
-        atlas[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile] = px
         print("render %s %d/%d" % (kind, i + 1, len(frames)), flush=True)
+    if only is not None:
+        strip = np.concatenate(raw, 1)
+        img = bpy.data.images.new("strip", strip.shape[1], strip.shape[0], alpha=True)
+        img.pixels = strip[::-1].ravel()
+        img.filepath_raw = out
+        img.file_format = "PNG"
+        img.save()
+        return
+    atlas = pack_tiles(raw, grid, tile)
     rgb, a = atlas[..., :3], atlas[..., 3:]
     premul = rgb * a
     lum = premul.max(-1, keepdims=True)
@@ -424,7 +489,8 @@ def main():
         shape, dx = g.shape, g.dx
         np.savez_compressed(cache, density=[f[0] for f in frames], flame=[f[1] for f in frames],
                             temp=[f[2] for f in frames], shape=shape, dx=dx)
-    render_atlas(args.kind, frames, shape, dx, args.grid, args.tile, args.samples, os.path.abspath(args.out))
+    only = [int(x) for x in args.only.split(",")] if args.only else None
+    render_atlas(args.kind, frames, shape, dx, args.grid, args.tile, args.samples, os.path.abspath(args.out), only)
     print("wrote " + args.out, flush=True)
     os._exit(0)  # skip interpreter teardown: the openvdb bindings report leaks on exit
 

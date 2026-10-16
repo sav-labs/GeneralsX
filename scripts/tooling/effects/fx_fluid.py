@@ -40,6 +40,8 @@ class Gas:
         self.density_decay = 0.0
         self.drag = 0.02
         self.expansion = 0.6
+        self.flame_decay = 6.0
+        self.glow_temp = 1.4
         self.wind = (0.0, 0.0)
 
     # --- sampling ---------------------------------------------------------------------------------
@@ -138,8 +140,8 @@ class Gas:
         self.temp += burn * self.heat
         self.expand = self.expand * 0.5 + burn / max(dt, 1e-6) * self.expansion
         self.density += burn * self.soot
-        self.flame = np.maximum(self.flame * np.exp(-6.0 * dt), np.clip(burn / max(dt, 1e-6) * 0.25, 0, 1.5))
-        self.flame = np.maximum(self.flame, np.clip((self.temp - 1.4) * 0.6, 0, 1.2) * (self.fuel > 1e-3))
+        self.flame = np.maximum(self.flame * np.exp(-self.flame_decay * dt), np.clip(burn / max(dt, 1e-6) * 0.25, 0, 1.5))
+        self.flame = np.maximum(self.flame, np.clip((self.temp - self.glow_temp) * 0.5, 0, 1.0))
         # forces
         self.w += dt * (self.buoyancy * self.temp - self.weight * self.density)
         self.u += dt * self.wind[0]
