@@ -337,12 +337,6 @@ public:
 
 	virtual TextureClass* As_TextureClass() override { return this; }
 
-	// GeneralsX @feature Claude 16/10/2026 Normal map of this texture (<name>_n.dds / .tga), looked up once
-	// by ModelNormalMapClass. The texture holds a reference to it.
-	virtual ~TextureClass() override;
-	TextureClass*			NormalMap = nullptr;
-	bool						NormalMapLookedUp = false;
-
 protected:
 
 	WW3DFormat				TextureFormat;

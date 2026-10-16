@@ -150,8 +150,6 @@ protected:
 	bool														sorting;
 	bool														AnythingToRender;
 	bool														AnyDelayedPassesToRender;
-	// GeneralsX @feature Claude 16/10/2026 The last texture coordinate set holds packed tangents (model normal maps).
-	bool														tangent_channel;
 
 	void Generate_Texture_Categories(Vertex_Split_Table& split_table,unsigned vertex_offset);
 	void Insert_To_Texture_Category(
@@ -185,7 +183,6 @@ public:
 
 	static unsigned Define_FVF(MeshModelClass* mmc,bool enable_lighting);
 	bool Is_Sorting() const { return sorting; }
-	bool Has_Tangent_Channel() const { return tangent_channel; }
 
 	void Change_Polygon_Renderer_Texture(
 		DX8PolygonRendererList& polygon_renderer_list,
@@ -238,7 +235,7 @@ public:
 class DX8RigidFVFCategoryContainer : public DX8FVFCategoryContainer
 {
 public:
-	DX8RigidFVFCategoryContainer(unsigned FVF,bool sorting,bool tangent_channel=false);
+	DX8RigidFVFCategoryContainer(unsigned FVF,bool sorting);
 	virtual ~DX8RigidFVFCategoryContainer() override;
 
 	virtual void Add_Mesh(MeshModelClass* mmc) override;
