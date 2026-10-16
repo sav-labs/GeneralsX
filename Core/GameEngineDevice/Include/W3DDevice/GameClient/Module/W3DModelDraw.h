@@ -227,6 +227,12 @@ struct ModelConditionInfo
 	mutable WeaponBarrelInfoVec				m_weaponBarrelInfoVec[WEAPONSLOT_COUNT];
 	mutable Bool											m_hasRecoilBonesOrMuzzleFlashes[WEAPONSLOT_COUNT];
 	mutable Byte											m_validStuff;
+	// GeneralsX @feature Claude 16/10/2026 When ArtRemap draws other art for m_modelName, the pristine bones
+	// above stay those of the retail model (they feed logic) and this maps each of them to the bone index of
+	// the drawn model, for recoil, muzzle flashes, FX bones and turret rotation (zero == not in the drawn model).
+	typedef std::map< NameKeyType, Int, std::less<NameKeyType> > ClientBoneIndexMap;
+	mutable ClientBoneIndexMap				m_clientBoneIndices;
+	mutable Bool											m_artRemapped;
 
 	enum
 	{
@@ -259,7 +265,12 @@ struct ModelConditionInfo
 
 	void validateStuff(RenderObjClass* robj, Real scale, const std::vector<AsciiString>& extraPublicBones) const;
 
+	/// GeneralsX @feature Claude 16/10/2026 The model to draw for this state: m_modelName unless ArtRemap replaces it.
+	AsciiString getDisplayModelName() const;
+
 private:
+	Int clientBoneIndex(NameKeyType boneName, Int logicBoneIndex) const;
+	void validateClientBoneIndices(RenderObjClass* displayRobj, Real scale) const;
 	void validateWeaponBarrelInfo() const;
 	void validateTurretInfo() const;
 	void validateCachedBones(RenderObjClass* robj, Real scale) const;

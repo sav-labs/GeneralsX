@@ -101,6 +101,7 @@
 #include "GameLogic/CrateSystem.h"
 #include "GameLogic/FPUControl.h"
 #include "GameLogic/GameLogic.h"
+#include "GameClient/ArtRemap.h"
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/Module/AIUpdate.h"
@@ -2589,6 +2590,22 @@ void GameLogic::loadMapINI( AsciiString mapName )
 	if (!TheMapCache) {
 		// Need the map cache to get the map and user map directories.
 		return;
+	}
+
+	// GeneralsX @feature Claude 15/10/2026 Load the remaster's own content (new units, weapons, buttons)
+	// from Data\INI\GeneralsX as overrides before every game, the same way map.ini is loaded, so it can
+	// extend retail definitions such as command sets without shipping edited copies of them. Overrides
+	// are dropped on reset, so this runs again for each game. map.ini is loaded afterwards and wins.
+	// GeneralsX @feature Claude 16/10/2026 ArtRemap blocks in the content swap drawn art only; the table is
+	// rebuilt here so it always matches the files loaded for this game.
+	{
+		ArtRemap::reset();
+		INI contentIni;
+		const UnsignedInt contentFiles = contentIni.loadFileDirectory( "Data\\INI\\GeneralsX", INI_LOAD_CREATE_OVERRIDES, nullptr );
+		if (contentFiles > 0) {
+			fprintf(stderr, "[Content] Loaded %u GeneralsX content INI file(s)\n", contentFiles);
+			fflush(stderr);
+		}
 	}
 
 	//

@@ -218,6 +218,7 @@ public:
 	static void parseWaterTransparencyDefinition( INI *ini );
 	static void parseWeatherDefinition( INI *ini );
 	static void parseMappedImageDefinition( INI *ini );
+	static void parseArtRemapDefinition( INI *ini ); ///< GeneralsX @feature Claude 16/10/2026 display-only model remap
 	static void parseArmorDefinition( INI *ini );
 	static void parseDamageFXDefinition( INI *ini );
 	static void parseDrawGroupNumberDefinition( INI *ini );

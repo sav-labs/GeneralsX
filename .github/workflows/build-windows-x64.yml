@@ -167,10 +167,25 @@ jobs:
           name: dxvk-fsr-win64
           path: dxvk-fsr
 
+      # GeneralsX @feature Claude 15/10/2026 Build the content pack (our own models, textures, cameos and INI
+      # overrides) from scripts/tooling/content and content/. It holds no retail data.
+      - name: Set up Python for content
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build content pack
+        shell: pwsh
+        run: |
+          python -m pip install pillow==12.0.0 numpy==2.1.3
+          python scripts/tooling/content/test_content.py
+          python scripts/tooling/content/build_content.py . content-out
+
       - name: Collect runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item content-out/GeneralsXContent.big artifacts/
           Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.exe artifacts/
           Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.pdb artifacts/ -ErrorAction SilentlyContinue
           Get-ChildItem -Path @("vcpkg_installed/x64-windows/bin/*.dll", "build/win64-vcpkg/vcpkg_installed/x64-windows/bin/*.dll") -ErrorAction SilentlyContinue | ForEach-Object {
@@ -219,6 +234,8 @@ jobs:
           or to CapturePath in Options.ini (for example CapturePath = E:\Captures); when that folder cannot be created,
           they go to the bugs folder in the game's user data folder. Video recording needs the d3d8.dll and d3d9.dll above.
           Pick the game resolution in Options; use the same aspect ratio as the display.
+          GeneralsXContent.big holds the remaster's own models (e.g. a modern tank in place of the USA Crusader);
+          delete it to play with the original look. Unit stats and gameplay are unchanged either way.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
           "@ | Set-Content artifacts/INSTALL.txt

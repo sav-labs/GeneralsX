@@ -174,6 +174,10 @@ class GameTextManager : public GameTextInterface
 		StringInfo			*m_patchStringInfo;
 		StringLookUp		*m_patchStringLUT;
 		Int						m_patchTextCount;
+		// GeneralsX @feature Claude 15/10/2026 Strings for the remaster's own content (Data\GeneralsX.str): new units and buttons.
+		StringInfo			*m_contentStringInfo;
+		StringLookUp		*m_contentStringLUT;
+		Int						m_contentTextCount;
 		Bool						m_initialized;
 #if defined(RTS_DEBUG)
 		Bool						m_jabberWockie;
@@ -201,6 +205,7 @@ class GameTextManager : public GameTextInterface
 		Bool						getCSFInfo ( const Char *filename, Int& textCount, LanguageID& language, FileInstance instance = 0 );
 		Bool						parseCSF(  const Char *filename, StringInfo *stringInfo, Int textCount, Int& maxLabelLen, FileInstance instance = 0 );
 		Bool						parseStringFile( const char *filename, StringInfo *outStringInfo = nullptr, Int *outTextCount = nullptr );
+		Bool						loadOverlayStringFile( const char *filename, StringInfo *&outInfo, StringLookUp *&outLUT, Int &outCount );
 		Bool						parseMapStringFile( const char *filename );
 		Bool						readLine( char *buffer, Int max, File *file );
 		Char						readChar( File *file );
@@ -266,6 +271,9 @@ GameTextManager::GameTextManager()
 	m_patchStringInfo(nullptr),
 	m_patchStringLUT(nullptr),
 	m_patchTextCount(0),
+	m_contentStringInfo(nullptr),
+	m_contentStringLUT(nullptr),
+	m_contentTextCount(0),
 	m_initialized(FALSE),
 	m_noStringList(nullptr),
 #if defined(RTS_DEBUG)
@@ -449,38 +457,11 @@ void GameTextManager::init()
 	// GeneralsX @bugfix UnicodeApocalypse 10/09/2026 Merge data/patch.str, the retail patch's plain-text
 	// string overlay (e.g. Custom Missions, v1.05) that never got folded into generals.csf. Missing on
 	// unpatched installs, and expected to be absent then.
-	{
-		const Char *PATCH_STR_FILE = "data/patch.str";
+	loadOverlayStringFile( "data/patch.str", m_patchStringInfo, m_patchStringLUT, m_patchTextCount );
 
-		// GeneralsX @bugfix UnicodeApocalypse 10/09/2026 getStringCount() pads by 500; actualPatchCount below is the real check.
-		Int patchCount = 0;
-		if ( getStringCount( PATCH_STR_FILE, patchCount ) )
-		{
-			m_patchStringInfo = NEW StringInfo[patchCount];
-
-			if ( m_patchStringInfo != nullptr )
-			{
-				Int actualPatchCount = 0;
-				if ( parseStringFile( PATCH_STR_FILE, m_patchStringInfo, &actualPatchCount ) && actualPatchCount > 0 )
-				{
-					m_patchTextCount = actualPatchCount;
-					m_patchStringLUT = buildSortedLUT( m_patchStringInfo, m_patchTextCount );
-
-					if ( m_patchStringLUT == nullptr )
-					{
-						delete [] m_patchStringInfo;
-						m_patchStringInfo = nullptr;
-						m_patchTextCount = 0;
-					}
-				}
-				else
-				{
-					delete [] m_patchStringInfo;
-					m_patchStringInfo = nullptr;
-				}
-			}
-		}
-	}
+	// GeneralsX @feature Claude 15/10/2026 Labels of the remaster's own content. Only fills labels the
+	// retail tables lack, so it can never change a retail string. Absent when no content is installed.
+	loadOverlayStringFile( "data/generalsx.str", m_contentStringInfo, m_contentStringLUT, m_contentTextCount );
 
 }
 
@@ -509,7 +490,14 @@ void GameTextManager::deinit()
 	delete [] m_patchStringLUT;
 	m_patchStringLUT = nullptr;
 
+	delete [] m_contentStringInfo;
+	m_contentStringInfo = nullptr;
+
+	delete [] m_contentStringLUT;
+	m_contentStringLUT = nullptr;
+
 	m_textCount = 0;
+	m_contentTextCount = 0;
 	m_fallbackTextCount = 0;
 	m_patchTextCount = 0;
 
@@ -1182,6 +1170,40 @@ quit:
 
 
 //============================================================================
+// GameTextManager::loadOverlayStringFile
+//============================================================================
+
+// GeneralsX @refactor Claude 15/10/2026 Shared loader for the plain-text overlays (retail patch strings and the
+// remaster's content strings). Leaves the outputs empty when the file is missing or holds no labels.
+Bool GameTextManager::loadOverlayStringFile( const char *filename, StringInfo *&outInfo, StringLookUp *&outLUT, Int &outCount )
+{
+	// getStringCount() pads by 500; actualCount below is the real check.
+	Int paddedCount = 0;
+	if ( !getStringCount( filename, paddedCount ) )
+	{
+		return FALSE;
+	}
+
+	outInfo = NEW StringInfo[paddedCount];
+
+	Int actualCount = 0;
+	if ( parseStringFile( filename, outInfo, &actualCount ) && actualCount > 0 )
+	{
+		outCount = actualCount;
+		outLUT = buildSortedLUT( outInfo, outCount );
+		if ( outLUT != nullptr )
+		{
+			return TRUE;
+		}
+	}
+
+	delete [] outInfo;
+	outInfo = nullptr;
+	outCount = 0;
+	return FALSE;
+}
+
+//============================================================================
 // GameTextManager::parseStringFile
 //============================================================================
 
@@ -1472,6 +1494,11 @@ UnicodeString GameTextManager::fetch( const Char *label, Bool *exists )
 	if ( lookUp == nullptr && m_fallbackStringLUT && m_fallbackTextCount )
 	{
 		lookUp = (StringLookUp *) bsearch( &key, (void*) m_fallbackStringLUT, m_fallbackTextCount, sizeof(StringLookUp), compareLUT );
+	}
+
+	if ( lookUp == nullptr && m_contentStringLUT && m_contentTextCount )
+	{
+		lookUp = (StringLookUp *) bsearch( &key, (void*) m_contentStringLUT, m_contentTextCount, sizeof(StringLookUp), compareLUT );
 	}
 
 	if( lookUp == nullptr )

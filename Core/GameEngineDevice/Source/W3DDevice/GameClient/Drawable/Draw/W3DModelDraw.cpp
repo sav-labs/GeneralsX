@@ -45,6 +45,7 @@
 #include "Common/ThingTemplate.h"
 #include "Common/GameLOD.h"
 #include "Common/Xfer.h"
+#include "GameClient/ArtRemap.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/FXList.h"
 #include "GameClient/Shadow.h"
@@ -375,6 +376,26 @@ HAnimClass* W3DAnimationInfo::getAnimHandle() const
 }
 
 //-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 The animation to play on the drawn model of a state (ADDREFED, may be null).
+// Retail animations only run on retail art: a model drawn with ArtRemap art plays the mapped animation or none.
+static HAnimClass* getDisplayAnimHandle(const ModelConditionInfo* state, const W3DAnimationInfo& animInfo)
+{
+	AsciiString displayModelName;
+	if (state == nullptr || !ArtRemap::findModel(state->m_modelName, displayModelName))
+	{
+		return animInfo.getAnimHandle();
+	}
+	AsciiString displayAnimName;
+	if (displayModelName.isEmpty() || !ArtRemap::findAnimation(animInfo.getName(), displayAnimName) || displayAnimName.isEmpty())
+	{
+		return nullptr;
+	}
+	HAnimClass* handle = W3DDisplay::m_assetManager->Get_HAnim(displayAnimName.str());
+	DEBUG_ASSERTCRASH(handle, ("*** ASSET ERROR: animation %s not found", displayAnimName.str()));
+	return handle;
+}
+
+//-------------------------------------------------------------------------------------------------
 W3DAnimationInfo::~W3DAnimationInfo()
 {
 #ifdef RETAIN_ANIM_HANDLES
@@ -387,9 +408,11 @@ W3DAnimationInfo::~W3DAnimationInfo()
 void ModelConditionInfo::preloadAssets( TimeOfDay timeOfDay, Real scale )
 {
 	// load this asset
-	if( m_modelName.isEmpty() == FALSE )
+	// GeneralsX @feature Claude 16/10/2026 Preload the art that is drawn, which ArtRemap may replace.
+	const AsciiString displayModelName = getDisplayModelName();
+	if( displayModelName.isEmpty() == FALSE )
 	{
-		TheDisplay->preloadModelAssets( m_modelName );
+		TheDisplay->preloadModelAssets( displayModelName );
 	}
 
 	// this can be called from the client, which is problematic
@@ -611,6 +634,18 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 	// go ahead and set this here, in case we return early.
 	m_validStuff |= PRISTINE_BONES_VALID;
 
+	// GeneralsX @feature Claude 16/10/2026 Pristine bones feed logic (launch points, turrets, docks), so when
+	// ArtRemap draws other art they are taken from the retail model and the passed (drawn) object only
+	// supplies bone indices for client effects. Matches with and without the content pack simulate the same.
+	AsciiString remappedName;
+	m_artRemapped = ArtRemap::findModel(m_modelName, remappedName);
+	m_clientBoneIndices.clear();
+	RenderObjClass* displayRobj = robj;
+	if (m_artRemapped)
+	{
+		robj = nullptr;
+	}
+
 	Bool tossRobj = false;
 	if (robj == nullptr)
 	{
@@ -710,6 +745,84 @@ void ModelConditionInfo::validateCachedBones(RenderObjClass* robj, Real scale) c
 	{
 		REF_PTR_RELEASE(robj);
 	}
+
+	if (m_artRemapped)
+	{
+		validateClientBoneIndices(displayRobj, scale);
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 Map every pristine (retail) bone to its index in the drawn model.
+void ModelConditionInfo::validateClientBoneIndices(RenderObjClass* displayRobj, Real scale) const
+{
+	m_clientBoneIndices.clear();
+
+	Bool tossRobj = false;
+	if (displayRobj == nullptr)
+	{
+		const AsciiString displayModelName = getDisplayModelName();
+		if (displayModelName.isEmpty())
+		{
+			return;	// nothing is drawn, so no client bone exists
+		}
+		displayRobj = W3DDisplay::m_assetManager->Create_Render_Obj(displayModelName.str(), scale, 0);
+		DEBUG_ASSERTCRASH(displayRobj, ("*** ASSET ERROR: Model %s not found!", displayModelName.str()));
+		if (displayRobj == nullptr)
+		{
+			return;
+		}
+		tossRobj = true;
+	}
+
+	for (PristineBoneInfoMap::const_iterator it = m_pristineBones.begin(); it != m_pristineBones.end(); ++it)
+	{
+		const AsciiString boneName = KEYNAME(it->first);
+		Matrix3D mtx(true);
+		Int boneIndex = 0;
+		if (!findSingleBone(displayRobj, boneName, mtx, boneIndex))
+		{
+			boneIndex = 0;
+			if (!findSingleSubObj(displayRobj, boneName, mtx, boneIndex))
+			{
+				boneIndex = 0;
+			}
+		}
+		m_clientBoneIndices[it->first] = boneIndex;
+	}
+
+	if (tossRobj)
+	{
+		REF_PTR_RELEASE(displayRobj);
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 Bone index for client effects: the logic index itself, unless the
+// state is drawn with ArtRemap art, then the index of the same-named bone in that art (zero if absent).
+Int ModelConditionInfo::clientBoneIndex(NameKeyType boneName, Int logicBoneIndex) const
+{
+	if (!m_artRemapped)
+	{
+		return logicBoneIndex;
+	}
+	if (logicBoneIndex == 0 || boneName == NAMEKEY_INVALID)
+	{
+		return 0;
+	}
+	ClientBoneIndexMap::const_iterator it = m_clientBoneIndices.find(boneName);
+	return (it != m_clientBoneIndices.end()) ? it->second : 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+AsciiString ModelConditionInfo::getDisplayModelName() const
+{
+	AsciiString displayModelName;
+	if (ArtRemap::findModel(m_modelName, displayModelName))
+	{
+		return displayModelName;
+	}
+	return m_modelName;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -755,21 +868,30 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 		if (fxBoneName.isNotEmpty() || recoilBoneName.isNotEmpty() || mfName.isNotEmpty() || plbName.isNotEmpty())
 		{
 			Int prevFxBone = 0;
+			Int prevClientFxBone = 0;
 			char buffer[256];
 			for (Int i = 1; i <= 99; ++i)
 			{
 				WeaponBarrelInfo info;
 				info.m_projectileOffsetMtx.Make_Identity();
+				// GeneralsX @feature Claude 16/10/2026 Keep the bone names, so the barrel can be mapped to the
+				// drawn model's bones after the logic-relevant decisions below are made on the pristine ones.
+				NameKeyType recoilKey = NAMEKEY_INVALID;
+				NameKeyType mfKey = NAMEKEY_INVALID;
+				NameKeyType fxKey = NAMEKEY_INVALID;
+				Bool fxFromPrevBarrel = false;
 
 				if (!recoilBoneName.isEmpty())
 				{
 					snprintf(buffer, ARRAY_SIZE(buffer), "%s%02d", recoilBoneName.str(), i);
-					findPristineBone(NAMEKEY(buffer), &info.m_recoilBone);
+					recoilKey = NAMEKEY(buffer);
+					findPristineBone(recoilKey, &info.m_recoilBone);
 				}
 				if (!mfName.isEmpty())
 				{
 					snprintf(buffer, ARRAY_SIZE(buffer), "%s%02d", mfName.str(), i);
-					findPristineBone(NAMEKEY(buffer), &info.m_muzzleFlashBone);
+					mfKey = NAMEKEY(buffer);
+					findPristineBone(mfKey, &info.m_muzzleFlashBone);
 #if defined(RTS_DEBUG) || defined(DEBUG_CRASHING)
 					if (info.m_muzzleFlashBone)
 						info.m_muzzleFlashBoneName = buffer;
@@ -778,10 +900,14 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 				if (!fxBoneName.isEmpty())
 				{
 					snprintf(buffer, ARRAY_SIZE(buffer), "%s%02d", fxBoneName.str(), i);
-					findPristineBone(NAMEKEY(buffer), &info.m_fxBone);
+					fxKey = NAMEKEY(buffer);
+					findPristineBone(fxKey, &info.m_fxBone);
 					// special case: if we have multiple muzzleflashes, but only one fxbone, use that fxbone for everything.
 					if (info.m_fxBone == 0 && info.m_muzzleFlashBone != 0)
+					{
 						info.m_fxBone = prevFxBone;
+						fxFromPrevBarrel = true;
+					}
 				}
 
 				Int plbBoneIndex = 0;
@@ -800,12 +926,16 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 				DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
 				BONEPOS_LOG(("validateWeaponBarrelInfo() - model name %s wslot %d", m_modelName.str(), wslot));
 				BONEPOS_DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
+				prevFxBone = info.m_fxBone;
+
+				info.m_recoilBone = clientBoneIndex(recoilKey, info.m_recoilBone);
+				info.m_muzzleFlashBone = clientBoneIndex(mfKey, info.m_muzzleFlashBone);
+				info.m_fxBone = fxFromPrevBarrel ? prevClientFxBone : clientBoneIndex(fxKey, info.m_fxBone);
+				prevClientFxBone = info.m_fxBone;
 				m_weaponBarrelInfoVec[wslot].push_back(info);
 
 				if (info.m_recoilBone != 0 || info.m_muzzleFlashBone != 0)
 					m_hasRecoilBonesOrMuzzleFlashes[wslot] = true;
-
-				prevFxBone = info.m_fxBone;
 			}
 
 			if (m_weaponBarrelInfoVec[wslot].empty())
@@ -838,6 +968,9 @@ void ModelConditionInfo::validateWeaponBarrelInfo() const
 					DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
 					BONEPOS_LOG(("validateWeaponBarrelInfo() - model name %s (unadorned) wslot %d", m_modelName.str(), wslot));
 					BONEPOS_DUMPMATRIX3D(&(info.m_projectileOffsetMtx));
+					info.m_recoilBone = recoilBoneName.isEmpty() ? 0 : clientBoneIndex(NAMEKEY(recoilBoneName), info.m_recoilBone);
+					info.m_muzzleFlashBone = mfName.isEmpty() ? 0 : clientBoneIndex(NAMEKEY(mfName), info.m_muzzleFlashBone);
+					info.m_fxBone = fxBoneName.isEmpty() ? 0 : clientBoneIndex(NAMEKEY(fxBoneName), info.m_fxBone);
 					m_weaponBarrelInfoVec[wslot].push_back(info);
 					if (info.m_recoilBone != 0 || info.m_muzzleFlashBone != 0)
 						m_hasRecoilBonesOrMuzzleFlashes[wslot] = true;
@@ -881,6 +1014,8 @@ void ModelConditionInfo::validateTurretInfo() const
 				DEBUG_CRASH(("*** ASSET ERROR: TurretBone %s not found! (%s)",KEYNAME(tur.m_turretAngleNameKey).str(),m_modelName.str()));
 				tur.m_turretAngleBone = 0;
 			}
+			// GeneralsX @feature Claude 16/10/2026 The turret is turned on the drawn model's bone.
+			tur.m_turretAngleBone = clientBoneIndex(tur.m_turretAngleNameKey, tur.m_turretAngleBone);
 		}
 		else
 		{
@@ -894,6 +1029,7 @@ void ModelConditionInfo::validateTurretInfo() const
 				DEBUG_CRASH(("*** ASSET ERROR: TurretBone %s not found! (%s)",KEYNAME(tur.m_turretPitchNameKey).str(),m_modelName.str()));
 				tur.m_turretPitchBone = 0;
 			}
+			tur.m_turretPitchBone = clientBoneIndex(tur.m_turretPitchNameKey, tur.m_turretPitchBone);
 		}
 		else
 		{
@@ -1013,6 +1149,8 @@ void ModelConditionInfo::clear()
 	m_animMinSpeedFactor = 1.0f;
 	m_animMaxSpeedFactor = 1.0f;
 	m_pristineBones.clear();
+	m_clientBoneIndices.clear();
+	m_artRemapped = false;
 	m_validStuff = 0;
 }
 
@@ -2184,7 +2322,7 @@ void W3DModelDraw::adjustAnimation(const ModelConditionInfo* prevState, Real pre
 
 		if (m_renderObject)
 		{
-			HAnimClass* animHandle = animInfo.getAnimHandle();	// note that this now returns an ADDREFED handle, which must be released by the caller!
+			HAnimClass* animHandle = getDisplayAnimHandle(m_curState, animInfo);	// note that this now returns an ADDREFED handle, which must be released by the caller!
 			if (animHandle)
 			{
 				Int startFrame = 0;
@@ -3021,14 +3159,16 @@ void W3DModelDraw::setModelState(const ModelConditionInfo* newState)
 		Drawable* draw = getDrawable();
 
 		// create a new render object and set into drawable
-		if (newState->m_modelName.isEmpty())
+		// GeneralsX @feature Claude 16/10/2026 Draw the content pack's art where ArtRemap replaces the model.
+		const AsciiString displayModelName = newState->getDisplayModelName();
+		if (displayModelName.isEmpty())
 		{
 			m_renderObject = nullptr;
 		}
 		else
 		{
-			m_renderObject = W3DDisplay::m_assetManager->Create_Render_Obj(newState->m_modelName.str(), draw->getScale(), m_hexColor);
-			DEBUG_ASSERTCRASH(m_renderObject, ("*** ASSET ERROR: Model %s not found!",newState->m_modelName.str()));
+			m_renderObject = W3DDisplay::m_assetManager->Create_Render_Obj(displayModelName.str(), draw->getScale(), m_hexColor);
+			DEBUG_ASSERTCRASH(m_renderObject, ("*** ASSET ERROR: Model %s not found!",displayModelName.str()));
 		}
 
 		//BONEPOS_LOG(("validateStuff() from within W3DModelDraw::setModelState()"));
@@ -3818,9 +3958,12 @@ void W3DModelDraw::setAnimationFrame( int frame )
 	if( m_renderObject && m_whichAnimInCurState >= 0 )
 	{
 		const W3DAnimationInfo& animInfo = m_curState->m_animations[ m_whichAnimInCurState ];
-		HAnimClass* animHandle = animInfo.getAnimHandle();	// note that this now returns an ADDREFED handle, which must be released by the caller!
-		m_renderObject->Set_Animation( animHandle, frame );
-		REF_PTR_RELEASE(animHandle);
+		HAnimClass* animHandle = getDisplayAnimHandle(m_curState, animInfo);	// note that this now returns an ADDREFED handle, which must be released by the caller!
+		if (animHandle)
+		{
+			m_renderObject->Set_Animation( animHandle, frame );
+			REF_PTR_RELEASE(animHandle);
+		}
 	}
 }
 
