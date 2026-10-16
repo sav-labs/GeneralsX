@@ -43,6 +43,9 @@ namespace PerfStats
 		SECTION_SHADOWS,          ///< Shadow volume updates and shadow drawing
 		SECTION_PARTICLE_RENDER,  ///< Particle queueing and the sorted translucent flush
 		SECTION_PRESENT,          ///< WW3D::End_Render (present, waits for the GPU when it is behind)
+		// GeneralsX @feature Claude 16/10/2026 Shadows of skinned models (tile updates, terrain pass, volumes); overlaps
+		// render_targets and shadows.
+		SECTION_SKINNED_SHADOWS,  ///< W3DSkinnedShadowManager work
 		SECTION_COUNT
 	};
 
@@ -79,6 +82,11 @@ namespace PerfStats
 	void setFrameCounters(const FrameCounters &counters);
 	/// Shadow volume silhouette rebuild of a caster mesh with this many triangles (counted per frame).
 	void addShadowRebuild(UnsignedInt triangles);
+	// GeneralsX @feature Claude 16/10/2026 Skinned shadow counters (W3DSkinnedShadow).
+	/// A skinned shadow was redrawn (projected tile) or rebuilt (shadow volume) from a caster with this many triangles.
+	void addSkinnedShadowUpdate(UnsignedInt triangles);
+	/// Skinned shadows drawn this frame.
+	void addSkinnedShadowsDrawn(UnsignedInt count);
 	/// True when the next summary is due, so the display only walks the texture list then.
 	Bool wantsTextureMemory();
 	void setTextureMemory(UnsignedInt64 bytes, UnsignedInt64 freeBytes);

@@ -285,17 +285,30 @@ jobs:
           Performance measurement (big battles): Perf.cmd starts the game with the frame profiler. Every 5 seconds
           perf-log.txt gets a [PERF] line: fps, frame time (avg/max), game logic, client update, draw, 3D scene,
           meshes (includes CPU skinning), shadows, particles and present in ms per frame, draw calls, triangles,
-          skinned meshes and vertices, skin cache hits, shadow volume rebuilds, particles and texture memory.
+          skinned meshes and vertices, skin cache hits, shadow volume rebuilds, particles and texture memory, and
+          skinned shadows (skinshadows = drawn, updates = tiles redrawn or volumes rebuilt, skinshadow_ms).
           -perfdump <seconds> [delay] writes one CSV row per frame for <seconds> of the next match, starting
           [delay] seconds after it begins, as perf_<date>_<time>.csv into the capture folder (CapturePath).
           -perf alone only writes the [PERF] lines (-perf 2 every 2 seconds). PerfOverlay = yes in Options.ini
-          prints them too and shows three lines of numbers in the top left corner; PerfInterval = 5 sets the period.
+          prints them too and shows four lines of numbers in the top left corner; PerfInterval = 5 sets the period.
           Big battle switches in Options.ini (render only, the game itself is unchanged):
           SkinCache = no turns off the skinned vertex cache (default yes; for before/after comparisons).
           ShadowVolumeHighPolyTriangles = 4000 and ShadowVolumeHighPolyAngle = 3: shadow casting parts with at least
           that many triangles rebuild their shadow after 3 degrees of turning instead of 0.2 (0 turns this off).
           ShadowVolumeMaxTriangles = 0: models with more shadow casting triangles than this get a round ground
-          shadow instead of a shadow volume (0 = never).
+          shadow instead of a shadow volume (0 = never), or the skinned shadow below when SkinnedShadows is on.
+          Shadows of skinned units (tanks, helicopters, mechs made of skinned meshes) follow their real shape:
+          SkinnedShadows = Projected (default) draws each unit seen from the sun into a small shadow texture
+          and lays it on the ground; only the ground and bridges receive it. SkinnedShadows = Volume uses
+          stencil shadow volumes like the other 3D shadows (also falls on other units and on the unit itself,
+          more CPU per animated unit). SkinnedShadows = Decal is the old round ground shadow.
+          SkinnedShadowQuality = Low | Medium | High (default Medium): shadow texture size 64/128/256 and how
+          often animated shadows are redrawn (every 3rd/2nd/every frame).
+          SkinnedShadowDistance = 1500: camera distance where they have faded out (0 = no limit).
+          SkinnedShadowKeepDecal = no: yes keeps the old round shadow under the new one.
+          SkinnedShadowMinTriangles = 2000: units the game gives a round shadow switch to the new shadow only
+          from this many triangles, so infantry keep theirs. They follow the 3D Shadows option (2D Shadows
+          for units that had a round shadow). stderr gets [SHADOW] lines (settings, each model, every 600 frames).
           "@ | Set-Content artifacts/INSTALL.txt
           # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
           @"

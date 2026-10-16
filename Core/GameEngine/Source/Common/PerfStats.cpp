@@ -49,6 +49,9 @@ namespace
 		UnsignedInt64 skinCacheHits;
 		UnsignedInt64 shadowRebuilds;
 		UnsignedInt64 shadowRebuildTriangles;
+		UnsignedInt64 skinnedShadowUpdates;
+		UnsignedInt64 skinnedShadowUpdateTriangles;
+		UnsignedInt64 skinnedShadowsDrawn;
 		UnsignedInt drawCallsMax;
 		Int particlesMax;
 		Int particlesOnScreenLast;
@@ -80,6 +83,10 @@ namespace
 	FrameCounters s_frameCounters;
 	UnsignedInt s_frameShadowRebuilds = 0;
 	UnsignedInt s_frameShadowRebuildTriangles = 0;
+	// GeneralsX @feature Claude 16/10/2026 Skinned shadow counters of the current frame.
+	UnsignedInt s_frameSkinnedShadowUpdates = 0;
+	UnsignedInt s_frameSkinnedShadowUpdateTriangles = 0;
+	UnsignedInt s_frameSkinnedShadowsDrawn = 0;
 
 	Window s_interval;
 	Window s_overlay;
@@ -89,7 +96,7 @@ namespace
 	UnsignedInt64 s_freeTextureBytes = 0;
 	Bool s_textureMemoryKnown = FALSE;
 
-	char s_overlayText[512] = { 0 };
+	char s_overlayText[640] = { 0 };
 
 	const char *s_sectionNames[SECTION_COUNT] =
 	{
@@ -104,6 +111,7 @@ namespace
 		"shadows_ms",
 		"particle_render_ms",
 		"present_ms",
+		"skinned_shadows_ms",
 	};
 
 	void accumulate(Window &w, double frameMs)
@@ -122,6 +130,9 @@ namespace
 		w.skinCacheHits += s_frameCounters.skinCacheHits;
 		w.shadowRebuilds += s_frameShadowRebuilds;
 		w.shadowRebuildTriangles += s_frameShadowRebuildTriangles;
+		w.skinnedShadowUpdates += s_frameSkinnedShadowUpdates;
+		w.skinnedShadowUpdateTriangles += s_frameSkinnedShadowUpdateTriangles;
+		w.skinnedShadowsDrawn += s_frameSkinnedShadowsDrawn;
 		if (s_frameCounters.drawCalls > w.drawCallsMax)
 			w.drawCallsMax = s_frameCounters.drawCalls;
 		if (s_frameCounters.particles > w.particlesMax)
@@ -150,6 +161,7 @@ namespace
 			" | draws=%.0f max=%u tris=%.0fk sorted=%.0fk"
 			" | skins=%.1f skinverts=%.1fk cachehits=%.1f"
 			" | shadowrebuilds=%.1f (%.1fk tris)"
+			" | skinshadows=%.1f updates=%.1f (%.1fk tris) skinshadow_ms=%.2f"
 			" | particles=%d max=%d onscreen=%d",
 			seconds, n, fps, avg(w.frameMsSum, n), w.frameMsMax,
 			avg(w.sectionMs[SECTION_LOGIC], n), avg(w.sectionMs[SECTION_CLIENT], n),
@@ -162,6 +174,8 @@ namespace
 			avg((double)w.triangles, n) / 1000.0, avg((double)w.sortedTriangles, n) / 1000.0,
 			avg((double)w.skinMeshes, n), avg((double)w.skinVertices, n) / 1000.0, avg((double)w.skinCacheHits, n),
 			avg((double)w.shadowRebuilds, n), avg((double)w.shadowRebuildTriangles, n) / 1000.0,
+			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
+			avg((double)w.skinnedShadowUpdateTriangles, n) / 1000.0, avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n),
 			w.particlesLast, w.particlesMax, w.particlesOnScreenLast);
 		if (s_textureMemoryKnown)
 		{
@@ -182,7 +196,8 @@ namespace
 		snprintf(s_overlayText, sizeof(s_overlayText),
 			"PERF %.0f fps  frame %.1f ms (max %.1f)\n"
 			"logic %.1f  client %.1f  draw %.1f  scene %.1f  meshes %.1f  shadows %.1f  fx %.1f  present %.1f\n"
-			"draws %.0f  tris %.0fk  skins %.0f (%.0fk verts, %.0f cached)  shadow rebuilds %.0f  particles %d/%d  tex %.0f MB",
+			"draws %.0f  tris %.0fk  skins %.0f (%.0fk verts, %.0f cached)  shadow rebuilds %.0f  particles %d/%d  tex %.0f MB\n"
+			"skinned shadows %.0f  updates %.1f  %.2f ms",
 			fps, avg(w.frameMsSum, n), w.frameMsMax,
 			avg(w.sectionMs[SECTION_LOGIC], n), avg(w.sectionMs[SECTION_CLIENT], n), avg(w.sectionMs[SECTION_DRAW], n),
 			avg(w.sectionMs[SECTION_SCENE], n), avg(w.sectionMs[SECTION_MESH_FLUSH], n), avg(w.sectionMs[SECTION_SHADOWS], n),
@@ -192,7 +207,9 @@ namespace
 			avg((double)w.skinMeshes, n), avg((double)w.skinVertices, n) / 1000.0, avg((double)w.skinCacheHits, n),
 			avg((double)w.shadowRebuilds, n),
 			w.particlesOnScreenLast, w.particlesLast,
-			(double)s_textureBytes / (1024.0 * 1024.0));
+			(double)s_textureBytes / (1024.0 * 1024.0),
+			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
+			avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n));
 	}
 
 	void closeDump(const char *reason)
@@ -237,7 +254,8 @@ namespace
 			for (Int i = 0; i < SECTION_COUNT; ++i)
 				fprintf(s_dumpFile, ",%s", s_sectionNames[i]);
 			fprintf(s_dumpFile, ",draw_calls,triangles,sorted_triangles,skin_meshes,skin_vertices,skin_cache_hits,"
-				"shadow_rebuilds,shadow_rebuild_triangles,particles,particles_on_screen,texture_mb\n");
+				"shadow_rebuilds,shadow_rebuild_triangles,particles,particles_on_screen,texture_mb,"
+				"skinned_shadows,skinned_shadow_updates,skinned_shadow_update_triangles\n");
 			fprintf(stderr, "[PERF] perfdump: recording %.0f seconds to %s\n", s_dumpSeconds, s_dumpPath);
 			fflush(stderr);
 			s_dumpLastFlushMs = now;
@@ -246,12 +264,13 @@ namespace
 		fprintf(s_dumpFile, "%.3f,%u,%.3f", sinceStart - s_dumpDelaySeconds, logicFrame, frameMs);
 		for (Int i = 0; i < SECTION_COUNT; ++i)
 			fprintf(s_dumpFile, ",%.3f", s_frameSectionMs[i]);
-		fprintf(s_dumpFile, ",%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%.0f\n",
+		fprintf(s_dumpFile, ",%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%.0f,%u,%u,%u\n",
 			s_frameCounters.drawCalls, s_frameCounters.triangles, s_frameCounters.sortedTriangles,
 			s_frameCounters.skinMeshes, s_frameCounters.skinVertices, s_frameCounters.skinCacheHits,
 			s_frameShadowRebuilds, s_frameShadowRebuildTriangles,
 			s_frameCounters.particles, s_frameCounters.particlesOnScreen,
-			(double)s_textureBytes / (1024.0 * 1024.0));
+			(double)s_textureBytes / (1024.0 * 1024.0),
+			s_frameSkinnedShadowsDrawn, s_frameSkinnedShadowUpdates, s_frameSkinnedShadowUpdateTriangles);
 		++s_dumpRows;
 
 		if (now - s_dumpLastFlushMs >= 1000.0)
@@ -342,6 +361,21 @@ void addShadowRebuild(UnsignedInt triangles)
 	s_frameShadowRebuildTriangles += triangles;
 }
 
+void addSkinnedShadowUpdate(UnsignedInt triangles)
+{
+	if (!s_enabled)
+		return;
+	++s_frameSkinnedShadowUpdates;
+	s_frameSkinnedShadowUpdateTriangles += triangles;
+}
+
+void addSkinnedShadowsDrawn(UnsignedInt count)
+{
+	if (!s_enabled)
+		return;
+	s_frameSkinnedShadowsDrawn += count;
+}
+
 Bool wantsTextureMemory()
 {
 	if (!s_enabled)
@@ -410,6 +444,9 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	memset(&s_frameCounters, 0, sizeof(s_frameCounters));
 	s_frameShadowRebuilds = 0;
 	s_frameShadowRebuildTriangles = 0;
+	s_frameSkinnedShadowUpdates = 0;
+	s_frameSkinnedShadowUpdateTriangles = 0;
+	s_frameSkinnedShadowsDrawn = 0;
 }
 
 const char *getOverlayText()

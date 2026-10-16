@@ -53,6 +53,7 @@
 #include "Common/DrawModule.h"
 #include "W3DDevice/GameClient/W3DVolumetricShadow.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#include "W3DDevice/GameClient/W3DSkinnedShadow.h"
 #include "WW3D2/statistics.h"
 #include "GameLogic/TerrainLogic.h"
 #include "WW3D2/dx8caps.h"
@@ -3577,7 +3578,9 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
  	beY = bbox.Extent.Y;
  	beZ = bbox.Extent.Z;
 
-	if (m_shadowList && TheGlobalData->m_useShadowVolumes)
+	// GeneralsX @feature Claude 16/10/2026 Also run the stencil pass when only skinned shadow volumes are visible.
+	const Bool hasSkinnedVolumes = TheW3DSkinnedShadowManager && TheW3DSkinnedShadowManager->hasVolumesToRender();
+	if ((m_shadowList || hasSkinnedVolumes) && TheGlobalData->m_useShadowVolumes)
 	{
 
 		LPDIRECT3DDEVICE8 m_pDev=DX8Wrapper::_Get_D3D_Device8();
@@ -3713,6 +3716,15 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			}
 		}
 
+		// GeneralsX @feature Claude 16/10/2026 Skinned shadow volumes, increment pass. They draw from user memory, which
+		// unbinds the stream source and index buffer, so the cached stream source is reset and the vertex format restored.
+		if (TheW3DSkinnedShadowManager)
+		{
+			numRenderedShadows += TheW3DSkinnedShadowManager->renderVolumes(FALSE);
+			lastActiveVertexBuffer=nullptr;
+			m_pDev->SetVertexShader(W3DBufferManager::getDX8Format(W3DBufferManager::VBM_FVF_XYZ));
+		}
+
 		// change the stencil op to decrement
 		m_pDev->SetRenderState( D3DRS_STENCILPASS,  D3DSTENCILOP_DECRSAT);
 
@@ -3742,6 +3754,13 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			//all use the same vertex buffer.  Flush them ASAP.
 			shadowDynamicTask->m_parentShadow->RenderVolume(shadowDynamicTask->m_meshIndex,shadowDynamicTask->m_lightIndex);
 			shadowDynamicTask=(W3DVolumetricShadowRenderTask *)shadowDynamicTask->m_nextTask;
+		}
+
+		// GeneralsX @feature Claude 16/10/2026 Skinned shadow volumes, decrement pass.
+		if (TheW3DSkinnedShadowManager)
+		{
+			TheW3DSkinnedShadowManager->renderVolumes(TRUE);
+			lastActiveVertexBuffer=nullptr;
 		}
 
 		//Reset all render tasks for next frame.
