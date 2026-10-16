@@ -207,4 +207,11 @@ public:
 	Int getShadowVolumeHighPolyTriangles() const;	///< Options.ini ShadowVolumeHighPolyTriangles, default 4000
 	Real getShadowVolumeHighPolyAngle() const;	///< Options.ini ShadowVolumeHighPolyAngle in degrees, default 3
 	Int getShadowVolumeMaxTriangles() const;	///< Options.ini ShadowVolumeMaxTriangles, default 0 (no limit)
+	// GeneralsX @feature Claude 16/10/2026 Shadows of skinned models (W3DSkinnedShadow).
+	enum SkinnedShadowMode { SKINNED_SHADOWS_DECAL, SKINNED_SHADOWS_PROJECTED, SKINNED_SHADOWS_VOLUME };
+	Int getSkinnedShadowMode() const;			///< Options.ini SkinnedShadows = Volume | Projected | Decal, default Projected
+	Int getSkinnedShadowQuality() const;		///< Options.ini SkinnedShadowQuality = Low | Medium | High (0, 1, 2), default Medium
+	Real getSkinnedShadowDistance() const;		///< Options.ini SkinnedShadowDistance in world units, default 1500, 0 = no limit
+	Bool getSkinnedShadowKeepDecal() const;		///< Options.ini SkinnedShadowKeepDecal, default no
+	Int getSkinnedShadowMinTriangles() const;	///< Options.ini SkinnedShadowMinTriangles, default 2000
 };

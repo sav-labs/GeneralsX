@@ -90,6 +90,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
+#include "W3DDevice/GameClient/W3DSkinnedShadow.h"
 #include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DCapture.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -2323,6 +2324,10 @@ AGAIN:
 			//before we enter main rendering loop.
 			if (TheW3DProjectedShadowManager)
 				TheW3DProjectedShadowManager->updateRenderTargetTextures();
+
+			// GeneralsX @feature Claude 16/10/2026 Skinned shadow culling and shadow atlas tiles.
+			if (TheW3DSkinnedShadowManager)
+				TheW3DSkinnedShadowManager->updateRenderTargetTextures(primaryW3DView ? primaryW3DView->get3DCamera() : nullptr);
 		}
 
 		viewsUpdated = FALSE;

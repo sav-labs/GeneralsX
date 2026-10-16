@@ -1250,6 +1250,73 @@ Int OptionPreferences::getShadowVolumeMaxTriangles() const
 	return value > 0 ? value : 0;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadows: how skinned models (and models over
+// ShadowVolumeMaxTriangles) cast their shadow. Projected (default): a shadow texture of the posed model drawn onto
+// the terrain. Volume: a stencil shadow volume built from the skinned vertices. Decal: the retail behaviour.
+Int OptionPreferences::getSkinnedShadowMode() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadows");
+	if (it == end())
+		return SKINNED_SHADOWS_PROJECTED;
+
+	if (stricmp(it->second.str(), "Volume") == 0)
+		return SKINNED_SHADOWS_VOLUME;
+	if (stricmp(it->second.str(), "Decal") == 0 || stricmp(it->second.str(), "no") == 0)
+		return SKINNED_SHADOWS_DECAL;
+	return SKINNED_SHADOWS_PROJECTED;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowQuality = Low | Medium | High (0, 1, 2): shadow
+// texture resolution and update rate, and the triangle budget of skinned shadow volumes. Default Medium.
+Int OptionPreferences::getSkinnedShadowQuality() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowQuality");
+	if (it == end())
+		return 1;
+
+	if (stricmp(it->second.str(), "Low") == 0)
+		return 0;
+	if (stricmp(it->second.str(), "High") == 0)
+		return 2;
+	return 1;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowDistance: camera distance in world units at which
+// skinned shadows have faded out (they fade over the last quarter). Default 1500, 0 = no limit.
+Real OptionPreferences::getSkinnedShadowDistance() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowDistance");
+	if (it == end())
+		return 1500.0f;
+
+	const Real value = (Real)atof(it->second.str());
+	return value > 0.0f ? clamp(100.0f, value, 100000.0f) : 0.0f;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowKeepDecal = yes keeps the model's retail decal
+// shadow under the new skinned shadow. Default no, so the two do not darken the ground twice.
+Bool OptionPreferences::getSkinnedShadowKeepDecal() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowKeepDecal");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini SkinnedShadowMinTriangles: a skinned model that the retail data
+// gives a decal shadow switches to the skinned shadow from this many caster triangles (default 2000, so retail
+// infantry keep their decals). Models with a shadow volume type always switch.
+Int OptionPreferences::getSkinnedShadowMinTriangles() const
+{
+	OptionPreferences::const_iterator it = find("SkinnedShadowMinTriangles");
+	if (it == end())
+		return 2000;
+
+	const Int value = atoi(it->second.str());
+	return value > 0 ? value : 0;
+}
+
 // GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
 // overrides the default, D:\GeneralsX\bugs on Windows. Elsewhere there is no default and the capture code
 // uses a bugs folder in the user data folder.

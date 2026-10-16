@@ -46,6 +46,7 @@
 #include "W3DDevice/GameClient/W3DVolumetricShadow.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#include "W3DDevice/GameClient/W3DSkinnedShadow.h"
 #include "WW3D2/statistics.h"
 #include "Common/Debug.h"
 #include "Common/PerfTimer.h"
@@ -83,6 +84,10 @@ void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
 				projectionCount=TheW3DProjectedShadowManager->renderShadows(rinfo);
 	}
 
+	// GeneralsX @feature Claude 16/10/2026 Projected shadows of skinned models onto the terrain, before the meshes.
+	if (stencilPass == FALSE && TheW3DSkinnedShadowManager && TheW3DShadowManager->isShadowScene())
+		TheW3DSkinnedShadowManager->renderProjectedShadows(rinfo);
+
 	if (stencilPass == TRUE && TheW3DVolumetricShadowManager)
 	{
 
@@ -115,10 +120,15 @@ W3DShadowManager::W3DShadowManager()
 
 	TheW3DVolumetricShadowManager = NEW W3DVolumetricShadowManager;
 	TheProjectedShadowManager = TheW3DProjectedShadowManager = NEW W3DProjectedShadowManager;
+	// GeneralsX @feature Claude 16/10/2026 Shadows of skinned models (Options.ini SkinnedShadows).
+	TheW3DSkinnedShadowManager = NEW W3DSkinnedShadowManager;
 }
 
 W3DShadowManager::~W3DShadowManager()
 {
+	// GeneralsX @feature Claude 16/10/2026 First, since skinned shadows may own decals of the projected manager.
+	delete TheW3DSkinnedShadowManager;
+	TheW3DSkinnedShadowManager = nullptr;
 	delete TheW3DVolumetricShadowManager;
 	TheW3DVolumetricShadowManager = nullptr;
 	delete TheW3DProjectedShadowManager;
@@ -141,6 +151,9 @@ Bool W3DShadowManager::init()
 		if (TheW3DProjectedShadowManager->ReAcquireResources())
 			result = TRUE;
 	}
+	// GeneralsX @feature Claude 16/10/2026 Skinned shadow options; the atlas is created by the first shadow.
+	if (TheW3DSkinnedShadowManager)
+		TheW3DSkinnedShadowManager->init();
 
 	return result;
 }
@@ -154,6 +167,8 @@ void W3DShadowManager::Reset()
 		TheW3DVolumetricShadowManager->reset();
 	if (TheW3DProjectedShadowManager)
 		TheW3DProjectedShadowManager->reset();
+	if (TheW3DSkinnedShadowManager)
+		TheW3DSkinnedShadowManager->reset();
 }
 
 Bool W3DShadowManager::ReAcquireResources()
@@ -163,6 +178,8 @@ Bool W3DShadowManager::ReAcquireResources()
 	if (TheW3DVolumetricShadowManager && !TheW3DVolumetricShadowManager->ReAcquireResources())
 		result = FALSE;
 	if (TheW3DProjectedShadowManager && !TheW3DProjectedShadowManager->ReAcquireResources())
+		result = FALSE;
+	if (TheW3DSkinnedShadowManager && !TheW3DSkinnedShadowManager->ReAcquireResources())
 		result = FALSE;
 
 	return result;
@@ -174,6 +191,8 @@ void W3DShadowManager::ReleaseResources()
 		TheW3DVolumetricShadowManager->ReleaseResources();
 	if (TheW3DProjectedShadowManager)
 		TheW3DProjectedShadowManager->ReleaseResources();
+	if (TheW3DSkinnedShadowManager)
+		TheW3DSkinnedShadowManager->ReleaseResources();
 }
 
 Shadow *W3DShadowManager::addShadow( RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
@@ -182,6 +201,15 @@ Shadow *W3DShadowManager::addShadow( RenderObjClass *robj, Shadow::ShadowTypeInf
 
 	if (shadowInfo)
 		type = shadowInfo->m_type;
+
+	// GeneralsX @feature Claude 16/10/2026 Skinned models (and shadow volume models over ShadowVolumeMaxTriangles)
+	// get a shadow of their actual pose when Options.ini SkinnedShadows is not Decal.
+	if (TheW3DSkinnedShadowManager && shadowInfo)
+	{
+		Shadow *skinnedShadow = TheW3DSkinnedShadowManager->addShadow(robj, shadowInfo, draw);
+		if (skinnedShadow)
+			return skinnedShadow;
+	}
 
 	// GeneralsX @bugfix Copilot 11/05/2026 ShadowType is bitmask; route by mask instead of exact enum value.
 	if (type & SHADOW_VOLUME)
@@ -224,6 +252,8 @@ void W3DShadowManager::removeShadow(Shadow *shadow)
 
 void W3DShadowManager::removeAllShadows()
 {
+	if (TheW3DSkinnedShadowManager)
+		TheW3DSkinnedShadowManager->removeAllShadows();
 	if (TheW3DVolumetricShadowManager)
 		TheW3DVolumetricShadowManager->removeAllShadows();
 	if (TheW3DProjectedShadowManager)
@@ -237,6 +267,8 @@ void W3DShadowManager::invalidateCachedLightPositions()
 		TheW3DVolumetricShadowManager->invalidateCachedLightPositions();
 	if (TheW3DProjectedShadowManager)
 		TheW3DProjectedShadowManager->invalidateCachedLightPositions();
+	if (TheW3DSkinnedShadowManager)
+		TheW3DSkinnedShadowManager->invalidateCachedLightPositions();
 }
 
 Vector3 &W3DShadowManager::getLightPosWorld(Int lightIndex)

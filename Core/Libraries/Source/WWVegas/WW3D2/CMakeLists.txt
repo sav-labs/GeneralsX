@@ -192,6 +192,7 @@ set(WW3D2_SRC
     soundrobj.cpp
     soundrobj.h
     skinposecache.h
+    skinshadowgeometry.h
     sphereobj.cpp
     sphereobj.h
     static_sort_list.cpp
