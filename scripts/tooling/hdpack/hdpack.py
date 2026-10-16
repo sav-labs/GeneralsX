@@ -25,6 +25,13 @@ Upscalers:
   on the colour channels; alpha is resized with Lanczos to keep cut-outs clean;
 - `lanczos`: plain resize, for pipeline checks without a GPU.
 
+Textures with lettering (signs, numbers, logos) get Lanczos plus a light unsharp
+mask instead of the AI model, which warps letters into invented shapes. Names
+matching SAFE_PATTERNS or a `--safe-list` file take that path.
+
+`--check <pack>` lists entries of a built pack that must not be in it (tree
+textures, UI textures, GeneralsX content pack textures) and exits 1 if any are.
+
 Requires Python 3.9+ and Pillow 11.2+ (DXT1/DXT5 writing).
 """
 
@@ -52,6 +59,9 @@ TEXTURE_EXTS = (".tga", ".dds")
 TERRAIN_DIR = "art/terrain/"
 TERRAIN_EXTS = (".tga",)
 MIN_SOURCE_SIZE = 32
+# Name parts of textures that carry lettering; these skip the AI model.
+SAFE_PATTERNS = ("*sign*", "*text*", "*logo*", "*letter*", "*number*", "*digit*", "*font*", "*billboard*",
+                 "*poster*", "*banner*", "*decal*")
 MAX_OUTPUT_SIZE = 2048
 
 
@@ -210,7 +220,42 @@ def terrain_tile_textures(archives, game_dirs):
     return tiles - trees, trees
 
 
+def matches(stem, patterns):
+    return any(fnmatch.fnmatch(stem, p) for p in patterns)
+
+
+def read_name_list(path):
+    """Lower-case names or globs, one per line; # starts a comment."""
+    return {l.split("#")[0].strip().lower() for l in open(path) if l.split("#")[0].strip()}
+
+
+def check_pack(paths, archives, game_dirs):
+    """Entries of built packs that the game must not get from an HD pack."""
+    ui = mapped_image_textures(archives, game_dirs)
+    _, trees = terrain_tile_textures(archives, game_dirs)
+    content = own_content_textures(game_dirs)
+    problems = {"tree_textures": [], "ui_textures": [], "content_pack_textures": []}
+    total = 0
+    for path in paths:
+        for name in read_big(path):
+            total += 1
+            stem = Path(name).stem
+            if stem in trees:
+                problems["tree_textures"].append(name)
+            if stem in ui:
+                problems["ui_textures"].append(name)
+            if stem in content:
+                problems["content_pack_textures"].append(name)
+    return total, problems
+
+
 # ---------------------------------------------------------------- upscaling
+
+def upscale_safe(img, size):
+    """Lanczos plus a light unsharp mask: sharper than plain resize, never invents shapes."""
+    from PIL import ImageFilter
+    return img.resize(size, Image.Resampling.LANCZOS).filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
+
 
 def upscale_rgb_esrgan(images, esrgan, model, scale, tile, extra_args):
     """Upscale a dict of {key: RGB image} with realesrgan-ncnn-vulkan in one run."""
@@ -447,7 +492,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game-dir", action="append", required=True,
                     help="Folder with the retail .big files (repeat for Generals + Zero Hour; later wins)")
-    ap.add_argument("--out", required=True, help="Output archive, e.g. <game>/!HDTextures.big")
+    ap.add_argument("--out", help="Output archive, e.g. <game>/!HDTextures.big")
+    ap.add_argument("--check", action="append", metavar="PACK",
+                    help="Only check built packs for tree, UI and content pack textures (repeatable)")
     ap.add_argument("--upscaler", choices=("onnx", "esrgan", "lanczos"),
                     default="onnx" if default_onnx().is_file() else "esrgan",
                     help="onnx: Real-ESRGAN via ONNX Runtime (DirectML/CPU); esrgan: ncnn Vulkan binary; lanczos: plain resize")
@@ -459,6 +506,7 @@ def main():
     ap.add_argument("--tile", type=int, default=128, help="Upscaler tile size in source px (lower uses less VRAM, min 32)")
     ap.add_argument("--include", action="append", help="Only texture names matching this glob (e.g. AV*)")
     ap.add_argument("--exclude-list", help="Text file with texture names (no extension) to keep original")
+    ap.add_argument("--safe-list", help="Text file with texture names or globs to upscale without the AI model")
     ap.add_argument("--limit", type=int, default=0, help="Process at most N textures (prototype runs)")
     ap.add_argument("--batch", type=int, default=64, help="Textures per upscaler run")
     ap.add_argument("--preview-dir", help="Also write before/after PNGs here for comparison")
@@ -472,6 +520,17 @@ def main():
                     help="Upscale Art/Terrain/ tiles to TGA for the HD terrain loader instead of model textures")
     ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.check:
+        archives = collect_archives(args.game_dir)
+        total, problems = check_pack(args.check, archives, args.game_dir)
+        for kind, names in problems.items():
+            for name in names:
+                print(f"  {kind}: {name}")
+        bad = sum(len(v) for v in problems.values())
+        print(f"{total} entries checked, " + ", ".join(f"{len(v)} {k.replace('_', ' ')}" for k, v in problems.items()))
+        sys.exit(1 if bad else 0)
+    if not args.out:
+        ap.error("--out is required unless --check is given")
     MAX_OUTPUT_SIZE = args.max_size
     cache_dir = Path(args.cache_dir) if args.cache_dir else Path(args.out).with_suffix(".cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -479,6 +538,8 @@ def main():
     out_ext = ".tga" if args.terrain else ".dds"
     source_dir, source_exts = (TERRAIN_DIR, TERRAIN_EXTS) if args.terrain else (TEXTURE_DIR, TEXTURE_EXTS)
     settings = cache_settings(args.upscaler, args.model, args.scale, args.max_size, mode)
+    safe_settings = cache_settings("safe", "lanczos-unsharp", args.scale, args.max_size, mode)
+    safe_patterns = set(SAFE_PATTERNS) | (read_name_list(args.safe_list) if args.safe_list else set())
 
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)
@@ -493,7 +554,7 @@ def main():
                   file=sys.stderr)
             terrain_tiles = None
     if args.exclude_list:
-        excluded |= {l.strip().lower() for l in open(args.exclude_list) if l.strip() and not l.startswith("#")}
+        excluded |= read_name_list(args.exclude_list)
 
     # One source per texture name; a .dds beats a .tga like in the texture loader.
     sources = {}
@@ -510,10 +571,11 @@ def main():
     keys = sorted(sources)
     if args.limit:
         keys = keys[:args.limit]
+    safe = {k for k in keys if matches(k, safe_patterns)} if args.upscaler != "lanczos" else set()
     print(f"{len(archives)} archive entries, {len(ui_textures)} UI textures skipped, {len(keys)} to upscale")
 
     if args.review_dir:
-        review(sources, keys, cache_dir, settings, out_ext, args.review_dir, args.review_count)
+        review(sources, [k for k in keys if k not in safe], cache_dir, settings, out_ext, args.review_dir, args.review_count)
         return
 
     if args.preview_dir:
@@ -532,7 +594,8 @@ def main():
             name = original[:original.rfind(".")] + out_ext
             data = read_entry(sources[stem])
             # Cache key: source bytes plus every setting that changes the result.
-            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}{out_ext}"
+            key_settings = safe_settings if stem in safe else settings
+            cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + key_settings).hexdigest()[:16]}{out_ext}"
             if cache_file.is_file():
                 output.append((name, cache_file))
                 cached += 1
@@ -554,15 +617,17 @@ def main():
         if not batch:
             continue
 
-        rgb = {k: v[0].convert("RGB") for k, v in batch.items()}
-        if args.upscaler == "onnx":
+        rgb = {k: v[0].convert("RGB") for k, v in batch.items() if k not in safe}
+        up_rgb = {k: upscale_safe(v[0].convert("RGB"), target_size(*v[0].size, args.scale))
+                  for k, v in batch.items() if k in safe}
+        if rgb and args.upscaler == "onnx":
             if session is None:
                 session = onnx_session(args.onnx)
-            up_rgb = upscale_rgb_onnx(rgb, session, args.tile)
-        elif args.upscaler == "esrgan":
-            up_rgb = upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
+            up_rgb |= upscale_rgb_onnx(rgb, session, args.tile)
+        elif rgb and args.upscaler == "esrgan":
+            up_rgb |= upscale_rgb_esrgan(rgb, args.esrgan, args.model, args.scale, args.tile, args.esrgan_args.split())
         else:
-            up_rgb = {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
+            up_rgb |= {k: v.resize(target_size(*v.size, args.scale), Image.Resampling.LANCZOS) for k, v in rgb.items()}
 
         for stem, (img, name, cache_file) in batch.items():
             size = target_size(*img.size, args.scale)
@@ -601,6 +666,7 @@ def main():
         "ui_textures_excluded": len(ui_textures),
         "tree_textures_excluded": len(excluded - ui_textures - content_textures) if args.terrain else 0,
         "content_pack_textures_excluded": sorted(content_textures),
+        "safe_upscaled": sorted(safe & {Path(n.replace("\\", "/")).stem.lower() for n, _ in output}),  # Lanczos, no AI
         "written_files": sorted(name for name, _ in output),  # names only, for exclude lists
         "parts": {str(p): p.stat().st_size for p in paths},
         "total_bytes": sum(p.stat().st_size for p in paths),
