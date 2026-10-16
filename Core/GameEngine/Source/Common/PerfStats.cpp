@@ -58,6 +58,14 @@ namespace
 		UnsignedInt64 retailLights;
 		UnsignedInt64 lightCandidates;
 		UnsignedInt effectLightsMax;
+		// GeneralsX @performance Claude 16/10/2026 Loads and creations (hitch counters).
+		UnsignedInt64 textureLoads;
+		double textureLoadMs;
+		UnsignedInt64 modelLoads;
+		double modelLoadMs;
+		UnsignedInt64 shadersCreated;
+		UnsignedInt64 drawablesCreated;
+		UnsignedInt hitches;
 		UnsignedInt drawCallsMax;
 		Int particlesMax;
 		Int particlesOnScreenLast;
@@ -97,6 +105,16 @@ namespace
 	UnsignedInt s_frameEffectLights = 0;
 	UnsignedInt s_frameRetailLights = 0;
 	UnsignedInt s_frameLightCandidates = 0;
+	// GeneralsX @performance Claude 16/10/2026 Loads and creations of the current frame (hitch counters).
+	UnsignedInt s_frameTextureLoads = 0;
+	double s_frameTextureLoadMs = 0.0;
+	UnsignedInt s_frameModelLoads = 0;
+	double s_frameModelLoadMs = 0.0;
+	UnsignedInt s_frameShadersCreated = 0;
+	UnsignedInt s_frameDrawablesCreated = 0;
+	LoadTotalsSource s_loadTotalsSource = nullptr;
+	UnsignedInt s_lastTextureLoadTotal = 0;
+	double s_lastTextureLoadMsTotal = 0.0;
 
 	Window s_interval;
 	Window s_overlay;
@@ -132,6 +150,8 @@ namespace
 		w.frameMsSum += frameMs;
 		if (frameMs > w.frameMsMax)
 			w.frameMsMax = frameMs;
+		if (frameMs >= HitchThresholdMs)
+			++w.hitches;
 		for (Int i = 0; i < SECTION_COUNT; ++i)
 			w.sectionMs[i] += s_frameSectionMs[i];
 		w.drawCalls += s_frameCounters.drawCalls;
@@ -149,6 +169,12 @@ namespace
 		w.effectLights += s_frameEffectLights;
 		w.retailLights += s_frameRetailLights;
 		w.lightCandidates += s_frameLightCandidates;
+		w.textureLoads += s_frameTextureLoads;
+		w.textureLoadMs += s_frameTextureLoadMs;
+		w.modelLoads += s_frameModelLoads;
+		w.modelLoadMs += s_frameModelLoadMs;
+		w.shadersCreated += s_frameShadersCreated;
+		w.drawablesCreated += s_frameDrawablesCreated;
 		if (s_frameEffectLights > w.effectLightsMax)
 			w.effectLightsMax = s_frameEffectLights;
 		if (s_frameCounters.drawCalls > w.drawCallsMax)
@@ -204,6 +230,10 @@ namespace
 			fprintf(stderr, " | textures=%.0fMB vram_free=%.0fMB",
 				(double)s_textureBytes / (1024.0 * 1024.0), (double)s_freeTextureBytes / (1024.0 * 1024.0));
 		}
+		// GeneralsX @performance Claude 16/10/2026 Loads and creations over the whole window.
+		fprintf(stderr, " | hitches=%u texloads=%llu (%.0f ms) modelloads=%llu (%.0f ms) shaders=%llu drawables=%llu",
+			w.hitches, (unsigned long long)w.textureLoads, w.textureLoadMs, (unsigned long long)w.modelLoads, w.modelLoadMs,
+			(unsigned long long)w.shadersCreated, (unsigned long long)w.drawablesCreated);
 		fprintf(stderr, "\n");
 		fflush(stderr);
 	}
@@ -233,6 +263,46 @@ namespace
 			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
 			avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n),
 			avg((double)w.effectLights, n), avg((double)w.retailLights, n), avg(w.sectionMs[SECTION_EFFECT_LIGHTS], n));
+	}
+
+	// GeneralsX @performance Claude 16/10/2026 One line for a frame of at least HitchThresholdMs: where the time
+	// went and what was loaded or created in that frame.
+	void printHitch(double frameMs, Bool inMatch, UnsignedInt logicFrame)
+	{
+		fprintf(stderr,
+			"[PERF] hitch frame_ms=%.1f %s logic_frame=%u"
+			" | logic=%.1f client=%.1f (drawables=%.1f particles=%.1f draw=%.1f: targets=%.1f scene=%.1f"
+			" [meshes=%.1f shadows=%.1f particles=%.1f] present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
+			" untracked=%.1f"
+			" | texloads=%u (%.1f ms) modelloads=%u (%.1f ms) shaders=%u drawables=%u"
+			" | draws=%u tris=%.0fk particles=%d\n",
+			frameMs, inMatch ? "match" : "shell", logicFrame,
+			s_frameSectionMs[SECTION_LOGIC], s_frameSectionMs[SECTION_CLIENT],
+			s_frameSectionMs[SECTION_DRAWABLES], s_frameSectionMs[SECTION_PARTICLE_UPDATE],
+			s_frameSectionMs[SECTION_DRAW], s_frameSectionMs[SECTION_RENDER_TARGETS],
+			s_frameSectionMs[SECTION_SCENE], s_frameSectionMs[SECTION_MESH_FLUSH],
+			s_frameSectionMs[SECTION_SHADOWS], s_frameSectionMs[SECTION_PARTICLE_RENDER],
+			s_frameSectionMs[SECTION_PRESENT], s_frameSectionMs[SECTION_WATER_REFLECTION],
+			s_frameSectionMs[SECTION_EFFECT_LIGHTS], s_frameSectionMs[SECTION_SKINNED_SHADOWS],
+			frameMs - s_frameSectionMs[SECTION_LOGIC] - s_frameSectionMs[SECTION_CLIENT],
+			s_frameTextureLoads, s_frameTextureLoadMs, s_frameModelLoads, s_frameModelLoadMs,
+			s_frameShadersCreated, s_frameDrawablesCreated,
+			s_frameCounters.drawCalls, (double)s_frameCounters.triangles / 1000.0, s_frameCounters.particles);
+		fflush(stderr);
+	}
+
+	/// Turns the renderer's running texture load totals into this frame's counts.
+	void readLoadTotals()
+	{
+		if (s_loadTotalsSource == nullptr)
+			return;
+		UnsignedInt loads = 0;
+		double ms = 0.0;
+		s_loadTotalsSource(loads, ms);
+		s_frameTextureLoads = loads - s_lastTextureLoadTotal;
+		s_frameTextureLoadMs = ms - s_lastTextureLoadMsTotal;
+		s_lastTextureLoadTotal = loads;
+		s_lastTextureLoadMsTotal = ms;
 	}
 
 	void closeDump(const char *reason)
@@ -373,6 +443,36 @@ void addTime(Section section, double ms)
 	s_frameSectionMs[section] += ms;
 }
 
+// GeneralsX @performance Claude 16/10/2026 Hitch counters.
+void setLoadTotalsSource(LoadTotalsSource source)
+{
+	s_loadTotalsSource = source;
+	if (source != nullptr)
+		source(s_lastTextureLoadTotal, s_lastTextureLoadMsTotal);
+}
+
+void addModelLoad(double ms)
+{
+	if (!s_enabled)
+		return;
+	++s_frameModelLoads;
+	s_frameModelLoadMs += ms;
+}
+
+void addShaderCreated()
+{
+	if (!s_enabled)
+		return;
+	++s_frameShadersCreated;
+}
+
+void addDrawableCreated()
+{
+	if (!s_enabled)
+		return;
+	++s_frameDrawablesCreated;
+}
+
 void setFrameCounters(const FrameCounters &counters)
 {
 	s_frameCounters = counters;
@@ -444,9 +544,14 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 		s_windowsStarted = TRUE;
 	}
 
+	readLoadTotals();
+
 	if (s_lastFrameEndMs >= 0.0)
 	{
 		const double frameMs = now - s_lastFrameEndMs;
+
+		if (s_printEnabled && frameMs >= HitchThresholdMs)
+			printHitch(frameMs, inMatch, logicFrame);
 
 		if (inMatch && s_dumpRequested)
 		{
@@ -485,6 +590,12 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_frameEffectLights = 0;
 	s_frameRetailLights = 0;
 	s_frameLightCandidates = 0;
+	s_frameTextureLoads = 0;
+	s_frameTextureLoadMs = 0.0;
+	s_frameModelLoads = 0;
+	s_frameModelLoadMs = 0.0;
+	s_frameShadersCreated = 0;
+	s_frameDrawablesCreated = 0;
 }
 
 const char *getOverlayText()

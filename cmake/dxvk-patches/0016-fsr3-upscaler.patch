@@ -1,0 +1,2415 @@
+GeneralsX: AMD FidelityFX FSR 3.1 temporal upscaler, DXVK_UPSCALER=fsr3.
+Built from the GLSL shaders and the Vulkan backend of the FidelityFX SDK
+v1.1.4 (FSR 3.1.4), which the build copies to src/dxvk/fsr3/ffx-sdk; the
+shaders are compiled with glslang into SPIR-V tables like FSR 2's. Without
+the SDK, DXVK builds as before and DXVK_UPSCALER=fsr3 logs that FSR 3 is
+unavailable and uses FSR 2. FSR 3 takes the same scene inputs as FSR 2
+(camera motion from depth, jitter, reactive mask) and reuses the FSR 2
+prepare and composite shaders, so the interface is taken from the EASU
+image and never runs through the temporal upscaler. A shim hides device
+extensions the backend would otherwise use (fp16 permutations are not
+compiled) and defers the image view destruction of the backend until the
+command list that used the views has completed. Log lines start with
+[FSR3]; if FSR 3 fails, FSR 2 takes over, then FSR 1.0.
+
+diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
+--- a/src/dxvk/dxvk_fsr2.cpp
++++ b/src/dxvk/dxvk_fsr2.cpp
+@@ -1,4 +1,5 @@
+ #include "dxvk_fsr2.h"
++#include "dxvk_fsr3.h"
+ 
+ #include <algorithm>
+ #include <cctype>
+@@ -79,7 +80,8 @@ namespace dxvk {
+ 
+ 
+   bool DxvkFsr2::isReactiveWanted() {
+-    return isAvailable() && getSettings().reactiveScale > 0.0f;
++    // GeneralsX: FSR 3 generates its reactive mask from the same copies
++    return (isAvailable() || DxvkFsr3::isAvailable()) && getSettings().reactiveScale > 0.0f;
+   }
+ 
+ 
+diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
+--- a/src/dxvk/dxvk_fsr2.h
++++ b/src/dxvk/dxvk_fsr2.h
+@@ -62,6 +62,17 @@ namespace dxvk {
+ 
+   public:
+ 
++    /// GeneralsX: reactive mask and sharpening settings from the
++    /// environment, see DxvkFsr2::getSettings. FSR 3 shares them.
++    struct Settings {
++      float     reactiveScale     = 0.9f;
++      float     reactiveThreshold = 0.05f;
++      float     sharpness         = 0.0f;
++      bool      debugReactive     = false;
++    };
++
++    static const Settings& getSettings();
++
+     DxvkFsr2(const Rc<DxvkDevice>& device);
+ 
+     ~DxvkFsr2();
+@@ -89,7 +100,7 @@ namespace dxvk {
+      * \brief Whether the D3D9 device should copy the opaque scene
+      *
+      * True when DXVK_FSR2_REACTIVE_SCALE is above zero or the reactive
+-     * mask debug view is on.
++     * mask debug view is on, and FSR 2 or FSR 3 is part of the build.
+      */
+     static bool isReactiveWanted();
+ 
+@@ -156,17 +167,6 @@ namespace dxvk {
+       uint32_t  reserved;
+     };
+ 
+-    /// GeneralsX: reactive mask and sharpening settings from the
+-    /// environment, see DxvkFsr2::getSettings
+-    struct Settings {
+-      float     reactiveScale     = 0.9f;
+-      float     reactiveThreshold = 0.05f;
+-      float     sharpness         = 0.0f;
+-      bool      debugReactive     = false;
+-    };
+-
+-    static const Settings& getSettings();
+-
+     Settings                m_settings;
+     float                   m_spatialSharpness = 0.2f;
+     bool                    m_reactiveLogged = false;
+diff --git a/src/dxvk/dxvk_fsr3.cpp b/src/dxvk/dxvk_fsr3.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/dxvk_fsr3.cpp
+@@ -0,0 +1,986 @@
++#include "dxvk_fsr3.h"
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cmath>
++#include <cstring>
++
++#include <dxvk_fsr2_prepare.h>
++#include <dxvk_fsr2_composite.h>
++
++#ifdef DXVK_GENERALSX_FSR3
++#include "fsr3/dxvk_fsr3_ffx_names.h"
++#include "fsr3/dxvk_fsr3_ffx_table.h"
++#include <FidelityFX/host/ffx_fsr3upscaler.h>
++#include <FidelityFX/host/backends/vk/ffx_vk.h>
++
++/// Permutation options the build does not provide, see dxvk_fsr3_shaders.cpp
++extern std::atomic<uint32_t> g_dxvkFsr3PermutationMismatch;
++#endif
++
++namespace dxvk {
++
++#ifdef DXVK_GENERALSX_FSR3
++  // Auto-reactive flags of the upscaler, see the SDK's
++  // FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_resources.h
++  constexpr uint32_t Fsr3ReactiveApplyTonemap    = 1u;
++  constexpr uint32_t Fsr3ReactiveApplyThreshold  = 4u;
++  constexpr uint32_t Fsr3ReactiveComponentsMax   = 8u;
++
++  /// Effect contexts of the backend: shared resources and the upscaler
++  constexpr size_t   Fsr3MaxContexts = 2u;
++
++
++  /**
++   * \brief GeneralsX: SDK contexts of DxvkFsr3
++   */
++  struct DxvkFsr3::FfxState {
++    std::vector<uint8_t>        scratch;
++    FfxInterface                backend = { };
++
++    FfxUInt32                   sharedContextId = 0u;
++    bool                        sharedContextValid = false;
++
++    FfxFsr3UpscalerContext      upscaler = { };
++    bool                        upscalerValid = false;
++
++    /// Shared resources the upscaler writes, as in the SDK's ffx_fsr3.cpp
++    FfxResourceInternal         dilatedDepth = { };
++    FfxResourceInternal         dilatedMotionVectors = { };
++    FfxResourceInternal         reconstructedPrevNearestDepth = { };
++    bool                        sharedResourcesValid = false;
++  };
++
++
++  /**
++   * \brief GeneralsX: image views the SDK backend released
++   *
++   * Tracked by the command list of the frame that released them, so they
++   * are destroyed once the GPU is done with that frame.
++   */
++  class DxvkFsr3ReleasedViews : public RcObject {
++
++  public:
++
++    DxvkFsr3ReleasedViews(Rc<vk::DeviceFn> vkd, std::vector<VkImageView>&& views)
++    : m_vkd(std::move(vkd)), m_views(std::move(views)) { }
++
++    ~DxvkFsr3ReleasedViews() {
++      for (VkImageView view : m_views)
++        m_vkd->vkDestroyImageView(m_vkd->device(), view, nullptr);
++    }
++
++  private:
++
++    Rc<vk::DeviceFn>          m_vkd;
++    std::vector<VkImageView>  m_views;
++
++  };
++
++
++  static FfxResource getFfxImage(
++    const Rc<DxvkImage>&              image,
++          VkFormat                    format,
++          VkExtent2D                  extent,
++          bool                        storage,
++    const wchar_t*                    name,
++          FfxResourceStates           state) {
++    FfxResourceDescription desc = { };
++    desc.type     = FFX_RESOURCE_TYPE_TEXTURE2D;
++    desc.format   = ffxGetSurfaceFormatVK(format);
++    desc.width    = extent.width;
++    desc.height   = extent.height;
++    desc.depth    = 1u;
++    desc.mipCount = 1u;
++    desc.flags    = FFX_RESOURCE_FLAGS_NONE;
++    desc.usage    = storage ? FFX_RESOURCE_USAGE_UAV : FFX_RESOURCE_USAGE_READ_ONLY;
++
++    return ffxGetResourceVK(reinterpret_cast<void*>(image->handle()), desc, name, state);
++  }
++#else
++  struct DxvkFsr3::FfxState { };
++#endif
++
++
++  DxvkFsr3::DxvkFsr3(const Rc<DxvkDevice>& device)
++  : m_device(device) {
++    if (!isAvailable()) {
++      fail("FidelityFX SDK is not part of this DXVK build");
++      return;
++    }
++
++    m_settings = DxvkFsr2::getSettings();
++
++    Logger::info(str::format("[FSR3] reactive mask ",
++      m_settings.reactiveScale > 0.0f
++        ? str::format("on, value ", m_settings.reactiveScale, ", threshold ", m_settings.reactiveThreshold)
++        : std::string("off"),
++      ", FSR 3 sharpening ",
++      m_settings.sharpness > 0.0f
++        ? str::format(m_settings.sharpness)
++        : std::string("off (FSR 1.0 RCAS sharpens)"),
++      m_settings.debugReactive ? ", debug view of the reactive mask" : ""));
++
++    createPipelines();
++
++    DxvkSamplerKey samplerKey = { };
++    samplerKey.setFilter(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST);
++    samplerKey.setAddressModes(
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
++    m_pointSampler = m_device->createSampler(samplerKey);
++
++    samplerKey.setFilter(VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST);
++    m_linearSampler = m_device->createSampler(samplerKey);
++  }
++
++
++  DxvkFsr3::~DxvkFsr3() {
++    destroyContext();
++
++    auto vk = m_device->vkd();
++
++    vk->vkDestroyPipeline(vk->device(), m_preparePipeline, nullptr);
++    vk->vkDestroyPipelineLayout(vk->device(), m_preparePipelineLayout, nullptr);
++    vk->vkDestroyDescriptorSetLayout(vk->device(), m_prepareSetLayout, nullptr);
++
++    vk->vkDestroyPipeline(vk->device(), m_compositePipeline, nullptr);
++    vk->vkDestroyPipelineLayout(vk->device(), m_compositePipelineLayout, nullptr);
++    vk->vkDestroyDescriptorSetLayout(vk->device(), m_compositeSetLayout, nullptr);
++  }
++
++
++  bool DxvkFsr3::isAvailable() {
++#ifdef DXVK_GENERALSX_FSR3
++    return true;
++#else
++    return false;
++#endif
++  }
++
++
++  Rc<DxvkImageView> DxvkFsr3::render(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++    const Rc<DxvkImageView>&          finalView,
++          VkRect2D                    finalRect,
++    const Rc<DxvkImageView>&          spatialView,
++          VkExtent2D                  extent) {
++    if (m_failed || inputs.color == nullptr || inputs.depth == nullptr)
++      return nullptr;
++
++    VkExtent3D colorExtent = inputs.color->mipLevelExtent(0u);
++    VkExtent2D renderExtent = { colorExtent.width, colorExtent.height };
++
++    if (renderExtent != m_renderExtent || extent != m_displayExtent || m_ffx == nullptr) {
++      // Resources of the old context may still be in use by earlier frames
++      if (m_ffx != nullptr)
++        m_device->waitForIdle();
++
++      destroyContext();
++
++      if (!createContext(renderExtent, extent))
++        return nullptr;
++
++      createImages(renderExtent, extent);
++      m_havePrev = false;
++    }
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture))) {
++      ctx.cmd->cmdBeginDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer,
++        vk::makeLabel(0xdcc0f0, "FSR 3"));
++    }
++
++    // Everything written before, the scene copies by the D3D9 device, the
++    // EASU pass and the back buffer, is read by the compute passes below.
++    VkMemoryBarrier2 memBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    memBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++    memBarrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
++    memBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    memBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.memoryBarrierCount = 1;
++    depInfo.pMemoryBarriers = &memBarrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    preparePass(ctx, inputs);
++
++    // Reactive mask from the scene before and after its alpha-blended
++    // effects, as with FSR 2
++    bool useReactive = m_settings.reactiveScale > 0.0f
++      && inputs.opaqueColor != nullptr
++      && inputs.opaqueColor->mipLevelExtent(0u) == colorExtent
++      && generateReactive(ctx, inputs);
++
++    bool success = dispatchUpscaler(ctx, inputs, useReactive);
++
++    if (success) {
++      compositePass(ctx, inputs, m_outputView, finalView, finalRect,
++        spatialView, m_compositeView, useReactive);
++    }
++
++    // DXVK does not know about the compute reads above, so make sure that
++    // later writes to the back buffer and the scene copies wait for them.
++    VkMemoryBarrier2 readBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    readBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    readBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++
++    depInfo.pMemoryBarriers = &readBarrier;
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
++      ctx.cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
++
++    releaseViews(ctx);
++
++    ctx.cmd->track(inputs.color->image(), DxvkAccess::Read);
++    ctx.cmd->track(inputs.depth->image(), DxvkAccess::Read);
++    ctx.cmd->track(finalView->image(), DxvkAccess::Read);
++    ctx.cmd->track(spatialView->image(), DxvkAccess::Read);
++    ctx.cmd->track(m_depthImage, DxvkAccess::Write);
++    ctx.cmd->track(m_motionImage, DxvkAccess::Write);
++    ctx.cmd->track(m_outputImage, DxvkAccess::Write);
++    ctx.cmd->track(m_compositeImage, DxvkAccess::Write);
++
++    if (useReactive) {
++      ctx.cmd->track(inputs.opaqueColor->image(), DxvkAccess::Read);
++      ctx.cmd->track(m_reactiveImage, DxvkAccess::Write);
++    }
++
++    ctx.cmd->track(m_pointSampler);
++    ctx.cmd->track(m_linearSampler);
++
++    if (!success)
++      return nullptr;
++
++    m_prevViewProj = inputs.viewProj;
++    m_havePrev = true;
++    m_frameCount += 1u;
++
++    if (m_frameCount == 1u || !(m_frameCount % 600u)) {
++      Logger::info(str::format("[FSR3] frame ", m_frameCount, ", ",
++        renderExtent.width, "x", renderExtent.height, " to ", extent.width, "x", extent.height,
++        ", jitter ", inputs.jitter[0], " ", inputs.jitter[1],
++        ", near ", inputs.cameraNear, ", far ", inputs.cameraFar,
++        ", frame time ", inputs.frameTimeMs, " ms",
++        useReactive ? ", reactive mask" : (m_settings.reactiveScale > 0.0f ? ", no reactive mask (no opaque scene copy)" : "")));
++    }
++
++    return m_compositeView;
++  }
++
++
++  bool DxvkFsr3::createContext(VkExtent2D renderExtent, VkExtent2D displayExtent) {
++#ifdef DXVK_GENERALSX_FSR3
++    auto vki = m_device->vki();
++    auto vkd = m_device->vkd();
++
++    PFN_vkGetDeviceProcAddr getDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
++      vki->getLoaderProc()(vki->instance(), "vkGetDeviceProcAddr"));
++
++    if (!getDeviceProcAddr) {
++      fail("vkGetDeviceProcAddr not found");
++      return false;
++    }
++
++    g_dxvkFsr3Vk.createBuffer                       = vkd->vkCreateBuffer;
++    g_dxvkFsr3Vk.enumerateDeviceExtensionProperties = vki->vkEnumerateDeviceExtensionProperties;
++    g_dxvkFsr3Vk.getPhysicalDeviceMemoryProperties  = vki->vkGetPhysicalDeviceMemoryProperties;
++    g_dxvkFsr3Vk.getPhysicalDeviceProperties        = vki->vkGetPhysicalDeviceProperties;
++    g_dxvkFsr3Vk.getPhysicalDeviceProperties2       = vki->vkGetPhysicalDeviceProperties2;
++    g_dxvkFsr3Vk.getPhysicalDeviceFeatures          = vki->vkGetPhysicalDeviceFeatures;
++    g_dxvkFsr3Vk.getPhysicalDeviceFeatures2         = vki->vkGetPhysicalDeviceFeatures2;
++    g_dxvkFsr3Vk.getDeviceProcAddr                  = getDeviceProcAddr;
++
++    VkPhysicalDevice adapter = m_device->adapter()->handle();
++
++    auto state = std::make_unique<FfxState>();
++    state->scratch.resize(ffxGetScratchMemorySizeVK(adapter, Fsr3MaxContexts));
++    std::memset(state->scratch.data(), 0, state->scratch.size());
++
++    VkDeviceContext deviceContext = { };
++    deviceContext.vkDevice         = m_device->handle();
++    deviceContext.vkPhysicalDevice = adapter;
++    deviceContext.vkDeviceProcAddr = getDeviceProcAddr;
++
++    FfxErrorCode error = ffxGetInterfaceVK(&state->backend, ffxGetDeviceVK(&deviceContext),
++      state->scratch.data(), state->scratch.size(), Fsr3MaxContexts);
++
++    if (error != FFX_OK) {
++      fail(str::format("ffxGetInterfaceVK failed: ", error));
++      return false;
++    }
++
++    m_ffx = std::move(state);
++
++    // The shared resources live in their own backend context, so that
++    // frame generation can read them after the upscaler, as the SDK's
++    // ffx_fsr3.cpp does
++    error = m_ffx->backend.fpCreateBackendContext(&m_ffx->backend,
++      FFX_EFFECT_SHAREDRESOURCES, nullptr, &m_ffx->sharedContextId);
++
++    if (error != FFX_OK) {
++      destroyContext();
++      fail(str::format("shared backend context: fpCreateBackendContext failed: ", error));
++      return false;
++    }
++
++    m_ffx->sharedContextValid = true;
++
++    // The game renders LDR colour without an exposure value. Motion vectors
++    // are at render resolution and computed without jitter.
++    FfxFsr3UpscalerContextDescription desc = { };
++    desc.flags = FFX_FSR3UPSCALER_ENABLE_AUTO_EXPOSURE;
++    desc.maxRenderSize = { renderExtent.width, renderExtent.height };
++    desc.maxUpscaleSize = { displayExtent.width, displayExtent.height };
++    desc.backendInterface = m_ffx->backend;
++
++    g_dxvkFsr3PermutationMismatch.store(0u);
++
++    error = ffxFsr3UpscalerContextCreate(&m_ffx->upscaler, &desc);
++
++    if (error != FFX_OK) {
++      destroyContext();
++      fail(str::format("ffxFsr3UpscalerContextCreate failed: ", error));
++      return false;
++    }
++
++    m_ffx->upscalerValid = true;
++
++    FfxFsr3UpscalerSharedResourceDescriptions shared = { };
++    error = ffxFsr3UpscalerGetSharedResourceDescriptions(&m_ffx->upscaler, &shared);
++
++    if (error == FFX_OK)
++      error = m_ffx->backend.fpCreateResource(&m_ffx->backend, &shared.dilatedDepth, m_ffx->sharedContextId, &m_ffx->dilatedDepth);
++    if (error == FFX_OK)
++      error = m_ffx->backend.fpCreateResource(&m_ffx->backend, &shared.dilatedMotionVectors, m_ffx->sharedContextId, &m_ffx->dilatedMotionVectors);
++    if (error == FFX_OK)
++      error = m_ffx->backend.fpCreateResource(&m_ffx->backend, &shared.reconstructedPrevNearestDepth, m_ffx->sharedContextId, &m_ffx->reconstructedPrevNearestDepth);
++
++    if (error != FFX_OK) {
++      destroyContext();
++      fail(str::format("shared upscaler resources: fpCreateResource failed: ", error));
++      return false;
++    }
++
++    m_ffx->sharedResourcesValid = true;
++
++    uint32_t mismatch = g_dxvkFsr3PermutationMismatch.load();
++
++    if (mismatch) {
++      Logger::warn(str::format("[FSR3] the upscaler asked for shader options this build does not provide (mask ",
++        mismatch, "), using the closest ones"));
++    }
++
++    m_renderExtent = renderExtent;
++    m_displayExtent = displayExtent;
++
++    Logger::info(str::format("[FSR3] context created, render ", renderExtent.width, "x", renderExtent.height,
++      ", display ", displayExtent.width, "x", displayExtent.height,
++      ", FidelityFX FSR ", FFX_FSR3UPSCALER_VERSION_MAJOR, ".", FFX_FSR3UPSCALER_VERSION_MINOR, ".", FFX_FSR3UPSCALER_VERSION_PATCH,
++      " (FidelityFX SDK ", FFX_SDK_VERSION_MAJOR, ".", FFX_SDK_VERSION_MINOR, ".", FFX_SDK_VERSION_PATCH, ")"));
++    return true;
++#else
++    (void)renderExtent;
++    (void)displayExtent;
++    return false;
++#endif
++  }
++
++
++  void DxvkFsr3::destroyContext() {
++#ifdef DXVK_GENERALSX_FSR3
++    if (m_ffx != nullptr) {
++      m_device->waitForIdle();
++
++      if (m_ffx->sharedResourcesValid) {
++        m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->dilatedDepth, m_ffx->sharedContextId);
++        m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->dilatedMotionVectors, m_ffx->sharedContextId);
++        m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->reconstructedPrevNearestDepth, m_ffx->sharedContextId);
++      }
++
++      if (m_ffx->upscalerValid)
++        ffxFsr3UpscalerContextDestroy(&m_ffx->upscaler);
++
++      if (m_ffx->sharedContextValid)
++        m_ffx->backend.fpDestroyBackendContext(&m_ffx->backend, m_ffx->sharedContextId);
++
++      // The GPU is idle, so the views the backend released can go now
++      destroyReleasedViews();
++    }
++#endif
++
++    m_ffx = nullptr;
++    m_renderExtent = { 0u, 0u };
++    m_displayExtent = { 0u, 0u };
++  }
++
++
++  void DxvkFsr3::createPipelines() {
++    auto vk = m_device->vkd();
++
++    // Prepare pass: depth in, linear depth copy and motion vectors out
++    std::array<VkDescriptorSetLayoutBinding, 3> prepareBindings = {{
++      { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++    }};
++
++    // Composite pass: temporal output, EASU output, final and scene images,
++    // composited output, and the reactive mask for its debug view
++    std::array<VkDescriptorSetLayoutBinding, 6> compositeBindings = {{
++      { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
++    }};
++
++    auto createLayouts = [&] (const VkDescriptorSetLayoutBinding* bindings, uint32_t count,
++        uint32_t pushSize, VkDescriptorSetLayout& setLayout, VkPipelineLayout& pipelineLayout) {
++      VkDescriptorSetLayoutCreateInfo setInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
++      setInfo.bindingCount = count;
++      setInfo.pBindings = bindings;
++
++      VkResult vr = vk->vkCreateDescriptorSetLayout(vk->device(), &setInfo, nullptr, &setLayout);
++
++      if (vr != VK_SUCCESS)
++        throw DxvkError(str::format("[FSR3] failed to create descriptor set layout: ", vr));
++
++      VkPushConstantRange pushConst = { };
++      pushConst.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
++      pushConst.size = pushSize;
++
++      VkPipelineLayoutCreateInfo layoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
++      layoutInfo.setLayoutCount = 1;
++      layoutInfo.pSetLayouts = &setLayout;
++      layoutInfo.pushConstantRangeCount = 1;
++      layoutInfo.pPushConstantRanges = &pushConst;
++
++      vr = vk->vkCreatePipelineLayout(vk->device(), &layoutInfo, nullptr, &pipelineLayout);
++
++      if (vr != VK_SUCCESS)
++        throw DxvkError(str::format("[FSR3] failed to create pipeline layout: ", vr));
++    };
++
++    createLayouts(prepareBindings.data(), prepareBindings.size(), sizeof(PreparePushConstants),
++      m_prepareSetLayout, m_preparePipelineLayout);
++    createLayouts(compositeBindings.data(), compositeBindings.size(), sizeof(CompositePushConstants),
++      m_compositeSetLayout, m_compositePipelineLayout);
++
++    m_preparePipeline = createComputePipeline(m_preparePipelineLayout,
++      sizeof(dxvk_fsr2_prepare), dxvk_fsr2_prepare);
++    m_compositePipeline = createComputePipeline(m_compositePipelineLayout,
++      sizeof(dxvk_fsr2_composite), dxvk_fsr2_composite);
++  }
++
++
++  VkPipeline DxvkFsr3::createComputePipeline(
++          VkPipelineLayout            layout,
++          size_t                      codeSize,
++    const uint32_t*                   code) {
++    auto vk = m_device->vkd();
++
++    VkShaderModuleCreateInfo moduleInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
++    moduleInfo.codeSize = codeSize;
++    moduleInfo.pCode = code;
++
++    VkShaderModule module = VK_NULL_HANDLE;
++    VkResult vr = vk->vkCreateShaderModule(vk->device(), &moduleInfo, nullptr, &module);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("[FSR3] failed to create shader module: ", vr));
++
++    VkComputePipelineCreateInfo info = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
++    info.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
++    info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
++    info.stage.module = module;
++    info.stage.pName = "main";
++    info.layout = layout;
++    info.basePipelineIndex = -1;
++
++    VkPipeline pipeline = VK_NULL_HANDLE;
++    vr = vk->vkCreateComputePipelines(vk->device(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
++
++    vk->vkDestroyShaderModule(vk->device(), module, nullptr);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("[FSR3] failed to create compute pipeline: ", vr));
++
++    return pipeline;
++  }
++
++
++  Rc<DxvkImage> DxvkFsr3::createImage(
++          VkExtent2D                  extent,
++          VkFormat                    format,
++    const char*                       name,
++          Rc<DxvkImageView>&          view) {
++    DxvkImageCreateInfo imageInfo = { };
++    imageInfo.type          = VK_IMAGE_TYPE_2D;
++    imageInfo.format        = format;
++    imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++    imageInfo.extent        = { extent.width, extent.height, 1u };
++    imageInfo.mipLevels     = 1;
++    imageInfo.numLayers     = 1;
++    imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    imageInfo.stages        = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
++                            | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++    imageInfo.access        = VK_ACCESS_SHADER_READ_BIT
++                            | VK_ACCESS_SHADER_WRITE_BIT;
++    imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++    imageInfo.layout        = VK_IMAGE_LAYOUT_GENERAL;
++    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    imageInfo.colorSpace    = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++    imageInfo.debugName     = name;
++
++    Rc<DxvkImage> image = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++    DxvkImageViewKey viewInfo = { };
++    viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++    viewInfo.usage          = VK_IMAGE_USAGE_STORAGE_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    viewInfo.format         = format;
++    viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++    viewInfo.mipIndex       = 0u;
++    viewInfo.mipCount       = 1u;
++    viewInfo.layerIndex     = 0u;
++    viewInfo.layerCount     = 1u;
++
++    view = image->createView(viewInfo);
++    return image;
++  }
++
++
++  void DxvkFsr3::createImages(VkExtent2D renderExtent, VkExtent2D displayExtent) {
++    m_depthImage     = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR3 depth",     m_depthView);
++    m_motionImage    = createImage(renderExtent,  VK_FORMAT_R16G16_SFLOAT,       "FSR3 motion",    m_motionView);
++    m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 output",    m_outputView);
++    m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 composite", m_compositeView);
++    m_reactiveImage  = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR3 reactive",  m_reactiveView);
++  }
++
++
++  void DxvkFsr3::preparePass(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs) {
++    // The previous frame's FSR 3 passes may still read the images, which
++    // are fully overwritten, so their contents are discarded.
++    std::array<VkImageMemoryBarrier2, 2> barriers = { };
++
++    for (uint32_t i = 0; i < barriers.size(); i++) {
++      const Rc<DxvkImageView>& view = i ? m_motionView : m_depthView;
++
++      barriers[i] = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++      barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++      barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++      barriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++      barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++      barriers[i].image = view->image()->handle();
++      barriers[i].subresourceRange = view->imageSubresources();
++    }
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = barriers.size();
++    depInfo.pImageMemoryBarriers = barriers.data();
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkDescriptorSet set = ctx.descriptorPool->alloc(m_prepareSetLayout);
++
++    VkDescriptorImageInfo depthInfo = { };
++    depthInfo.sampler = m_pointSampler->handle();
++    depthInfo.imageView = inputs.depth->handle();
++    depthInfo.imageLayout = inputs.depth->image()->info().layout;
++
++    VkDescriptorImageInfo depthOutInfo = { };
++    depthOutInfo.imageView = m_depthView->handle();
++    depthOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    VkDescriptorImageInfo motionOutInfo = { };
++    motionOutInfo.imageView = m_motionView->handle();
++    motionOutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    std::array<VkWriteDescriptorSet, 3> writes = {{
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &depthOutInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &motionOutInfo },
++    }};
++
++    ctx.cmd->updateDescriptorSets(writes.size(), writes.data());
++
++    // Reprojection from the current to the previous frame's clip space, see
++    // DxvkFsr2::preparePass
++    Matrix4 prevViewProj = m_havePrev && !inputs.reset ? m_prevViewProj : inputs.viewProj;
++    Matrix4 reproject = prevViewProj * inverse(inputs.viewProj);
++
++    // The camera projects into the game's 3D viewport, which leaves out
++    // the control bar at the bottom of the screen
++    float viewport[4] = { 0.0f, 0.0f, float(m_renderExtent.width), float(m_renderExtent.height) };
++
++    if (inputs.viewport[2] >= 1.0f && inputs.viewport[3] >= 1.0f)
++      std::memcpy(viewport, inputs.viewport, sizeof(viewport));
++
++    PreparePushConstants push = { };
++    std::memcpy(push.reproject, &reproject, sizeof(push.reproject));
++    push.jitterNdc[0] =  2.0f * inputs.jitter[0] / viewport[2];
++    push.jitterNdc[1] = -2.0f * inputs.jitter[1] / viewport[3];
++    push.extent[0] = m_renderExtent.width;
++    push.extent[1] = m_renderExtent.height;
++    std::memcpy(push.viewport, viewport, sizeof(push.viewport));
++
++    ctx.cmd->cmdBindPipeline(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_preparePipeline);
++    ctx.cmd->cmdBindDescriptorSet(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_preparePipelineLayout, set, 0, nullptr);
++    ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer, m_preparePipelineLayout,
++      VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
++    ctx.cmd->cmdDispatch(DxvkCmdBuffer::ExecBuffer,
++      (m_renderExtent.width + 7u) / 8u, (m_renderExtent.height + 7u) / 8u, 1u);
++
++    // The upscaler reads both images in SHADER_READ_ONLY_OPTIMAL layout,
++    // the state they are registered with; the backend returns them to it.
++    for (auto& barrier : barriers) {
++      barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++      barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++      barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++      barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++      barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    }
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++  }
++
++
++  bool DxvkFsr3::generateReactive(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs) {
++#ifdef DXVK_GENERALSX_FSR3
++    // The mask is fully overwritten; the upscaler of the previous frame and
++    // the debug view may still read it.
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_reactiveImage->handle();
++    barrier.subresourceRange = m_reactiveView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkCommandBuffer cmdBuffer = ctx.cmd->getExecCommandBuffer();
++
++    // Same mask as with FSR 2: every pixel whose largest tonemapped channel
++    // the alpha-blended effects changed by at least the threshold
++    FfxFsr3UpscalerGenerateReactiveDescription desc = { };
++    desc.commandList = ffxGetCommandListVK(cmdBuffer);
++    desc.colorOpaqueOnly = getFfxImage(inputs.opaqueColor->image(), inputs.opaqueColor->info().format,
++      m_renderExtent, false, L"FSR3 opaque color", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.colorPreUpscale = getFfxImage(inputs.color->image(), inputs.color->info().format,
++      m_renderExtent, false, L"FSR3 color", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.outReactive = getFfxImage(m_reactiveImage, VK_FORMAT_R32_SFLOAT,
++      m_renderExtent, true, L"FSR3 reactive", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++    desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
++    desc.scale = 1.0f;
++    desc.cutoffThreshold = m_settings.reactiveThreshold;
++    desc.binaryValue = m_settings.reactiveScale;
++    desc.flags = Fsr3ReactiveApplyTonemap
++               | Fsr3ReactiveApplyThreshold
++               | Fsr3ReactiveComponentsMax;
++
++    FfxErrorCode error = ffxFsr3UpscalerContextGenerateReactiveMask(&m_ffx->upscaler, &desc);
++
++    if (error != FFX_OK) {
++      // The upscaler itself still works without the mask
++      if (!std::exchange(m_reactiveLogged, true))
++        Logger::err(str::format("[FSR3] reactive mask: ffxFsr3UpscalerContextGenerateReactiveMask failed: ", error, ", upscaling without it"));
++      return false;
++    }
++
++    if (!std::exchange(m_reactiveLogged, true)) {
++      Logger::info(str::format("[FSR3] reactive mask: first dispatch, ", m_renderExtent.width, "x", m_renderExtent.height,
++        ", value ", m_settings.reactiveScale, ", threshold ", m_settings.reactiveThreshold,
++        ", flags tonemap, threshold, max component"));
++    }
++
++    return true;
++#else
++    (void)ctx;
++    (void)inputs;
++    return false;
++#endif
++  }
++
++
++  bool DxvkFsr3::dispatchUpscaler(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++          bool                        useReactive) {
++#ifdef DXVK_GENERALSX_FSR3
++    if (ffxGetSurfaceFormatVK(inputs.color->info().format) == FFX_SURFACE_FORMAT_UNKNOWN) {
++      fail(str::format("scene colour format ", inputs.color->info().format, " is not supported by the FidelityFX SDK"));
++      return false;
++    }
++
++    // The upscaler writes every output pixel; the composite pass of the
++    // previous frame may still read the image.
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_outputImage->handle();
++    barrier.subresourceRange = m_outputView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkCommandBuffer cmdBuffer = ctx.cmd->getExecCommandBuffer();
++
++    FfxFsr3UpscalerDispatchDescription desc = { };
++    desc.commandList = ffxGetCommandListVK(cmdBuffer);
++    desc.color = getFfxImage(inputs.color->image(), inputs.color->info().format,
++      m_renderExtent, false, L"FSR3 color", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.depth = getFfxImage(m_depthImage, VK_FORMAT_R32_SFLOAT,
++      m_renderExtent, false, L"FSR3 depth", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.motionVectors = getFfxImage(m_motionImage, VK_FORMAT_R16G16_SFLOAT,
++      m_renderExtent, false, L"FSR3 motion", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.output = getFfxImage(m_outputImage, VK_FORMAT_R16G16B16A16_SFLOAT,
++      m_displayExtent, true, L"FSR3 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++
++    // generateReactive left the mask in GENERAL layout, and the backend
++    // returns it there after the dispatch, where the debug view reads it.
++    if (useReactive) {
++      desc.reactive = getFfxImage(m_reactiveImage, VK_FORMAT_R32_SFLOAT,
++        m_renderExtent, true, L"FSR3 reactive", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++    }
++
++    desc.dilatedDepth = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->dilatedDepth);
++    desc.dilatedMotionVectors = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->dilatedMotionVectors);
++    desc.reconstructedPrevNearestDepth = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->reconstructedPrevNearestDepth);
++
++    desc.jitterOffset.x = inputs.jitter[0];
++    desc.jitterOffset.y = inputs.jitter[1];
++    // The motion vectors are in UV units of the render size
++    desc.motionVectorScale.x = float(m_renderExtent.width);
++    desc.motionVectorScale.y = float(m_renderExtent.height);
++    desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
++    desc.upscaleSize = { m_displayExtent.width, m_displayExtent.height };
++    // The upscaler's own RCAS pass with DXVK_FSR2_SHARPNESS, as for FSR 2;
++    // without it the swap chain sharpens with FSR 1.0 RCAS, never both
++    desc.enableSharpening = m_settings.sharpness > 0.0f;
++    desc.sharpness = m_settings.sharpness;
++    desc.frameTimeDelta = std::clamp(inputs.frameTimeMs, 1.0f, 200.0f);
++    desc.preExposure = 1.0f;
++    desc.reset = inputs.reset || !m_havePrev;
++    desc.cameraNear = inputs.cameraNear;
++    desc.cameraFar = inputs.cameraFar;
++    desc.cameraFovAngleVertical = inputs.fovY;
++    // Zero Hour world units are roughly feet
++    desc.viewSpaceToMetersFactor = 0.3048f;
++
++    FfxErrorCode error = ffxFsr3UpscalerContextDispatch(&m_ffx->upscaler, &desc);
++
++    if (error != FFX_OK) {
++      fail(str::format("ffxFsr3UpscalerContextDispatch failed: ", error));
++      return false;
++    }
++
++    return true;
++#else
++    (void)ctx;
++    (void)inputs;
++    (void)useReactive;
++    return false;
++#endif
++  }
++
++
++  void DxvkFsr3::compositePass(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++    const Rc<DxvkImageView>&          sceneView,
++    const Rc<DxvkImageView>&          finalView,
++          VkRect2D                    finalRect,
++    const Rc<DxvkImageView>&          spatialView,
++    const Rc<DxvkImageView>&          outputView,
++          bool                        useReactive) {
++    // The scene image was written in GENERAL layout by the SDK. The output
++    // is fully overwritten; the previous frame's final blit may still read
++    // it.
++    std::array<VkImageMemoryBarrier2, 2> barriers = { };
++    barriers[0] = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barriers[0].image = sceneView->image()->handle();
++    barriers[0].subresourceRange = sceneView->imageSubresources();
++
++    barriers[1] = barriers[0];
++    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barriers[1].srcAccessMask = 0;
++    barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[1].image = outputView->image()->handle();
++    barriers[1].subresourceRange = outputView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = barriers.size();
++    depInfo.pImageMemoryBarriers = barriers.data();
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkDescriptorSet set = ctx.descriptorPool->alloc(m_compositeSetLayout);
++
++    VkDescriptorImageInfo temporalInfo = { };
++    temporalInfo.sampler = m_linearSampler->handle();
++    temporalInfo.imageView = sceneView->handle();
++    temporalInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    VkDescriptorImageInfo spatialInfo = { };
++    spatialInfo.sampler = m_linearSampler->handle();
++    spatialInfo.imageView = spatialView->handle();
++    spatialInfo.imageLayout = spatialView->image()->info().layout;
++
++    VkDescriptorImageInfo finalInfo = { };
++    finalInfo.sampler = m_pointSampler->handle();
++    finalInfo.imageView = finalView->handle();
++    finalInfo.imageLayout = finalView->image()->info().layout;
++
++    VkDescriptorImageInfo sceneInfo = { };
++    sceneInfo.sampler = m_pointSampler->handle();
++    sceneInfo.imageView = inputs.color->handle();
++    sceneInfo.imageLayout = inputs.color->image()->info().layout;
++
++    VkDescriptorImageInfo outInfo = { };
++    outInfo.imageView = outputView->handle();
++    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    // The reactive mask for the debug view. Without a mask this frame, the
++    // scene copy stands in and the shader does not read it.
++    VkDescriptorImageInfo reactiveInfo = sceneInfo;
++
++    if (useReactive) {
++      reactiveInfo.sampler = m_linearSampler->handle();
++      reactiveInfo.imageView = m_reactiveView->handle();
++      reactiveInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
++    }
++
++    std::array<VkWriteDescriptorSet, 6> writes = {{
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &temporalInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &spatialInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &finalInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 3, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &sceneInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &reactiveInfo },
++    }};
++
++    ctx.cmd->updateDescriptorSets(writes.size(), writes.data());
++
++    CompositePushConstants push = { };
++    push.invOutputExtent[0] = 1.0f / float(m_displayExtent.width);
++    push.invOutputExtent[1] = 1.0f / float(m_displayExtent.height);
++    push.inputExtent[0] = finalRect.extent.width;
++    push.inputExtent[1] = finalRect.extent.height;
++    push.threshold = 1.5f / 255.0f;
++    // While FSR 3 sharpens the scene, the swap chain does not sharpen the
++    // composited image, so the interface pixels taken from the EASU image
++    // get the FSR 1.0 RCAS pass here. Negative: no sharpening.
++    push.spatialSharpness = sharpensOutput() ? m_spatialSharpness : -1.0f;
++    // 0: normal, 1: reactive mask over a grey frame, 2: the debug view
++    // without a mask this frame
++    push.debugMode = m_settings.debugReactive ? (useReactive ? 1u : 2u) : 0u;
++
++    ctx.cmd->cmdBindPipeline(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipeline);
++    ctx.cmd->cmdBindDescriptorSet(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipelineLayout, set, 0, nullptr);
++    ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer, m_compositePipelineLayout,
++      VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
++    ctx.cmd->cmdDispatch(DxvkCmdBuffer::ExecBuffer,
++      (m_displayExtent.width + 7u) / 8u, (m_displayExtent.height + 7u) / 8u, 1u);
++
++    // The final blit samples the composited image in GENERAL layout
++    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barriers[1];
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++  }
++
++
++  void DxvkFsr3::releaseViews(
++    const DxvkContextObjects&         ctx) {
++#ifdef DXVK_GENERALSX_FSR3
++    dxvkFsr3TakeReleasedViews(m_releasedViews);
++
++    if (m_releasedViews.empty())
++      return;
++
++    // The views were released by dispatches recorded into this command
++    // list or earlier ones, so they can go once it has finished
++    ctx.cmd->track(Rc<DxvkFsr3ReleasedViews>(new DxvkFsr3ReleasedViews(
++      m_device->vkd(), std::move(m_releasedViews))));
++    m_releasedViews.clear();
++#else
++    (void)ctx;
++#endif
++  }
++
++
++  void DxvkFsr3::destroyReleasedViews() {
++#ifdef DXVK_GENERALSX_FSR3
++    dxvkFsr3TakeReleasedViews(m_releasedViews);
++
++    auto vk = m_device->vkd();
++
++    for (VkImageView view : m_releasedViews)
++      vk->vkDestroyImageView(vk->device(), view, nullptr);
++#endif
++
++    m_releasedViews.clear();
++  }
++
++
++  void DxvkFsr3::fail(const std::string& message) {
++    if (!m_failed)
++      Logger::err(str::format("[FSR3] ", message, "; falling back to FSR 2 or FSR 1.0"));
++
++    m_failed = true;
++  }
++
++}
+diff --git a/src/dxvk/dxvk_fsr3.h b/src/dxvk/dxvk_fsr3.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/dxvk_fsr3.h
+@@ -0,0 +1,184 @@
++#pragma once
++
++#include <memory>
++#include <vector>
++
++#include "dxvk_fsr2.h"
++
++namespace dxvk {
++
++  /**
++   * \brief GeneralsX: AMD FidelityFX FSR 3 temporal upscaler
++   *
++   * Takes the same scene inputs as FSR 2 and works the same way: camera
++   * motion vectors from the scene depth, the FSR 3.1 upscaler of the
++   * FidelityFX SDK for the scene, and a composite pass that takes the
++   * interface from a spatially upscaled copy of the final image. Reactive
++   * mask and sharpening use the FSR 2 settings, see DxvkFsr2::getSettings.
++   */
++  class DxvkFsr3 {
++
++  public:
++
++    DxvkFsr3(const Rc<DxvkDevice>& device);
++
++    ~DxvkFsr3();
++
++    /**
++     * \brief Whether the FidelityFX SDK is compiled into this build
++     */
++    static bool isAvailable();
++
++    /**
++     * \brief Whether FSR 3 sharpens its own output with RCAS
++     */
++    bool sharpensOutput() const {
++      return !m_failed && m_settings.sharpness > 0.0f;
++    }
++
++    /**
++     * \brief Sets the FSR 1.0 RCAS sharpness of the interface
++     * \param [in] stops RCAS sharpness in stops, 0 is the sharpest
++     */
++    void setSpatialSharpness(float stops) {
++      m_spatialSharpness = stops;
++    }
++
++    /**
++     * \brief Upscales one frame
++     *
++     * \param [in] ctx Context objects
++     * \param [in] inputs Scene inputs of the frame
++     * \param [in] finalView Final image at render size, single-sampled
++     * \param [in] finalRect Area of the final image
++     * \param [in] spatialView Final image upscaled with FSR 1 EASU
++     * \param [in] extent Output size
++     * \returns Composited output in GENERAL layout, or \c nullptr
++     *    if FSR 3 failed and the caller should use \c spatialView
++     */
++    Rc<DxvkImageView> render(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++      const Rc<DxvkImageView>&          finalView,
++            VkRect2D                    finalRect,
++      const Rc<DxvkImageView>&          spatialView,
++            VkExtent2D                  extent);
++
++    bool failed() const {
++      return m_failed;
++    }
++
++  private:
++
++    /// SDK contexts and resources, see dxvk_fsr3.cpp
++    struct FfxState;
++
++    /// Same layouts as DxvkFsr2's, the shaders are shared
++    struct PreparePushConstants {
++      float     reproject[16];
++      float     jitterNdc[2];
++      uint32_t  extent[2];
++      float     viewport[4];
++    };
++
++    struct CompositePushConstants {
++      float     invOutputExtent[2];
++      uint32_t  inputExtent[2];
++      float     threshold;
++      float     spatialSharpness;
++      uint32_t  debugMode;
++      uint32_t  reserved;
++    };
++
++    DxvkFsr2::Settings      m_settings;
++    float                   m_spatialSharpness = 0.2f;
++    bool                    m_reactiveLogged = false;
++
++    Rc<DxvkDevice>          m_device;
++
++    bool                    m_failed = false;
++    std::unique_ptr<FfxState> m_ffx;
++
++    VkExtent2D              m_renderExtent  = { 0u, 0u };
++    VkExtent2D              m_displayExtent = { 0u, 0u };
++
++    VkDescriptorSetLayout   m_prepareSetLayout       = VK_NULL_HANDLE;
++    VkPipelineLayout        m_preparePipelineLayout  = VK_NULL_HANDLE;
++    VkPipeline              m_preparePipeline        = VK_NULL_HANDLE;
++
++    VkDescriptorSetLayout   m_compositeSetLayout      = VK_NULL_HANDLE;
++    VkPipelineLayout        m_compositePipelineLayout = VK_NULL_HANDLE;
++    VkPipeline              m_compositePipeline       = VK_NULL_HANDLE;
++
++    Rc<DxvkSampler>         m_pointSampler;
++    Rc<DxvkSampler>         m_linearSampler;
++
++    Rc<DxvkImage>           m_depthImage;
++    Rc<DxvkImageView>       m_depthView;
++    Rc<DxvkImage>           m_motionImage;
++    Rc<DxvkImageView>       m_motionView;
++    Rc<DxvkImage>           m_outputImage;
++    Rc<DxvkImageView>       m_outputView;
++    Rc<DxvkImage>           m_compositeImage;
++    Rc<DxvkImageView>       m_compositeView;
++    Rc<DxvkImage>           m_reactiveImage;
++    Rc<DxvkImageView>       m_reactiveView;
++
++    Matrix4                 m_prevViewProj;
++    bool                    m_havePrev = false;
++    uint64_t                m_frameCount = 0u;
++
++    std::vector<VkImageView> m_releasedViews;
++
++    bool createContext(VkExtent2D renderExtent, VkExtent2D displayExtent);
++
++    void destroyContext();
++
++    void createPipelines();
++
++    VkPipeline createComputePipeline(
++            VkPipelineLayout            layout,
++            size_t                      codeSize,
++      const uint32_t*                   code);
++
++    Rc<DxvkImage> createImage(
++            VkExtent2D                  extent,
++            VkFormat                    format,
++      const char*                       name,
++            Rc<DxvkImageView>&          view);
++
++    void createImages(VkExtent2D renderExtent, VkExtent2D displayExtent);
++
++    void preparePass(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs);
++
++    bool generateReactive(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs);
++
++    bool dispatchUpscaler(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++            bool                        useReactive);
++
++    void compositePass(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++      const Rc<DxvkImageView>&          sceneView,
++      const Rc<DxvkImageView>&          finalView,
++            VkRect2D                    finalRect,
++      const Rc<DxvkImageView>&          spatialView,
++      const Rc<DxvkImageView>&          outputView,
++            bool                        useReactive);
++
++    void releaseViews(
++      const DxvkContextObjects&         ctx);
++
++    void destroyReleasedViews();
++
++    void fail(const std::string& message);
++
++  };
++
++}
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -619,6 +619,18 @@ namespace dxvk {
+       upscaler = "fsr2";
+     }
+ 
++    // GeneralsX: DXVK_UPSCALER=fsr3 uses the FSR 3.1 upscaler of the
++    // FidelityFX SDK, with FSR 2 as the fallback when the SDK is missing
++    if (upscaler == "fsr3") {
++      if (DxvkFsr3::isAvailable()) {
++        m_fsr3Enabled = true;
++        m_fsrEnabled = true;
++      } else {
++        Logger::warn("[FSR3] FSR 3 is not part of this build (no FidelityFX SDK), using FSR 2");
++        upscaler = "fsr2";
++      }
++    }
++
+     if (upscaler == "fsr2") {
+       if (DxvkFsr2::isAvailable()) {
+         m_fsr2Enabled = true;
+@@ -635,6 +647,9 @@ namespace dxvk {
+     if (m_fsr2Enabled)
+       Logger::info("Swap chain: FSR 2 temporal upscaling enabled");
+ 
++    if (m_fsr3Enabled)
++      Logger::info("[FSR3] Swap chain: FSR 3 temporal upscaling enabled");
++
+     // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
+     // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
+     m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
+@@ -853,26 +868,41 @@ namespace dxvk {
+     // GeneralsX: FSR 2 needs the scene inputs of this frame at the size of
+     // the back buffer. The game jitters its projection while FSR 2 is
+     // active, which it reads back through GeneralsX_UpscalerSubmitFrame.
++    if (m_fsr3Enabled && useFsr && !m_fsr3) {
++      m_fsr3 = std::make_unique<DxvkFsr3>(m_device);
++      m_fsr3->setSpatialSharpness(m_fsrSharpness);
++    }
++
++    // GeneralsX: when FSR 3 fails, FSR 2 takes over if it is available
++    bool fsr3Usable = m_fsr3Enabled && useFsr && m_fsr3 && !m_fsr3->failed();
++
++    if (m_fsr3Enabled && m_fsr3 && m_fsr3->failed() && !m_fsr2Enabled && DxvkFsr2::isAvailable()) {
++      Logger::warn("[FSR3] FSR 3 failed, switching to FSR 2");
++      m_fsr2Enabled = true;
++    }
++
+     if (m_fsr2Enabled && useFsr && !m_fsr2) {
+       m_fsr2 = std::make_unique<DxvkFsr2>(m_device);
+       m_fsr2->setSpatialSharpness(m_fsrSharpness);
+     }
+ 
+-    bool fsr2Usable = m_fsr2Enabled && useFsr && m_fsr2 && !m_fsr2->failed();
+-    DxvkFsr2::setTemporalActive(fsr2Usable);
++    bool fsr2Usable = !fsr3Usable && m_fsr2Enabled && useFsr && m_fsr2 && !m_fsr2->failed();
++    DxvkFsr2::setTemporalActive(fsr2Usable || fsr3Usable);
+ 
+-    bool useFsr2 = fsr2Usable
+-      && m_fsr2Inputs.color != nullptr
++    bool haveTemporalInputs = m_fsr2Inputs.color != nullptr
+       && m_fsr2Inputs.depth != nullptr
+       && srcRect.offset.x == 0 && srcRect.offset.y == 0
+       && m_fsr2Inputs.color->mipLevelExtent(0u) == VkExtent3D { srcRect.extent.width, srcRect.extent.height, 1u }
+       && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+ 
++    bool useFsr2 = fsr2Usable && haveTemporalInputs;
++    bool useFsr3 = fsr3Usable && haveTemporalInputs;
++
+     // FXAA runs first, at the size of the game image, so that FSR and
+     // post-processing work on the smoothed image. It replaces MSAA when the
+     // game renders without it, so a multisampled image is left as is.
+     // FSR 2 does its own anti-aliasing, so FXAA is skipped with it.
+-    if (m_fxaaEnabled && !useFsr2
++    if (m_fxaaEnabled && !useFsr2 && !useFsr3
+      && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
+      && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+       renderFxaa(ctx, srcView, srcRect);
+@@ -891,11 +921,13 @@ namespace dxvk {
+ 
+     if (useFsr != m_presentLogFsr
+      || useFsr2 != m_presentLogFsr2
++     || useFsr3 != m_presentLogFsr3
+      || srcSamples != m_presentLogSamples
+      || srcRect.extent != m_presentLogSrc
+      || dstRect.extent != m_presentLogDst) {
+       m_presentLogFsr = useFsr;
+       m_presentLogFsr2 = useFsr2;
++      m_presentLogFsr3 = useFsr3;
+       m_presentLogSamples = srcSamples;
+       m_presentLogSrc = srcRect.extent;
+       m_presentLogDst = dstRect.extent;
+@@ -908,7 +940,8 @@ namespace dxvk {
+         " ", msaa, " to ", dstRect.extent.width, "x", dstRect.extent.height,
+         useFsr ? (srcSamples != VK_SAMPLE_COUNT_1_BIT ? ", FSR 1.0 active (MSAA resolved before EASU)" : ", FSR 1.0 active")
+                : (m_fsrEnabled ? ", FSR 1.0 enabled but inactive (no upscale)" : ", FSR 1.0 off"),
+-        useFsr2 ? ", FSR 2 active" : (m_fsr2Enabled ? ", FSR 2 enabled, waiting for scene inputs" : "")));
++        useFsr2 ? ", FSR 2 active" : (m_fsr2Enabled && !fsr3Usable ? ", FSR 2 enabled, waiting for scene inputs" : ""),
++        useFsr3 ? ", FSR 3 active" : (fsr3Usable ? ", FSR 3 enabled, waiting for scene inputs" : "")));
+     }
+ 
+     // EASU and the post-processing passes read single-sampled texels, so a
+@@ -941,7 +974,17 @@ namespace dxvk {
+ 
+       // GeneralsX: FSR 2 upscales the scene, and the EASU image fills in
+       // wherever the interface was drawn over it
+-      if (useFsr2) {
++      if (useFsr3) {
++        Rc<DxvkImageView> temporalView = m_fsr3->render(ctx, m_fsr2Inputs,
++          finalView, finalRect, m_fsrView, dstRect.extent);
++
++        if (temporalView != nullptr) {
++          blitView = temporalView;
++
++          if (m_fsr3->sharpensOutput())
++            presentSharpness = RcasNoSharpening;
++        }
++      } else if (useFsr2) {
+         Rc<DxvkImageView> temporalView = m_fsr2->render(ctx, m_fsr2Inputs,
+           finalView, finalRect, m_fsrView, dstRect.extent);
+ 
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -14,6 +14,7 @@
+ #include "../dxvk/dxvk_device.h"
+ #include "../dxvk/dxvk_context.h"
+ #include "../dxvk/dxvk_fsr2.h"
++#include "../dxvk/dxvk_fsr3.h"
+ 
+ namespace dxvk {
+ 
+@@ -306,6 +307,13 @@ namespace dxvk {
+     DxvkTemporalUpscaleInputs  m_fsr2Inputs;
+     bool                       m_presentLogFsr2 = false;
+ 
++    // GeneralsX: FSR 3 temporal upscaling, DXVK_UPSCALER=fsr3. Uses the
++    // same scene inputs; falls back to FSR 2, then FSR 1.0, when the
++    // FidelityFX SDK is missing or fails.
++    bool                       m_fsr3Enabled = false;
++    std::unique_ptr<DxvkFsr3>  m_fsr3;
++    bool                       m_presentLogFsr3 = false;
++
+     // GeneralsX: RCAS sharpness of the final pass, in stops. Equal to
+     // m_fsrSharpness unless FSR 2 sharpened the frame itself. At 64 stops
+     // the RCAS lobe is 2^-64, so the pass leaves the image as it is while
+diff --git a/src/dxvk/fsr3/dxvk_fsr3_ffx_names.h b/src/dxvk/fsr3/dxvk_fsr3_ffx_names.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr3/dxvk_fsr3_ffx_names.h
+@@ -0,0 +1,20 @@
++#pragma once
++
++// GeneralsX: renames the global symbols that the FidelityFX SDK shares
++// with the FidelityFX FSR 2 API sources. Both are linked into DXVK, so the
++// SDK's copies get a dxvk_fsr3_ prefix. Included by every SDK source, see
++// dxvk_fsr3_ffx_shim.h, and by DXVK code that calls the SDK.
++
++#define ffxAssertReport                           dxvk_fsr3_ffxAssertReport
++#define ffxAssertSetPrintingCallback              dxvk_fsr3_ffxAssertSetPrintingCallback
++#define ffxGetCommandListVK                       dxvk_fsr3_ffxGetCommandListVK
++#define ffxGetDeviceVK                            dxvk_fsr3_ffxGetDeviceVK
++#define addBarrier                                dxvk_fsr3_addBarrier
++#define flushBarriers                             dxvk_fsr3_flushBarriers
++#define setVKObjectName                           dxvk_fsr3_setVKObjectName
++#define findMemoryTypeIndex                       dxvk_fsr3_findMemoryTypeIndex
++#define getVKAccessFlagsFromResourceState         dxvk_fsr3_getVKAccessFlagsFromResourceState
++#define getVKImageLayoutFromResourceState         dxvk_fsr3_getVKImageLayoutFromResourceState
++#define getVKImageUsageFlagsFromResourceUsage     dxvk_fsr3_getVKImageUsageFlagsFromResourceUsage
++#define getVKPipelineStageFlagsFromResourceState  dxvk_fsr3_getVKPipelineStageFlagsFromResourceState
++#define BackendContext_VK                         DxvkFsr3BackendContextVK
+diff --git a/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.cpp b/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.cpp
+@@ -0,0 +1,201 @@
++// GeneralsX: Vulkan functions for the FidelityFX SDK Vulkan backend, see
++// dxvk_fsr3_ffx_shim.h. The function table is set by DxvkFsr3 before it
++// creates the SDK backend interface.
++
++#include "dxvk_fsr3_ffx_shim.h"
++#include "dxvk_fsr3_ffx_table.h"
++
++#include <FidelityFX/host/backends/vk/ffx_vk.h>
++
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <vector>
++
++DxvkFsr3VkTable g_dxvkFsr3Vk = { };
++
++static std::mutex               g_dxvkFsr3ViewMutex;
++static std::vector<VkImageView> g_dxvkFsr3ReleasedViews;
++
++
++void dxvkFsr3TakeReleasedViews(std::vector<VkImageView>& views) {
++  std::lock_guard lock(g_dxvkFsr3ViewMutex);
++  views.insert(views.end(), g_dxvkFsr3ReleasedViews.begin(), g_dxvkFsr3ReleasedViews.end());
++  g_dxvkFsr3ReleasedViews.clear();
++}
++
++extern "C" {
++
++  // DXVK does not enable shaderFloat16, subgroup size control, ray tracing
++  // or AMD buffer markers on its device, so the backend must not pick FP16
++  // or forced wave64 pipelines, nor use the extensions. Hiding them makes
++  // it use the 32-bit default permutations that DXVK compiles.
++  static bool dxvkFsr3HiddenExtension(const char* name) {
++    return !std::strcmp(name, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
++        || !std::strcmp(name, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)
++        || !std::strcmp(name, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
++        || !std::strcmp(name, VK_AMD_BUFFER_MARKER_EXTENSION_NAME)
++        || !std::strcmp(name, VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
++  }
++
++
++  VKAPI_ATTR VkResult VKAPI_CALL dxvk_fsr3_vkCreateBuffer(
++          VkDevice                          device,
++    const VkBufferCreateInfo*               pCreateInfo,
++    const VkAllocationCallbacks*            pAllocator,
++          VkBuffer*                         pBuffer) {
++    return g_dxvkFsr3Vk.createBuffer(device, pCreateInfo, pAllocator, pBuffer);
++  }
++
++
++  VKAPI_ATTR VkResult VKAPI_CALL dxvk_fsr3_vkEnumerateDeviceExtensionProperties(
++          VkPhysicalDevice                  physicalDevice,
++    const char*                             pLayerName,
++          uint32_t*                         pPropertyCount,
++          VkExtensionProperties*            pProperties) {
++    uint32_t count = 0;
++    VkResult vr = g_dxvkFsr3Vk.enumerateDeviceExtensionProperties(physicalDevice, pLayerName, &count, nullptr);
++
++    if (vr != VK_SUCCESS)
++      return vr;
++
++    std::vector<VkExtensionProperties> all(count);
++    vr = g_dxvkFsr3Vk.enumerateDeviceExtensionProperties(physicalDevice, pLayerName, &count, all.data());
++
++    if (vr < 0)
++      return vr;
++
++    uint32_t visible = 0;
++
++    for (uint32_t i = 0; i < count; i++) {
++      if (dxvkFsr3HiddenExtension(all[i].extensionName))
++        continue;
++
++      if (pProperties) {
++        if (visible >= *pPropertyCount)
++          return VK_INCOMPLETE;
++
++        pProperties[visible] = all[i];
++      }
++
++      visible++;
++    }
++
++    *pPropertyCount = visible;
++    return VK_SUCCESS;
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr3_vkGetPhysicalDeviceMemoryProperties(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceMemoryProperties* pMemoryProperties) {
++    g_dxvkFsr3Vk.getPhysicalDeviceMemoryProperties(physicalDevice, pMemoryProperties);
++
++    // As for FSR 2: the backend only places its textures in a device-local
++    // memory type that is not host-visible. Integrated GPUs may only expose
++    // device-local memory that is also host-visible; report those types as
++    // device-local only, as long as another host-visible type remains for
++    // the constant buffers.
++    bool hasHiddenLocal = false;
++    bool hasHostOnly = false;
++
++    for (uint32_t i = 0; i < pMemoryProperties->memoryTypeCount; i++) {
++      VkMemoryPropertyFlags flags = pMemoryProperties->memoryTypes[i].propertyFlags;
++
++      if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && !(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
++        hasHiddenLocal = true;
++
++      if (!(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
++        hasHostOnly = true;
++    }
++
++    if (hasHiddenLocal || !hasHostOnly)
++      return;
++
++    for (uint32_t i = 0; i < pMemoryProperties->memoryTypeCount; i++) {
++      VkMemoryPropertyFlags& flags = pMemoryProperties->memoryTypes[i].propertyFlags;
++
++      if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
++        flags &= ~(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
++    }
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr3_vkGetPhysicalDeviceProperties(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceProperties*       pProperties) {
++    g_dxvkFsr3Vk.getPhysicalDeviceProperties(physicalDevice, pProperties);
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr3_vkGetPhysicalDeviceProperties2(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceProperties2*      pProperties) {
++    g_dxvkFsr3Vk.getPhysicalDeviceProperties2(physicalDevice, pProperties);
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr3_vkGetPhysicalDeviceFeatures(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceFeatures*         pFeatures) {
++    g_dxvkFsr3Vk.getPhysicalDeviceFeatures(physicalDevice, pFeatures);
++  }
++
++
++  VKAPI_ATTR void VKAPI_CALL dxvk_fsr3_vkGetPhysicalDeviceFeatures2(
++          VkPhysicalDevice                  physicalDevice,
++          VkPhysicalDeviceFeatures2*        pFeatures) {
++    g_dxvkFsr3Vk.getPhysicalDeviceFeatures2(physicalDevice, pFeatures);
++  }
++
++
++  // Keeps a view the backend releases until DxvkFsr3 knows that the GPU
++  // no longer uses it, see dxvkFsr3TakeReleasedViews
++  static VKAPI_ATTR void VKAPI_CALL dxvk_fsr3_vkDestroyImageView(
++          VkDevice                          device,
++          VkImageView                       imageView,
++    const VkAllocationCallbacks*            pAllocator) {
++    (void)device;
++    (void)pAllocator;
++
++    if (imageView == VK_NULL_HANDLE)
++      return;
++
++    std::lock_guard lock(g_dxvkFsr3ViewMutex);
++    g_dxvkFsr3ReleasedViews.push_back(imageView);
++  }
++
++
++  // The backend asks for some core Vulkan 1.1+ functions by their KHR
++  // names, such as vkGetBufferMemoryRequirements2KHR. DXVK's device does
++  // not enable those extensions, so look up the core name instead.
++  VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL dxvk_fsr3_vkGetDeviceProcAddr(
++          VkDevice                          device,
++    const char*                             pName) {
++    if (!std::strcmp(pName, "vkDestroyImageView"))
++      return reinterpret_cast<PFN_vkVoidFunction>(&dxvk_fsr3_vkDestroyImageView);
++
++    PFN_vkVoidFunction fn = g_dxvkFsr3Vk.getDeviceProcAddr(device, pName);
++
++    if (!fn) {
++      size_t length = std::strlen(pName);
++
++      if (length > 3u && !std::strcmp(pName + length - 3u, "KHR")) {
++        std::string core(pName, length - 3u);
++        fn = g_dxvkFsr3Vk.getDeviceProcAddr(device, core.c_str());
++      }
++    }
++
++    return fn;
++  }
++
++}
++
++
++// The backend hands this function to the SDK's frame interpolation swap
++// chain. DXVK presents generated frames itself and never creates that swap
++// chain, so a configuration request is refused.
++FfxErrorCode ffxSetFrameGenerationConfigToSwapchainVK(FfxFrameGenerationConfig const* config) {
++  (void)config;
++  return FFX_ERROR_INVALID_ARGUMENT;
++}
+diff --git a/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.h b/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.h
+@@ -0,0 +1,29 @@
++#pragma once
++
++// GeneralsX: force-included into the FidelityFX SDK sources.
++//
++// The SDK's Vulkan backend calls a few Vulkan functions through the global
++// loader symbols. DXVK loads Vulkan at run time and does not link against
++// the loader, so these calls are redirected to functions that use DXVK's
++// function tables instead, see dxvk_fsr3_ffx_shim.cpp.
++
++// The SDK is written against MSVC, whose headers pull these in implicitly
++#ifdef __cplusplus
++#include <cmath>
++#include <cstdio>
++#include <cstring>
++#include <cwchar>
++#include <locale>
++#include <new>
++#endif
++
++#include "dxvk_fsr3_ffx_names.h"
++
++#define vkCreateBuffer                       dxvk_fsr3_vkCreateBuffer
++#define vkEnumerateDeviceExtensionProperties dxvk_fsr3_vkEnumerateDeviceExtensionProperties
++#define vkGetPhysicalDeviceMemoryProperties  dxvk_fsr3_vkGetPhysicalDeviceMemoryProperties
++#define vkGetPhysicalDeviceProperties        dxvk_fsr3_vkGetPhysicalDeviceProperties
++#define vkGetPhysicalDeviceProperties2       dxvk_fsr3_vkGetPhysicalDeviceProperties2
++#define vkGetPhysicalDeviceFeatures          dxvk_fsr3_vkGetPhysicalDeviceFeatures
++#define vkGetPhysicalDeviceFeatures2         dxvk_fsr3_vkGetPhysicalDeviceFeatures2
++#define vkGetDeviceProcAddr                  dxvk_fsr3_vkGetDeviceProcAddr
+diff --git a/src/dxvk/fsr3/dxvk_fsr3_ffx_table.h b/src/dxvk/fsr3/dxvk_fsr3_ffx_table.h
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr3/dxvk_fsr3_ffx_table.h
+@@ -0,0 +1,36 @@
++#pragma once
++
++// GeneralsX: Vulkan functions used by the FidelityFX SDK backend shim.
++// Plain Vulkan types only, so that both the SDK sources and DXVK can
++// include it.
++
++#include <vulkan/vulkan.h>
++
++struct DxvkFsr3VkTable {
++  PFN_vkCreateBuffer                       createBuffer;
++  PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensionProperties;
++  PFN_vkGetPhysicalDeviceMemoryProperties  getPhysicalDeviceMemoryProperties;
++  PFN_vkGetPhysicalDeviceProperties        getPhysicalDeviceProperties;
++  PFN_vkGetPhysicalDeviceProperties2       getPhysicalDeviceProperties2;
++  PFN_vkGetPhysicalDeviceFeatures          getPhysicalDeviceFeatures;
++  PFN_vkGetPhysicalDeviceFeatures2         getPhysicalDeviceFeatures2;
++  PFN_vkGetDeviceProcAddr                  getDeviceProcAddr;
++};
++
++extern DxvkFsr3VkTable g_dxvkFsr3Vk;
++
++#ifdef __cplusplus
++#include <vector>
++
++/**
++ * \brief Takes the image views the backend has released
++ *
++ * The backend destroys the views of the resources a dispatch registered
++ * a fixed number of dispatches later, which assumes that the GPU is done
++ * with them by then. Under DXVK one frame can hold several dispatches of
++ * an effect and several frames can be in flight, so the shim keeps the
++ * views instead, and DxvkFsr3 destroys them once the command list that
++ * recorded the releasing dispatch has finished.
++ */
++void dxvkFsr3TakeReleasedViews(std::vector<VkImageView>& views);
++#endif
+diff --git a/src/dxvk/fsr3/dxvk_fsr3_shaders.cpp b/src/dxvk/fsr3/dxvk_fsr3_shaders.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/dxvk/fsr3/dxvk_fsr3_shaders.cpp
+@@ -0,0 +1,500 @@
++// GeneralsX: SPIR-V permutations of the FidelityFX SDK passes of FSR 3:
++// the FSR 3.1 upscaler, frame interpolation and optical flow.
++//
++// Replaces the SDK's blob accessors (src/backends/shared/blob_accessors),
++// whose tables are generated by AMD's Windows-only FidelityFX_SC tool. The
++// passes are compiled with glslang at build time (see meson.build) for the
++// options DXVK uses: LDR colour, render-resolution motion vectors without
++// jitter, standard depth and 32-bit maths without forced wave64. Only the
++// reprojection Lanczos type and, for the upscaler's accumulate pass, the
++// sharpening switch vary. The resource names and bindings the backend
++// needs are read from the SPIR-V itself.
++
++#include "dxvk_fsr3_ffx_shim.h"
++
++#include <FidelityFX/host/ffx_fsr3upscaler.h>
++#include <FidelityFX/host/ffx_frameinterpolation.h>
++#include <FidelityFX/host/ffx_opticalflow.h>
++
++#include "ffx-sdk/src/backends/shared/ffx_shader_blobs.h"
++
++#include <array>
++#include <atomic>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <vector>
++
++#include <dxvk_fsr3_up_accumulate_l0_s0.h>
++#include <dxvk_fsr3_up_accumulate_l0_s1.h>
++#include <dxvk_fsr3_up_accumulate_l1_s0.h>
++#include <dxvk_fsr3_up_accumulate_l1_s1.h>
++#include <dxvk_fsr3_up_autogen_reactive_l0_s0.h>
++#include <dxvk_fsr3_up_autogen_reactive_l1_s0.h>
++#include <dxvk_fsr3_up_debug_view_l0_s0.h>
++#include <dxvk_fsr3_up_debug_view_l1_s0.h>
++#include <dxvk_fsr3_up_luma_instability_l0_s0.h>
++#include <dxvk_fsr3_up_luma_instability_l1_s0.h>
++#include <dxvk_fsr3_up_luma_pyramid_l0_s0.h>
++#include <dxvk_fsr3_up_luma_pyramid_l1_s0.h>
++#include <dxvk_fsr3_up_prepare_inputs_l0_s0.h>
++#include <dxvk_fsr3_up_prepare_inputs_l1_s0.h>
++#include <dxvk_fsr3_up_prepare_reactivity_l0_s0.h>
++#include <dxvk_fsr3_up_prepare_reactivity_l1_s0.h>
++#include <dxvk_fsr3_up_rcas_l0_s0.h>
++#include <dxvk_fsr3_up_rcas_l1_s0.h>
++#include <dxvk_fsr3_up_shading_change_l0_s0.h>
++#include <dxvk_fsr3_up_shading_change_l1_s0.h>
++#include <dxvk_fsr3_up_shading_change_pyramid_l0_s0.h>
++#include <dxvk_fsr3_up_shading_change_pyramid_l1_s0.h>
++
++#include <dxvk_fsr3_fi_compute_game_vector_field_inpainting_pyramid.h>
++#include <dxvk_fsr3_fi_compute_inpainting_pyramid.h>
++#include <dxvk_fsr3_fi_debug_view.h>
++#include <dxvk_fsr3_fi_disocclusion_mask.h>
++#include <dxvk_fsr3_fi_game_motion_vector_field.h>
++#include <dxvk_fsr3_fi_inpainting.h>
++#include <dxvk_fsr3_fi_optical_flow_vector_field.h>
++#include <dxvk_fsr3_fi_interpolation.h>
++#include <dxvk_fsr3_fi_reconstruct_and_dilate.h>
++#include <dxvk_fsr3_fi_reconstruct_previous_depth.h>
++#include <dxvk_fsr3_fi_setup.h>
++
++#include <dxvk_fsr3_of_compute_luminance_pyramid.h>
++#include <dxvk_fsr3_of_compute_optical_flow_advanced_v5.h>
++#include <dxvk_fsr3_of_compute_scd_divergence.h>
++#include <dxvk_fsr3_of_filter_optical_flow_v5.h>
++#include <dxvk_fsr3_of_generate_scd_histogram.h>
++#include <dxvk_fsr3_of_prepare_luma.h>
++#include <dxvk_fsr3_of_scale_optical_flow_advanced_v5.h>
++
++/// Permutation options the build does not provide, see dxvk_fsr3.cpp
++std::atomic<uint32_t> g_dxvkFsr3PermutationMismatch = { 0u };
++
++namespace {
++
++  // Permutation bits of the SDK components, from the components' private
++  // headers (ffx_fsr3upscaler_private.h, ffx_frameinterpolation_private.h,
++  // ffx_opticalflow_private.h)
++  constexpr uint32_t UpscalerLanczosLut  = 1u << 0;
++  constexpr uint32_t UpscalerLowResMv    = 1u << 2;
++  constexpr uint32_t UpscalerSharpen     = 1u << 5;
++  constexpr uint32_t UpscalerKnown       = UpscalerLanczosLut | UpscalerLowResMv | UpscalerSharpen;
++
++  constexpr uint32_t FiLowResMv          = 1u << 0;
++  constexpr uint32_t FiKnown             = FiLowResMv;
++
++  constexpr uint32_t OfKnown             = 0u;
++
++  struct Fsr3SpirvCode {
++    const uint32_t* code;
++    size_t          size;
++  };
++
++  enum Fsr3ResourceKind : uint32_t {
++    Fsr3ConstantBuffer = 0,
++    Fsr3SrvTexture     = 1,
++    Fsr3UavTexture     = 2,
++    Fsr3SrvBuffer      = 3,
++    Fsr3UavBuffer      = 4,
++    Fsr3KindCount      = 5,
++  };
++
++  struct Fsr3ReflectedBlob {
++    std::vector<std::string>  names[Fsr3KindCount];
++    std::vector<const char*>  namePtrs[Fsr3KindCount];
++    std::vector<uint32_t>     bindings[Fsr3KindCount];
++    std::vector<uint32_t>     counts[Fsr3KindCount];
++    std::vector<uint32_t>     spaces[Fsr3KindCount];
++    bool                      valid = false;
++  };
++
++  constexpr uint32_t SpvOpName            = 5;
++  constexpr uint32_t SpvOpMemberName      = 6;
++  constexpr uint32_t SpvOpEntryPoint      = 15;
++  constexpr uint32_t SpvOpTypeImage       = 25;
++  constexpr uint32_t SpvOpTypeStruct      = 30;
++  constexpr uint32_t SpvOpTypePointer     = 32;
++  constexpr uint32_t SpvOpVariable        = 59;
++  constexpr uint32_t SpvOpDecorate        = 71;
++  constexpr uint32_t SpvOpMemberDecorate  = 72;
++
++  constexpr uint32_t SpvDecorationNonWritable   = 24;
++  constexpr uint32_t SpvDecorationBinding       = 33;
++  constexpr uint32_t SpvDecorationDescriptorSet = 34;
++
++  constexpr uint32_t SpvStorageClassUniformConstant = 0;
++  constexpr uint32_t SpvStorageClassUniform         = 2;
++  constexpr uint32_t SpvStorageClassStorageBuffer   = 12;
++
++  /// Static samplers start at this binding, see SAMPLER_BINDING_SHIFT
++  constexpr int32_t  SamplerBindingShift = 1000;
++
++  /**
++   * \brief Lists the descriptor set 0 resources of a pass
++   *
++   * The samplers at binding 1000 and above are created and bound by the
++   * backend itself. As for FSR 2, only resources that some instruction
++   * refers to are listed: glslang keeps declared but unused resources,
++   * which the backend would leave as empty descriptors.
++   */
++  void reflectSpirv(const Fsr3SpirvCode& spirv, Fsr3ReflectedBlob& out) {
++    const uint32_t* words = spirv.code;
++    size_t count = spirv.size / sizeof(uint32_t);
++
++    if (count < 5u)
++      return;
++
++    uint32_t bound = words[3];
++
++    std::vector<std::string> names(bound);
++    std::vector<int32_t>     bindings(bound, -1);
++    std::vector<int32_t>     sets(bound, -1);
++    std::vector<int32_t>     imageSampled(bound, -1);
++    std::vector<uint32_t>    structMembers(bound, 0u);
++    std::vector<uint32_t>    nonWritableMembers(bound, 0u);
++    std::vector<bool>        nonWritable(bound, false);
++    std::vector<bool>        isStruct(bound, false);
++    std::vector<uint32_t>    pointee(bound, 0u);
++    std::vector<bool>        referenced(bound, false);
++
++    struct Variable {
++      uint32_t id;
++      uint32_t type;
++      uint32_t storageClass;
++    };
++
++    std::vector<Variable> variables;
++
++    for (size_t i = 5u; i < count; ) {
++      uint32_t opcode = words[i] & 0xffffu;
++      uint32_t length = words[i] >> 16u;
++
++      if (!length || i + length > count)
++        return;
++
++      const uint32_t* ins = &words[i];
++
++      switch (opcode) {
++        case SpvOpName:
++          if (length > 2u && ins[1] < bound)
++            names[ins[1]] = reinterpret_cast<const char*>(&ins[2]);
++          break;
++
++        case SpvOpDecorate:
++          if (length > 2u && ins[1] < bound) {
++            if (ins[2] == SpvDecorationBinding && length > 3u)
++              bindings[ins[1]] = int32_t(ins[3]);
++            else if (ins[2] == SpvDecorationDescriptorSet && length > 3u)
++              sets[ins[1]] = int32_t(ins[3]);
++            else if (ins[2] == SpvDecorationNonWritable)
++              nonWritable[ins[1]] = true;
++          }
++          break;
++
++        case SpvOpMemberDecorate:
++          if (length > 3u && ins[1] < bound && ins[3] == SpvDecorationNonWritable)
++            nonWritableMembers[ins[1]] += 1u;
++          break;
++
++        case SpvOpTypeImage:
++          if (length > 7u && ins[1] < bound)
++            imageSampled[ins[1]] = int32_t(ins[7]);
++          break;
++
++        case SpvOpTypeStruct:
++          if (length > 1u && ins[1] < bound) {
++            isStruct[ins[1]] = true;
++            structMembers[ins[1]] = length - 2u;
++          }
++          break;
++
++        case SpvOpTypePointer:
++          if (length > 3u && ins[1] < bound)
++            pointee[ins[1]] = ins[3];
++          break;
++
++        case SpvOpVariable:
++          if (length > 3u && ins[2] < bound)
++            variables.push_back({ ins[2], ins[1], ins[3] });
++          break;
++
++        default:
++          break;
++      }
++
++      if (opcode != SpvOpName && opcode != SpvOpMemberName && opcode != SpvOpDecorate
++       && opcode != SpvOpMemberDecorate && opcode != SpvOpEntryPoint && opcode != SpvOpVariable) {
++        for (uint32_t w = 1u; w < length; w++) {
++          if (ins[w] < bound)
++            referenced[ins[w]] = true;
++        }
++      }
++
++      i += length;
++    }
++
++    for (const auto& var : variables) {
++      if (sets[var.id] != 0 || bindings[var.id] < 0 || bindings[var.id] >= SamplerBindingShift
++       || var.type >= bound || !referenced[var.id])
++        continue;
++
++      uint32_t type = pointee[var.type];
++
++      if (type >= bound)
++        continue;
++
++      int32_t kind = -1;
++
++      if (var.storageClass == SpvStorageClassUniformConstant && imageSampled[type] == 2)
++        kind = Fsr3UavTexture;
++      else if (var.storageClass == SpvStorageClassUniformConstant && imageSampled[type] == 1)
++        kind = Fsr3SrvTexture;
++      else if (var.storageClass == SpvStorageClassUniform && isStruct[type])
++        kind = Fsr3ConstantBuffer;
++      else if (var.storageClass == SpvStorageClassStorageBuffer && isStruct[type]) {
++        bool readOnly = nonWritable[var.id]
++          || (structMembers[type] && nonWritableMembers[type] >= structMembers[type]);
++        kind = readOnly ? Fsr3SrvBuffer : Fsr3UavBuffer;
++      }
++
++      if (kind < 0)
++        continue;
++
++      out.names[kind].push_back(names[var.id]);
++      out.bindings[kind].push_back(uint32_t(bindings[var.id]));
++      out.counts[kind].push_back(1u);
++      out.spaces[kind].push_back(0u);
++    }
++
++    for (uint32_t k = 0; k < Fsr3KindCount; k++) {
++      for (const auto& name : out.names[k])
++        out.namePtrs[k].push_back(name.c_str());
++    }
++
++    out.valid = true;
++  }
++
++
++  FfxShaderBlob makeBlob(const Fsr3SpirvCode& spirv, Fsr3ReflectedBlob& r) {
++    return FfxShaderBlob {
++      reinterpret_cast<const uint8_t*>(spirv.code),
++      uint32_t(spirv.size),
++      uint32_t(r.names[Fsr3ConstantBuffer].size()),
++      uint32_t(r.names[Fsr3SrvTexture].size()),
++      uint32_t(r.names[Fsr3UavTexture].size()),
++      uint32_t(r.names[Fsr3SrvBuffer].size()),
++      uint32_t(r.names[Fsr3UavBuffer].size()),
++      0u, 0u,
++      r.namePtrs[Fsr3ConstantBuffer].data(), r.bindings[Fsr3ConstantBuffer].data(),
++      r.counts[Fsr3ConstantBuffer].data(), r.spaces[Fsr3ConstantBuffer].data(),
++      r.namePtrs[Fsr3SrvTexture].data(), r.bindings[Fsr3SrvTexture].data(),
++      r.counts[Fsr3SrvTexture].data(), r.spaces[Fsr3SrvTexture].data(),
++      r.namePtrs[Fsr3UavTexture].data(), r.bindings[Fsr3UavTexture].data(),
++      r.counts[Fsr3UavTexture].data(), r.spaces[Fsr3UavTexture].data(),
++      r.namePtrs[Fsr3SrvBuffer].data(), r.bindings[Fsr3SrvBuffer].data(),
++      r.counts[Fsr3SrvBuffer].data(), r.spaces[Fsr3SrvBuffer].data(),
++      r.namePtrs[Fsr3UavBuffer].data(), r.bindings[Fsr3UavBuffer].data(),
++      r.counts[Fsr3UavBuffer].data(), r.spaces[Fsr3UavBuffer].data(),
++      nullptr, nullptr, nullptr, nullptr,
++      nullptr, nullptr, nullptr, nullptr,
++    };
++  }
++
++
++#define DXVK_FSR3_SPIRV(name) Fsr3SpirvCode { name, sizeof(name) }
++
++  Fsr3SpirvCode getUpscalerSpirv(FfxFsr3UpscalerPass pass, bool lanczos, bool sharpen) {
++    switch (pass) {
++      case FFX_FSR3UPSCALER_PASS_PREPARE_INPUTS:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_prepare_inputs_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_prepare_inputs_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_LUMA_PYRAMID:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_luma_pyramid_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_luma_pyramid_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_SHADING_CHANGE_PYRAMID:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_shading_change_pyramid_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_shading_change_pyramid_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_SHADING_CHANGE:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_shading_change_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_shading_change_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_PREPARE_REACTIVITY:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_prepare_reactivity_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_prepare_reactivity_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_LUMA_INSTABILITY:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_luma_instability_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_luma_instability_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_ACCUMULATE:
++      case FFX_FSR3UPSCALER_PASS_ACCUMULATE_SHARPEN:
++        if (sharpen)
++          return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_accumulate_l1_s1)
++                         : DXVK_FSR3_SPIRV(dxvk_fsr3_up_accumulate_l0_s1);
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_accumulate_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_accumulate_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_RCAS:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_rcas_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_rcas_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_DEBUG_VIEW:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_debug_view_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_debug_view_l0_s0);
++      case FFX_FSR3UPSCALER_PASS_GENERATE_REACTIVE:
++        return lanczos ? DXVK_FSR3_SPIRV(dxvk_fsr3_up_autogen_reactive_l1_s0)
++                       : DXVK_FSR3_SPIRV(dxvk_fsr3_up_autogen_reactive_l0_s0);
++      default:
++        return Fsr3SpirvCode { nullptr, 0u };
++    }
++  }
++
++
++  Fsr3SpirvCode getFrameInterpolationSpirv(FfxFrameInterpolationPass pass) {
++    switch (pass) {
++      case FFX_FRAMEINTERPOLATION_PASS_RECONSTRUCT_AND_DILATE:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_reconstruct_and_dilate);
++      case FFX_FRAMEINTERPOLATION_PASS_SETUP:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_setup);
++      case FFX_FRAMEINTERPOLATION_PASS_RECONSTRUCT_PREV_DEPTH:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_reconstruct_previous_depth);
++      case FFX_FRAMEINTERPOLATION_PASS_GAME_MOTION_VECTOR_FIELD:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_game_motion_vector_field);
++      case FFX_FRAMEINTERPOLATION_PASS_OPTICAL_FLOW_VECTOR_FIELD:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_optical_flow_vector_field);
++      case FFX_FRAMEINTERPOLATION_PASS_DISOCCLUSION_MASK:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_disocclusion_mask);
++      case FFX_FRAMEINTERPOLATION_PASS_INTERPOLATION:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_interpolation);
++      case FFX_FRAMEINTERPOLATION_PASS_INPAINTING_PYRAMID:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_compute_inpainting_pyramid);
++      case FFX_FRAMEINTERPOLATION_PASS_INPAINTING:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_inpainting);
++      case FFX_FRAMEINTERPOLATION_PASS_GAME_VECTOR_FIELD_INPAINTING_PYRAMID:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_compute_game_vector_field_inpainting_pyramid);
++      case FFX_FRAMEINTERPOLATION_PASS_DEBUG_VIEW:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_fi_debug_view);
++      default:
++        return Fsr3SpirvCode { nullptr, 0u };
++    }
++  }
++
++
++  Fsr3SpirvCode getOpticalFlowSpirv(FfxOpticalflowPass pass) {
++    switch (pass) {
++      case FFX_OPTICALFLOW_PASS_PREPARE_LUMA:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_prepare_luma);
++      case FFX_OPTICALFLOW_PASS_GENERATE_OPTICAL_FLOW_INPUT_PYRAMID:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_compute_luminance_pyramid);
++      case FFX_OPTICALFLOW_PASS_GENERATE_SCD_HISTOGRAM:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_generate_scd_histogram);
++      case FFX_OPTICALFLOW_PASS_COMPUTE_SCD_DIVERGENCE:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_compute_scd_divergence);
++      case FFX_OPTICALFLOW_PASS_COMPUTE_OPTICAL_FLOW_ADVANCED_V5:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_compute_optical_flow_advanced_v5);
++      case FFX_OPTICALFLOW_PASS_FILTER_OPTICAL_FLOW_V5:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_filter_optical_flow_v5);
++      case FFX_OPTICALFLOW_PASS_SCALE_OPTICAL_FLOW_ADVANCED_V5:
++        return DXVK_FSR3_SPIRV(dxvk_fsr3_of_scale_optical_flow_advanced_v5);
++      default:
++        return Fsr3SpirvCode { nullptr, 0u };
++    }
++  }
++
++#undef DXVK_FSR3_SPIRV
++
++  /// Upscaler: pass, Lanczos type, sharpening. Frame interpolation and
++  /// optical flow: pass only.
++  constexpr uint32_t UpscalerSlots = FFX_FSR3UPSCALER_PASS_COUNT * 4u;
++  constexpr uint32_t FiSlots       = FFX_FRAMEINTERPOLATION_PASS_COUNT;
++  constexpr uint32_t OfSlots       = FFX_OPTICALFLOW_PASS_COUNT;
++
++}
++
++
++FfxErrorCode ffxGetPermutationBlobByIndex(
++        FfxEffect     effectId,
++        FfxPass       passId,
++        FfxBindStage  bindStage,
++        uint32_t      permutationOptions,
++        FfxShaderBlob* outBlob) {
++  static std::mutex s_mutex;
++  static std::array<Fsr3ReflectedBlob, UpscalerSlots + FiSlots + OfSlots> s_blobs;
++
++  (void)bindStage;
++
++  uint32_t slot = 0u;
++  uint32_t known = 0u;
++  Fsr3SpirvCode spirv = { nullptr, 0u };
++
++  switch (effectId) {
++    case FFX_EFFECT_FSR3UPSCALER: {
++      if (passId >= uint32_t(FFX_FSR3UPSCALER_PASS_COUNT))
++        return FFX_ERROR_INVALID_ARGUMENT;
++
++      bool lanczos = (permutationOptions & UpscalerLanczosLut) != 0u;
++      bool sharpen = (permutationOptions & UpscalerSharpen) != 0u;
++
++      // The build provides render-resolution motion vectors only
++      known = UpscalerKnown;
++
++      if (!(permutationOptions & UpscalerLowResMv))
++        g_dxvkFsr3PermutationMismatch.fetch_or(UpscalerLowResMv);
++
++      slot = passId * 4u + (lanczos ? 2u : 0u) + (sharpen ? 1u : 0u);
++      spirv = getUpscalerSpirv(FfxFsr3UpscalerPass(passId), lanczos, sharpen);
++    } break;
++
++    case FFX_EFFECT_FRAMEINTERPOLATION: {
++      if (passId >= uint32_t(FFX_FRAMEINTERPOLATION_PASS_COUNT))
++        return FFX_ERROR_INVALID_ARGUMENT;
++
++      known = FiKnown;
++
++      if (!(permutationOptions & FiLowResMv))
++        g_dxvkFsr3PermutationMismatch.fetch_or(FiLowResMv << 8u);
++
++      slot = UpscalerSlots + passId;
++      spirv = getFrameInterpolationSpirv(FfxFrameInterpolationPass(passId));
++    } break;
++
++    case FFX_EFFECT_OPTICALFLOW: {
++      if (passId >= uint32_t(FFX_OPTICALFLOW_PASS_COUNT))
++        return FFX_ERROR_INVALID_ARGUMENT;
++
++      known = OfKnown;
++      slot = UpscalerSlots + FiSlots + passId;
++      spirv = getOpticalFlowSpirv(FfxOpticalflowPass(passId));
++    } break;
++
++    default:
++      return FFX_ERROR_INVALID_ARGUMENT;
++  }
++
++  // Options outside the compiled set (HDR, jittered motion vectors,
++  // inverted depth, wave64, FP16) cannot be honoured; DXVK never creates
++  // contexts that ask for them. The closest permutation is used and the
++  // mismatch is reported once by DxvkFsr3.
++  if (permutationOptions & ~known)
++    g_dxvkFsr3PermutationMismatch.fetch_or(0x80000000u | ((permutationOptions & ~known) << 16u));
++
++  if (!spirv.code)
++    return FFX_ERROR_INVALID_ARGUMENT;
++
++  std::lock_guard lock(s_mutex);
++
++  Fsr3ReflectedBlob& entry = s_blobs[slot];
++
++  if (!entry.valid)
++    reflectSpirv(spirv, entry);
++
++  FfxShaderBlob blob = makeBlob(spirv, entry);
++  std::memcpy(static_cast<void*>(outBlob), &blob, sizeof(blob));
++  return FFX_OK;
++}
++
++
++FfxErrorCode ffxIsWave64(FfxEffect effectId, uint32_t permutationOptions, bool& isWave64) {
++  (void)effectId;
++  (void)permutationOptions;
++
++  // Only the default wave size is compiled, see dxvk_fsr3_ffx_shim.cpp
++  isWave64 = false;
++  return FFX_OK;
++}
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -93,6 +93,7 @@ dxvk_src = [
+   'dxvk_fence.cpp',
+   'dxvk_format.cpp',
+   'dxvk_fsr2.cpp',
++  'dxvk_fsr3.cpp',
+   'dxvk_framebuffer.cpp',
+   'dxvk_gpu_event.cpp',
+   'dxvk_gpu_query.cpp',
+@@ -222,11 +223,181 @@ if fs.is_file(fsr2_api_dir / 'ffx_fsr2.cpp')
+   dxvk_fsr2_libs += [ dxvk_fsr2_lib ]
+ endif
+ 
++# GeneralsX: AMD FidelityFX SDK (MIT) for FSR 3: the FSR 3.1 upscaler and
++# the frame interpolation and optical flow effects of frame generation. The
++# build copies include/ and src/ of a pinned SDK release into fsr3/ffx-sdk;
++# without them DXVK_UPSCALER=fsr3 falls back to FSR 2.
++fsr3_sdk_dir = 'fsr3/ffx-sdk'
++dxvk_fsr3_libs = []
++dxvk_fsr3_args = []
++dxvk_fsr3_includes = []
++
++if fs.is_file(fsr3_sdk_dir / 'src' / 'components' / 'fsr3upscaler' / 'ffx_fsr3upscaler.cpp')
++  fsr3_gpu_dir = meson.current_source_dir() / fsr3_sdk_dir / 'include' / 'FidelityFX' / 'gpu'
++  fsr3_vk_shader_dir = fsr3_sdk_dir / 'src' / 'backends' / 'vk' / 'shaders'
++
++  fsr3_glsl_args = [
++    '--quiet',
++    '--target-env', 'vulkan1.2',
++    '-S', 'comp',
++    '-I' + fsr3_gpu_dir,
++    '-DFFX_GLSL=1',
++    '-DFFX_GPU=1',
++    '-DFFX_HALF=0',
++  ]
++
++  # Upscaler: LDR colour, render-resolution motion vectors without jitter,
++  # standard depth. The reprojection Lanczos type follows the backend's LUT
++  # choice and the accumulate pass has a sharpening variant.
++  fsr3_upscaler_args = fsr3_glsl_args + [
++    '-I' + fsr3_gpu_dir / 'fsr3upscaler',
++    '-DFFX_FSR3UPSCALER_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FSR3UPSCALER_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FSR3UPSCALER_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1',
++    '-DFFX_FSR3UPSCALER_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FSR3UPSCALER_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2',
++    '-DFFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPUT=0',
++    '-DFFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1',
++    '-DFFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS=0',
++    '-DFFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH=0',
++  ]
++
++  fsr3_fi_args = fsr3_glsl_args + [
++    '-I' + fsr3_gpu_dir / 'frameinterpolation',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_LOW_RES_MOTION_VECTORS=1',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_JITTER_MOTION_VECTORS=0',
++    '-DFFX_FRAMEINTERPOLATION_OPTION_INVERTED_DEPTH=0',
++  ]
++
++  fsr3_of_args = fsr3_glsl_args + [
++    '-I' + fsr3_gpu_dir / 'opticalflow',
++    '-DFFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0',
++  ]
++
++  fsr3_shaders = []
++
++  foreach pass : [ 'accumulate', 'autogen_reactive', 'debug_view', 'luma_instability', 'luma_pyramid',
++                   'prepare_inputs', 'prepare_reactivity', 'rcas', 'shading_change', 'shading_change_pyramid' ]
++    foreach lanczos : [ '0', '1' ]
++      foreach sharpen : (pass == 'accumulate' ? [ '0', '1' ] : [ '0' ])
++        fsr3_name = 'dxvk_fsr3_up_' + pass + '_l' + lanczos + '_s' + sharpen
++        fsr3_shaders += custom_target(fsr3_name,
++          input   : files(fsr3_vk_shader_dir / 'fsr3upscaler' / 'ffx_fsr3upscaler_' + pass + '_pass.glsl'),
++          output  : fsr3_name + '.h',
++          command : [ glsl_compiler ] + fsr3_upscaler_args + [
++            '-DFFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE=' + lanczos,
++            '-DFFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=' + sharpen,
++            '--vn', fsr3_name, '@INPUT@', '-o', '@OUTPUT@' ])
++      endforeach
++    endforeach
++  endforeach
++
++  # [ name, source file ] of the frame interpolation and optical flow passes
++  fsr3_fi_passes = [
++    [ 'compute_game_vector_field_inpainting_pyramid', 'ffx_frameinterpolation_compute_game_vector_field_inpainting_pyramid_pass.glsl' ],
++    [ 'compute_inpainting_pyramid',   'ffx_frameinterpolation_compute_inpainting_pyramid_pass.glsl' ],
++    [ 'debug_view',                   'ffx_frameinterpolation_debug_view_pass.glsl' ],
++    [ 'disocclusion_mask',            'ffx_frameinterpolation_disocclusion_mask_pass.glsl' ],
++    [ 'game_motion_vector_field',     'ffx_frameinterpolation_game_motion_vector_field_pass.glsl' ],
++    [ 'inpainting',                   'ffx_frameinterpolation_inpainting_pass.glsl' ],
++    [ 'interpolation',                'ffx_frameinterpolation_pass.glsl' ],
++    [ 'optical_flow_vector_field',    'ffx_frameinterpolation_optical_flow_vector_field_pass.glsl' ],
++    [ 'reconstruct_and_dilate',       'ffx_frameinterpolation_reconstruct_and_dilate_pass.glsl' ],
++    [ 'reconstruct_previous_depth',   'ffx_frameinterpolation_reconstruct_previous_depth_pass.glsl' ],
++    [ 'setup',                        'ffx_frameinterpolation_setup_pass.glsl' ],
++  ]
++
++  fsr3_of_passes = [
++    [ 'compute_luminance_pyramid',        'ffx_opticalflow_compute_luminance_pyramid_pass.glsl' ],
++    [ 'compute_optical_flow_advanced_v5', 'ffx_opticalflow_compute_optical_flow_advanced_pass_v5.glsl' ],
++    [ 'compute_scd_divergence',           'ffx_opticalflow_compute_scd_divergence_pass.glsl' ],
++    [ 'filter_optical_flow_v5',           'ffx_opticalflow_filter_optical_flow_pass_v5.glsl' ],
++    [ 'generate_scd_histogram',           'ffx_opticalflow_generate_scd_histogram_pass.glsl' ],
++    [ 'prepare_luma',                     'ffx_opticalflow_prepare_luma_pass.glsl' ],
++    [ 'scale_optical_flow_advanced_v5',   'ffx_opticalflow_scale_optical_flow_advanced_pass_v5.glsl' ],
++  ]
++
++  foreach pass : fsr3_fi_passes
++    fsr3_name = 'dxvk_fsr3_fi_' + pass[0]
++    fsr3_shaders += custom_target(fsr3_name,
++      input   : files(fsr3_vk_shader_dir / 'frameinterpolation' / pass[1]),
++      output  : fsr3_name + '.h',
++      command : [ glsl_compiler ] + fsr3_fi_args + [ '--vn', fsr3_name, '@INPUT@', '-o', '@OUTPUT@' ])
++  endforeach
++
++  foreach pass : fsr3_of_passes
++    fsr3_name = 'dxvk_fsr3_of_' + pass[0]
++    fsr3_shaders += custom_target(fsr3_name,
++      input   : files(fsr3_vk_shader_dir / 'opticalflow' / pass[1]),
++      output  : fsr3_name + '.h',
++      command : [ glsl_compiler ] + fsr3_of_args + [ '--vn', fsr3_name, '@INPUT@', '-o', '@OUTPUT@' ])
++  endforeach
++
++  dxvk_fsr3_includes = include_directories(fsr3_sdk_dir / 'include')
++
++  fsr3_includes = [
++    dxvk_fsr3_includes,
++    include_directories(fsr3_sdk_dir / 'src' / 'shared'),
++    include_directories(fsr3_sdk_dir / 'src' / 'backends' / 'shared'),
++    include_directories(fsr3_sdk_dir / 'src' / 'components'),
++  ]
++
++  fsr3_cpp_args = [
++    '-include', meson.current_source_dir() / 'fsr3' / 'dxvk_fsr3_ffx_shim.h',
++  ] + cpp.get_supported_arguments([
++    '-DFFX_GCC',
++    '-DUNICODE',
++    '-D_UNICODE',
++    '-Wno-unused-variable',
++    '-Wno-unused-but-set-variable',
++    '-Wno-unused-function',
++    '-Wno-unused-parameter',
++    '-Wno-sign-compare',
++    '-Wno-deprecated-declarations',
++    '-Wno-missing-field-initializers',
++    '-Wno-implicit-fallthrough',
++    '-Wno-type-limits',
++    '-Wno-switch',
++    '-Wno-class-memaccess',
++    '-Wno-unknown-pragmas',
++    '-Wno-parentheses',
++    '-Wno-format',
++    '-Wno-narrowing',
++    '-Wno-reorder',
++  ])
++
++  dxvk_fsr3_lib = static_library('dxvk_fsr3', [
++      fsr3_sdk_dir / 'src' / 'components' / 'fsr3upscaler' / 'ffx_fsr3upscaler.cpp',
++      fsr3_sdk_dir / 'src' / 'components' / 'frameinterpolation' / 'ffx_frameinterpolation.cpp',
++      fsr3_sdk_dir / 'src' / 'components' / 'opticalflow' / 'ffx_opticalflow.cpp',
++      fsr3_sdk_dir / 'src' / 'backends' / 'vk' / 'ffx_vk.cpp',
++      fsr3_sdk_dir / 'src' / 'shared' / 'ffx_assert.cpp',
++      fsr3_sdk_dir / 'src' / 'shared' / 'ffx_breadcrumbs_list.cpp',
++      fsr3_sdk_dir / 'src' / 'shared' / 'ffx_message.cpp',
++      fsr3_sdk_dir / 'src' / 'shared' / 'ffx_object_management.cpp',
++      'fsr3/dxvk_fsr3_ffx_shim.cpp',
++      'fsr3/dxvk_fsr3_shaders.cpp',
++    ] + fsr3_shaders,
++    include_directories : [ dxvk_include_path ] + fsr3_includes,
++    cpp_args            : fsr3_cpp_args,
++  )
++
++  dxvk_fsr3_libs += [ dxvk_fsr3_lib ]
++  dxvk_fsr3_args += [ '-DDXVK_GENERALSX_FSR3=1', '-DFFX_GCC' ]
++else
++  message('GeneralsX: FidelityFX SDK not found in src/dxvk/fsr3/ffx-sdk, FSR 3 is not built')
++endif
++
+ dxvk_lib = static_library('dxvk', dxvk_src, glsl_generator.process(dxvk_shaders), dxvk_version,
+-  link_with           : [ util_lib, spirv_lib, wsi_lib ] + dxvk_fsr2_libs,
+-  cpp_args            : dxvk_fsr2_libs.length() > 0 ? [ '-DDXVK_GENERALSX_FSR2=1' ] : [],
++  link_with           : [ util_lib, spirv_lib, wsi_lib ] + dxvk_fsr2_libs + dxvk_fsr3_libs,
++  cpp_args            : (dxvk_fsr2_libs.length() > 0 ? [ '-DDXVK_GENERALSX_FSR2=1' ] : []) + dxvk_fsr3_args,
+   dependencies        : [ vkcommon_dep ] + dxvk_extra_deps,
+-  include_directories : [ dxvk_include_path ],
++  include_directories : [ dxvk_include_path, dxvk_fsr3_includes ],
+ )
+ 
+ dxvk_dep = declare_dependency(

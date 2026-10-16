@@ -44,6 +44,7 @@
 #include "Common/GameState.h"
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "Common/ModuleFactory.h"
 #include "Common/PerfTimer.h"
 #include "Common/Player.h"
@@ -360,6 +361,8 @@ void Drawable::saturateRGB(RGBColor& color, Real factor)
 Drawable::Drawable( const ThingTemplate *thingTemplate, DrawableStatusBits statusBits )
 				: Thing( thingTemplate )
 {
+	// GeneralsX @performance Claude 16/10/2026 Drawable creations for the frame profiler's hitch lines.
+	PerfStats::addDrawableCreated();
 
 	// assign status bits before anything else can be done
 	m_status = statusBits;
@@ -4444,8 +4447,11 @@ void Drawable::getSmoothMotionTransform(Matrix3D& mtx)
 	if (!isSmoothMotionActive())
 		return;
 
+	// GeneralsX @bugfix Claude 16/10/2026 A phase of 0 is the previous logic frame, not the current one. The frame
+	// pacer now reports exactly 0 when a render frame lands on a logic step; showing the current transform there
+	// made units jump a whole logic frame ahead for one render frame.
 	const Real phase = TheFramePacer->getLogicFramePhase();
-	if (!(phase > 0.0f && phase < 1.0f))
+	if (!(phase < 1.0f))
 		return;
 
 	const Matrix3D& prevMtx = m_smoothMotionPrevTransform;
@@ -4459,6 +4465,12 @@ void Drawable::getSmoothMotionTransform(Matrix3D& mtx)
 	{
 		// Teleported: show the new place for the rest of this logic frame.
 		m_smoothMotionPrevTransform = logicMtx;
+		return;
+	}
+
+	if (phase <= 0.0f)
+	{
+		mtx = prevMtx;
 		return;
 	}
 

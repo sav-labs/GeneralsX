@@ -71,6 +71,7 @@
 #include "GameClient/Water.h"
 #include "GameLogic/GameLogic.h"
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "Common/GameLOD.h"
 #include "d3dx8tex.h"
 #include "WW3D2/dx8caps.h"
@@ -3250,6 +3251,10 @@ HRESULT W3DShaderManager::LoadAndCreateD3DShader(const char* strFilePath, const 
 
 		// GeneralsX @bugfix BenderAI 13/02/2026 Use delete[] instead of HeapFree (fighter19 pattern)
 		delete[] pShader;
+
+		// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+		if (SUCCEEDED(hr))
+			PerfStats::addShaderCreated();
 
 		if (FAILED(hr))
 		{

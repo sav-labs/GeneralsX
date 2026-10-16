@@ -67,6 +67,7 @@
 #include "WW3D2/render2dsentence.h"
 #include "Common/PerfTimer.h"
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "Common/GameCommon.h"
 
 
@@ -1001,7 +1002,16 @@ bool W3DAssetManager::Load_3D_Assets( const char * filename )
 		return TRUE;	//this file has already been loaded.
 	}
 
+	// GeneralsX @performance Claude 16/10/2026 Count .w3d files read from disk for the frame profiler's hitch lines;
+	// only the outermost load of a nested one is timed.
+	static Int s_perfLoadDepth = 0;
+	const Bool perfTimed = PerfStats::isEnabled() && s_perfLoadDepth == 0;
+	const double perfStartMs = perfTimed ? PerfStats::nowMs() : 0.0;
+	++s_perfLoadDepth;
 	bool result = WW3DAssetManager::Load_3D_Assets(filename);
+	--s_perfLoadDepth;
+	if (perfTimed)
+		PerfStats::addModelLoad(PerfStats::nowMs() - perfStartMs);
 
 #if defined(RTS_DEBUG)
 	if (result && TheGlobalData->m_preloadReport)

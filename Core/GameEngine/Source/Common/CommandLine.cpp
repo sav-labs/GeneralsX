@@ -153,7 +153,7 @@ Int parseRenderScale(char *args[], int num)
 	return 1;
 }
 
-// GeneralsX @feature Claude 16/10/2026 -upscaler fsr2|fsr1|off overrides Options.ini Upscaler, so the upscalers
+// GeneralsX @feature Claude 16/10/2026 -upscaler fsr3|fsr2|fsr1|off overrides Options.ini Upscaler, so the upscalers
 // can be compared on the same machine without editing Options.ini. dlss is accepted and falls back to FSR 2.
 Int parseUpscaler(char *args[], int num)
 {
@@ -164,7 +164,27 @@ Int parseUpscaler(char *args[], int num)
 			TheWritableGlobalData->m_upscaler = upscaler;
 		else
 		{
-			fprintf(stderr, "[FSR2] unknown -upscaler value '%s', expected fsr2, fsr1 or off\n", args[1]);
+			fprintf(stderr, "[FSR2] unknown -upscaler value '%s', expected fsr3, fsr2, fsr1 or off\n", args[1]);
+			fflush(stderr);
+		}
+		return 2;
+	}
+	return 1;
+}
+
+// GeneralsX @feature Claude 16/10/2026 -framegen on|off overrides Options.ini FrameGeneration (FSR 3 frame
+// generation, only with -upscaler fsr3 or Upscaler = FSR3). Render only.
+Int parseFrameGeneration(char *args[], int num)
+{
+	if (num > 1)
+	{
+		if (stricmp(args[1], "on") == 0 || stricmp(args[1], "yes") == 0 || stricmp(args[1], "1") == 0)
+			TheWritableGlobalData->m_frameGeneration = 1;
+		else if (stricmp(args[1], "off") == 0 || stricmp(args[1], "no") == 0 || stricmp(args[1], "0") == 0)
+			TheWritableGlobalData->m_frameGeneration = 0;
+		else
+		{
+			fprintf(stderr, "[FSR3] unknown -framegen value '%s', expected on or off\n", args[1]);
 			fflush(stderr);
 		}
 		return 2;
@@ -862,6 +882,9 @@ Int parseSkirmishStartPos(char *args[], int num)
 // Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
 // GeneralsX @feature Claude 15/10/2026 A trailing "close" token (-camtest close, -camtest 8 close) selects the
 // close-up flight, the same as -camclose.
+// GeneralsX @feature Claude 16/10/2026 Further tokens, in any order: "battle" spawns a hostile column of an enemy player
+// facing the convoy and orbits the fight, a number after "battle" is the number of units in the battle scene (both sides
+// together, split evenly), and "night" switches the match to night: -camtest 10 battle 60 night.
 Int parseCameraTest(char *args[], int num)
 {
 	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
@@ -876,9 +899,29 @@ Int parseCameraTest(char *args[], int num)
 		}
 		++consumed;
 	}
-	if (num > consumed && stricmp(args[consumed], "close") == 0)
+	while (num > consumed)
 	{
-		TheWritableGlobalData->m_cameraTestClose = TRUE;
+		const char *token = args[consumed];
+		if (stricmp(token, "close") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestClose = TRUE;
+		}
+		else if (stricmp(token, "battle") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestBattle = TRUE;
+		}
+		else if (stricmp(token, "night") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestNight = TRUE;
+		}
+		else if (TheWritableGlobalData->m_cameraTestBattle && token[0] >= '0' && token[0] <= '9')
+		{
+			TheWritableGlobalData->m_cameraTestBattleUnits = atoi(token);
+		}
+		else
+		{
+			break;
+		}
 		++consumed;
 	}
 	return consumed;
@@ -1371,6 +1414,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-upscale", parseUpscale },
 	{ "-renderscale", parseRenderScale },
 	{ "-upscaler", parseUpscaler },
+	{ "-framegen", parseFrameGeneration },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025

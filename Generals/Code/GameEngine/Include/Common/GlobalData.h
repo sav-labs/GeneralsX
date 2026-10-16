@@ -142,6 +142,9 @@ public:
 	// GeneralsX @feature Claude 16/10/2026 Upscaler from -upscaler, OptionPreferences::UpscalerType (0 = read Options.ini
 	// Upscaler). After start-up it holds the upscaler in use; the 3D view jitters its camera for UPSCALER_FSR2.
 	Int m_upscaler;
+	// GeneralsX @feature Claude 16/10/2026 FSR 3 frame generation from -framegen: -1 = read Options.ini
+	// FrameGeneration, 0 = off, 1 = on. Render only.
+	Int m_frameGeneration;
 	Int m_xResolution;
 	Int m_yResolution;
 	Int m_maxShellScreens;  ///< this many shells layouts can be loaded at once
@@ -387,6 +390,10 @@ public:
 	Real m_cameraTestSeconds;				///< Duration of the -camtest pan in seconds, 0 when disabled
 	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose or -camtest [seconds] close
 	Bool m_cameraTestClose;					///< Fly the -camtest camera low and close along the convoy and the base buildings
+	// GeneralsX @feature Claude 16/10/2026 Battle -camtest flight requested with -camtest [seconds] battle [units] [night]
+	Bool m_cameraTestBattle;				///< Spawn a hostile column facing the convoy and orbit the fight
+	Int m_cameraTestBattleUnits;			///< Units in the -camtest battle scene, both sides together, 0 for the default
+	Bool m_cameraTestNight;					///< Switch the -camtest match to night when it starts
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation

@@ -42,6 +42,7 @@
 #include "Common/PerfTimer.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
+#include "Common/PlayerTemplate.h"
 #include "Common/ThingFactory.h"
 #include "Common/ThingTemplate.h"
 #include "Common/Xfer.h"
@@ -1063,6 +1064,62 @@ void GameClient::allocateShadows()
 }
 
 //-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 16/10/2026 True when a player of this match plays this side or has it as base
+// side, or the side is empty. Preloading skips the faction units of sides nobody plays.
+//-------------------------------------------------------------------------------------------------
+static Bool isSideInMatch( const AsciiString& side )
+{
+	if( side.isEmpty() || ThePlayerList == nullptr )
+		return TRUE;
+
+	for( Int i = 0; i < ThePlayerList->getPlayerCount(); ++i )
+	{
+		const Player *player = ThePlayerList->getNthPlayer( i );
+		if( player == nullptr )
+			continue;
+		if( side.compareNoCase( player->getSide() ) == 0 )
+			return TRUE;
+		const PlayerTemplate *playerTemplate = player->getPlayerTemplate();
+		if( playerTemplate != nullptr
+				&& ( side.compareNoCase( playerTemplate->getSide() ) == 0 || side.compareNoCase( playerTemplate->getBaseSide() ) == 0 ) )
+			return TRUE;
+	}
+	return FALSE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 16/10/2026 Map load preload, see GameClient.h. Client side only: it loads models
+// and textures and makes and destroys temporary drawables, so game logic, CRCs and replays are unaffected (the
+// retail -preload switch was allowed in multiplayer).
+//-------------------------------------------------------------------------------------------------
+void GameClient::preloadMatchAssets()
+{
+	if( TheGlobalData->m_headless || TheDisplay == nullptr )
+		return;
+
+	const double startMs = PerfStats::nowMs();
+	if( TheGlobalData->m_preloadEverything )
+	{
+		for( Int td = TIME_OF_DAY_FIRST; td < TIME_OF_DAY_COUNT; ++td )
+			preloadAssets( (TimeOfDay)td );
+	}
+	else
+	{
+		preloadAssets( TheGlobalData->m_timeOfDay );
+	}
+	const double modelsDoneMs = PerfStats::nowMs();
+
+	// Model loads only name their textures; create them now instead of at their first sight in the match.
+	const Int textures = TheDisplay->createPreloadedTextures();
+	const double doneMs = PerfStats::nowMs();
+
+	fprintf( stderr, "[PRELOAD] %s: models %.0f ms, %d textures created in %.0f ms, total %.0f ms\n",
+		TheGlobalData->m_preloadEverything ? "everything" : "match assets",
+		modelsDoneMs - startMs, textures, doneMs - modelsDoneMs, doneMs - startMs );
+	fflush( stderr );
+}
+
+//-------------------------------------------------------------------------------------------------
 /** Preload assets for the currently loaded map.  Those assets include all the damage states
 	* for every building loaded, as well as any faction units/structures we can build and
 	* all their damage states */
@@ -1091,6 +1148,10 @@ void GameClient::preloadAssets( TimeOfDay timeOfDay )
 
 		// if this isn't one of the objects that can be preloaded ignore it
 		if( tTemplate->isKindOf( KINDOF_PRELOAD ) == FALSE && !TheGlobalData->m_preloadEverything )
+			continue;
+
+		// GeneralsX @performance Claude 16/10/2026 Skip the faction units of sides nobody plays in this match.
+		if( !TheGlobalData->m_preloadEverything && !isSideInMatch( tTemplate->getDefaultOwningSide() ) )
 			continue;
 
 		// create the drawable and do the preloading

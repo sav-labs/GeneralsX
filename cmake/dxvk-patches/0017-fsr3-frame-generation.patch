@@ -1,0 +1,1006 @@
+GeneralsX: FSR 3 frame generation, DXVK_FSR3_FRAMEGEN=1 with
+DXVK_UPSCALER=fsr3. Uses the FidelityFX optical flow and frame
+interpolation effects directly, not the SDK's swap chain replacement: the
+frame is interpolated between the previous and the current upscaled 3D
+scene, then the composite pass draws the interface of the current, real
+frame over it, so the interface is never interpolated. The D3D9 swap chain
+presents each frame twice, the generated frame first and then the real
+one; the real frame is presented half a frame interval later
+(DXVK_FSR3_FRAMEGEN_PACING=0 turns this off). Frame generation is turned
+off with an [FSR3] log line when a frame latency tracker is active or the
+swap chain has fewer than 3 images. DXVK_FSR3_DEBUG=tearlines, view or
+resets shows the FidelityFX debug overlays.
+
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -834,11 +834,92 @@ namespace dxvk {
+     Rc<DxvkImage> swapImage = m_backBuffers[0]->GetCommonTexture()->GetImage();
+     Rc<DxvkImageView> swapImageView = m_backBuffers[0]->GetImageView(false);
+ 
++    // GeneralsX: with FSR 3 frame generation, the frame is presented twice:
++    // the Generated pass upscales it and presents the frame interpolated
++    // between the previous and this frame, the Real pass presents this
++    // frame. Both presents need their own swap chain image, and the
++    // latency tracker (Reflex, low latency) expects one present per frame.
++    bool frameGen = false;
++
++    if (m_blitter->isFrameGenerationActive()) {
++      const char* reason = nullptr;
++
++      if (m_latencyTracker)
++        reason = "a frame latency tracker is active";
++      else if (m_wctx->presenter->getImageCount() < 3u)
++        reason = "the swap chain has fewer than 3 images";
++
++      if (reason == nullptr)
++        frameGen = true;
++      else if (!m_frameGenLogged) {
++        Logger::warn(str::format("[FSR3] frame generation disabled: ", reason));
++        m_frameGenLogged = true;
++      }
++    }
++
++    if (frameGen) {
++      status = PresentToSwapchain(swapImageView, DxvkFrameGenPass::Generated,
++        m_parent->TakeUpscalerInputs(), nullptr);
++
++      if (status >= 0 && status != VK_NOT_READY) {
++        status = PresentToSwapchain(swapImageView, DxvkFrameGenPass::Real,
++          DxvkTemporalUpscaleInputs(), nullptr);
++      }
++    } else {
++      status = PresentToSwapchain(swapImageView, DxvkFrameGenPass::None,
++        m_parent->TakeUpscalerInputs(), m_latencyTracker);
++    }
++
++    if (m_latencyTracker) {
++      if (status == VK_SUCCESS)
++        m_latencyTracker->notifyCpuPresentEnd(m_wctx->frameId);
++      else
++        m_latencyTracker->discardTimings();
++    }
++
++    SyncFrameLatency();
++
++    DxvkLatencyStats latencyStats = { };
++
++    if (m_latencyTracker && status == VK_SUCCESS) {
++      latencyStats = m_latencyTracker->getStatistics(m_wctx->frameId);
++      m_latencyTracker->sleepAndBeginFrame(m_wctx->frameId + 1, std::abs(m_targetFrameRate));
++
++      m_parent->BeginFrame(m_latencyTracker, m_wctx->frameId + 1u);
++    }
++
++    if (m_latencyHud)
++      m_latencyHud->accumulateStats(latencyStats);
++
++    // Rotate swap chain buffers so that the back
++    // buffer at index 0 becomes the front buffer.
++    uint32_t rotatingBufferCount = m_backBuffers.size();
++    if (!SwapWithFrontBuffer() && m_parent->GetOptions()->extraFrontbuffer) {
++      // The front buffer only exists for GetFrontBufferData
++      // and the application cannot obserse buffer swapping in GetBackBuffer()
++      rotatingBufferCount -= 1;
++    }
++
++    // Backbuffer 0 is the one that gets copied to the Vulkan swapchain backbuffer.
++    // => m_backBuffers[1] is the next one that gets presented
++    // and the currente m_backBuffers[0] ends up at the end of the vector.
++    for (uint32_t i = 1; i < rotatingBufferCount; i++)
++      m_backBuffers[i]->Swap(m_backBuffers[i - 1].ptr());
++
++    m_parent->m_flags.set(D3D9DeviceFlag::DirtyFramebuffer);
++  }
++
++
++  VkResult D3D9SwapChainEx::PresentToSwapchain(
++    const Rc<DxvkImageView>&          swapImageView,
++          DxvkFrameGenPass            fgPass,
++          DxvkTemporalUpscaleInputs&& upscaler,
++    const Rc<DxvkLatencyTracker>&     latency) {
+     // Presentation semaphores and WSI swap chain image
+     PresenterSync sync = { };
+     Rc<DxvkImage> backBuffer;
+ 
+-    status = m_wctx->presenter->acquireNextImage(sync, backBuffer);
++    VkResult status = m_wctx->presenter->acquireNextImage(sync, backBuffer);
+ 
+     if (status >= 0 && status != VK_NOT_READY) {
+       VkRect2D srcRect = {
+@@ -876,8 +957,9 @@ namespace dxvk {
+         cDstRect        = dstRect,
+         cSync           = sync,
+         cFrameId        = m_wctx->frameId,
+-        cLatency        = m_latencyTracker,
+-        cUpscaler       = m_parent->TakeUpscalerInputs()
++        cLatency        = latency,
++        cUpscaler       = std::move(upscaler),
++        cFgPass         = fgPass
+       ] (DxvkContext* ctx) {
+         // Update back buffer color space as necessary
+         if (cSrcView->image()->info().colorSpace != cColorSpace) {
+@@ -892,6 +974,7 @@ namespace dxvk {
+ 
+         cBlitter->setVideoSignal(cVideoSignal);
+         cBlitter->setTemporalInputs(cUpscaler);
++        cBlitter->setFrameGenerationPass(cFgPass);
+         cBlitter->present(contextObjects,
+           cDstView, cDstRect, cSrcView, cSrcRect);
+ 
+@@ -905,43 +988,7 @@ namespace dxvk {
+       m_parent->FlushCsChunk();
+     }
+ 
+-    if (m_latencyTracker) {
+-      if (status == VK_SUCCESS)
+-        m_latencyTracker->notifyCpuPresentEnd(m_wctx->frameId);
+-      else
+-        m_latencyTracker->discardTimings();
+-    }
+-
+-    SyncFrameLatency();
+-
+-    DxvkLatencyStats latencyStats = { };
+-
+-    if (m_latencyTracker && status == VK_SUCCESS) {
+-      latencyStats = m_latencyTracker->getStatistics(m_wctx->frameId);
+-      m_latencyTracker->sleepAndBeginFrame(m_wctx->frameId + 1, std::abs(m_targetFrameRate));
+-
+-      m_parent->BeginFrame(m_latencyTracker, m_wctx->frameId + 1u);
+-    }
+-
+-    if (m_latencyHud)
+-      m_latencyHud->accumulateStats(latencyStats);
+-
+-    // Rotate swap chain buffers so that the back
+-    // buffer at index 0 becomes the front buffer.
+-    uint32_t rotatingBufferCount = m_backBuffers.size();
+-    if (!SwapWithFrontBuffer() && m_parent->GetOptions()->extraFrontbuffer) {
+-      // The front buffer only exists for GetFrontBufferData
+-      // and the application cannot obserse buffer swapping in GetBackBuffer()
+-      rotatingBufferCount -= 1;
+-    }
+-
+-    // Backbuffer 0 is the one that gets copied to the Vulkan swapchain backbuffer.
+-    // => m_backBuffers[1] is the next one that gets presented
+-    // and the currente m_backBuffers[0] ends up at the end of the vector.
+-    for (uint32_t i = 1; i < rotatingBufferCount; i++)
+-      m_backBuffers[i]->Swap(m_backBuffers[i - 1].ptr());
+-
+-    m_parent->m_flags.set(D3D9DeviceFlag::DirtyFramebuffer);
++    return status;
+   }
+ 
+ 
+diff --git a/src/d3d9/d3d9_swapchain.h b/src/d3d9/d3d9_swapchain.h
+--- a/src/d3d9/d3d9_swapchain.h
++++ b/src/d3d9/d3d9_swapchain.h
+@@ -193,6 +193,18 @@ namespace dxvk {
+ 
+     void PresentImage(UINT PresentInterval);
+ 
++    // GeneralsX: acquires a swap chain image and presents the back buffer
++    // to it from the CS thread, see PresentImage. With FSR 3 frame
++    // generation, PresentImage calls this twice per frame.
++    VkResult PresentToSwapchain(
++      const Rc<DxvkImageView>&          swapImageView,
++            DxvkFrameGenPass            fgPass,
++            DxvkTemporalUpscaleInputs&& upscaler,
++      const Rc<DxvkLatencyTracker>&     latency);
++
++    // GeneralsX: FSR 3 frame generation could not run on this swap chain
++    bool m_frameGenLogged = false;
++
+     Rc<Presenter> CreatePresenter(
+             HWND                Window,
+             Rc<sync::Signal>    Signal);
+diff --git a/src/dxvk/dxvk_fsr3.cpp b/src/dxvk/dxvk_fsr3.cpp
+--- a/src/dxvk/dxvk_fsr3.cpp
++++ b/src/dxvk/dxvk_fsr3.cpp
+@@ -3,9 +3,12 @@
+ #include <algorithm>
+ #include <array>
+ #include <atomic>
++#include <cctype>
+ #include <cmath>
+ #include <cstring>
+ 
++#include "../util/util_env.h"
++
+ #include <dxvk_fsr2_prepare.h>
+ #include <dxvk_fsr2_composite.h>
+ 
+@@ -13,6 +16,8 @@
+ #include "fsr3/dxvk_fsr3_ffx_names.h"
+ #include "fsr3/dxvk_fsr3_ffx_table.h"
+ #include <FidelityFX/host/ffx_fsr3upscaler.h>
++#include <FidelityFX/host/ffx_frameinterpolation.h>
++#include <FidelityFX/host/ffx_opticalflow.h>
+ #include <FidelityFX/host/backends/vk/ffx_vk.h>
+ 
+ /// Permutation options the build does not provide, see dxvk_fsr3_shaders.cpp
+@@ -28,8 +33,9 @@ namespace dxvk {
+   constexpr uint32_t Fsr3ReactiveApplyThreshold  = 4u;
+   constexpr uint32_t Fsr3ReactiveComponentsMax   = 8u;
+ 
+-  /// Effect contexts of the backend: shared resources and the upscaler
+-  constexpr size_t   Fsr3MaxContexts = 2u;
++  /// Effect contexts of the backend: shared resources, the upscaler, and
++  /// optical flow and frame interpolation for frame generation
++  constexpr size_t   Fsr3MaxContexts = 4u;
+ 
+ 
+   /**
+@@ -50,6 +56,15 @@ namespace dxvk {
+     FfxResourceInternal         dilatedMotionVectors = { };
+     FfxResourceInternal         reconstructedPrevNearestDepth = { };
+     bool                        sharedResourcesValid = false;
++
++    /// Frame generation
++    FfxOpticalflowContext       opticalFlow = { };
++    bool                        opticalFlowValid = false;
++    FfxFrameInterpolationContext frameInterpolation = { };
++    bool                        frameInterpolationValid = false;
++    FfxResourceInternal         opticalFlowVector = { };
++    FfxResourceInternal         opticalFlowScd = { };
++    bool                        opticalFlowResourcesValid = false;
+   };
+ 
+ 
+@@ -122,6 +137,31 @@ namespace dxvk {
+         : std::string("off (FSR 1.0 RCAS sharpens)"),
+       m_settings.debugReactive ? ", debug view of the reactive mask" : ""));
+ 
++    // GeneralsX: frame generation and its debug views.
++    // DXVK_FSR3_DEBUG=tearlines draws moving bars at the screen edges of
++    // generated frames, =view replaces generated frames with FidelityFX's
++    // debug view, =resets marks frames where interpolation was reset.
++    m_fgEnabled = isFrameGenerationRequested();
++
++    std::string debug = env::getEnvVar("DXVK_FSR3_DEBUG");
++
++    for (auto& c : debug)
++      c = std::tolower(static_cast<unsigned char>(c));
++
++#ifdef DXVK_GENERALSX_FSR3
++    if (debug == "tearlines")
++      m_fgDispatchFlags = FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_TEAR_LINES;
++    else if (debug == "view")
++      m_fgDispatchFlags = FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_VIEW;
++    else if (debug == "resets")
++      m_fgDispatchFlags = FFX_FRAMEINTERPOLATION_DISPATCH_DRAW_DEBUG_RESET_INDICATORS;
++    else if (!debug.empty())
++      Logger::warn(str::format("[FSR3] unknown DXVK_FSR3_DEBUG value ", debug, ", expected tearlines, view or resets"));
++#endif
++
++    Logger::info(str::format("[FSR3] frame generation ", m_fgEnabled ? "requested" : "off",
++      m_fgDispatchFlags ? str::format(", debug ", debug) : std::string()));
++
+     createPipelines();
+ 
+     DxvkSamplerKey samplerKey = { };
+@@ -161,6 +201,20 @@ namespace dxvk {
+   }
+ 
+ 
++  bool DxvkFsr3::isFrameGenerationRequested() {
++    static const bool s_requested = [] {
++      std::string value = env::getEnvVar("DXVK_FSR3_FRAMEGEN");
++
++      for (auto& c : value)
++        c = std::tolower(static_cast<unsigned char>(c));
++
++      return value == "1" || value == "on" || value == "yes" || value == "true";
++    } ();
++
++    return s_requested;
++  }
++
++
+   Rc<DxvkImageView> DxvkFsr3::render(
+     const DxvkContextObjects&         ctx,
+     const DxvkTemporalUpscaleInputs&  inputs,
+@@ -369,6 +423,9 @@ namespace dxvk {
+ 
+     m_ffx->sharedResourcesValid = true;
+ 
++    if (m_fgEnabled && !m_fgFailed)
++      createFrameGeneration(renderExtent, displayExtent);
++
+     uint32_t mismatch = g_dxvkFsr3PermutationMismatch.load();
+ 
+     if (mismatch) {
+@@ -378,6 +435,7 @@ namespace dxvk {
+ 
+     m_renderExtent = renderExtent;
+     m_displayExtent = displayExtent;
++    m_fgHavePrev = false;
+ 
+     Logger::info(str::format("[FSR3] context created, render ", renderExtent.width, "x", renderExtent.height,
+       ", display ", displayExtent.width, "x", displayExtent.height,
+@@ -397,6 +455,17 @@ namespace dxvk {
+     if (m_ffx != nullptr) {
+       m_device->waitForIdle();
+ 
++      if (m_ffx->opticalFlowResourcesValid) {
++        m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->opticalFlowVector, m_ffx->sharedContextId);
++        m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->opticalFlowScd, m_ffx->sharedContextId);
++      }
++
++      if (m_ffx->frameInterpolationValid)
++        ffxFrameInterpolationContextDestroy(&m_ffx->frameInterpolation);
++
++      if (m_ffx->opticalFlowValid)
++        ffxOpticalflowContextDestroy(&m_ffx->opticalFlow);
++
+       if (m_ffx->sharedResourcesValid) {
+         m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->dilatedDepth, m_ffx->sharedContextId);
+         m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->dilatedMotionVectors, m_ffx->sharedContextId);
+@@ -564,6 +633,16 @@ namespace dxvk {
+     m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 output",    m_outputView);
+     m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 composite", m_compositeView);
+     m_reactiveImage  = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR3 reactive",  m_reactiveView);
++
++    if (m_fgEnabled && !m_fgFailed) {
++      m_fiOutputImage  = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 interpolated scene", m_fiOutputView);
++      m_generatedImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 generated frame",    m_generatedView);
++    } else {
++      m_fiOutputImage  = nullptr;
++      m_fiOutputView   = nullptr;
++      m_generatedImage = nullptr;
++      m_generatedView  = nullptr;
++    }
+   }
+ 
+ 
+@@ -943,6 +1022,258 @@ namespace dxvk {
+   }
+ 
+ 
++  Rc<DxvkImageView> DxvkFsr3::interpolate(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++    const Rc<DxvkImageView>&          finalView,
++          VkRect2D                    finalRect,
++    const Rc<DxvkImageView>&          spatialView) {
++    if (!frameGenerationReady() || m_ffx == nullptr || m_generatedView == nullptr
++     || inputs.color == nullptr || inputs.depth == nullptr)
++      return nullptr;
++
++    // A camera cut or the first frame after (re)creating the contexts has
++    // no previous frame; frame interpolation still runs to store this one.
++    bool reset = inputs.reset || !m_fgHavePrev;
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture))) {
++      ctx.cmd->cmdBeginDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer,
++        vk::makeLabel(0xdcc0f0, "FSR 3 frame generation"));
++    }
++
++    bool success = dispatchFrameGeneration(ctx, inputs, reset);
++
++    // The interface of the generated frame comes from the real frame: the
++    // composite pass takes it from the EASU image wherever the final image
++    // differs from the scene copy.
++    if (success && !reset) {
++      compositePass(ctx, inputs, m_fiOutputView, finalView, finalRect,
++        spatialView, m_generatedView, false);
++    }
++
++    VkMemoryBarrier2 readBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    readBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    readBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.memoryBarrierCount = 1;
++    depInfo.pMemoryBarriers = &readBarrier;
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
++      ctx.cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
++
++    releaseViews(ctx);
++
++    ctx.cmd->track(inputs.color->image(), DxvkAccess::Read);
++    ctx.cmd->track(finalView->image(), DxvkAccess::Read);
++    ctx.cmd->track(spatialView->image(), DxvkAccess::Read);
++    ctx.cmd->track(m_outputImage, DxvkAccess::Read);
++    ctx.cmd->track(m_fiOutputImage, DxvkAccess::Write);
++    ctx.cmd->track(m_generatedImage, DxvkAccess::Write);
++
++    if (!success)
++      return nullptr;
++
++    m_fgHavePrev = true;
++
++    if (reset)
++      return nullptr;
++
++    m_fgFrameCount += 1u;
++
++    if (m_fgFrameCount == 1u || !(m_fgFrameCount % 600u)) {
++      Logger::info(str::format("[FSR3] frame generation: generated frame ", m_fgFrameCount,
++        ", ", m_displayExtent.width, "x", m_displayExtent.height,
++        ", frame time ", inputs.frameTimeMs, " ms"));
++    }
++
++    return m_generatedView;
++  }
++
++
++  bool DxvkFsr3::createFrameGeneration(VkExtent2D renderExtent, VkExtent2D displayExtent) {
++#ifdef DXVK_GENERALSX_FSR3
++    FfxOpticalflowContextDescription ofDesc = { };
++    ofDesc.backendInterface = m_ffx->backend;
++    ofDesc.resolution = { displayExtent.width, displayExtent.height };
++
++    FfxErrorCode error = ffxOpticalflowContextCreate(&m_ffx->opticalFlow, &ofDesc);
++
++    if (error != FFX_OK) {
++      failFrameGeneration(str::format("ffxOpticalflowContextCreate failed: ", error));
++      return false;
++    }
++
++    m_ffx->opticalFlowValid = true;
++
++    // The interpolation source is the upscaled 3D scene without the
++    // interface, in the FSR 3 output format. Motion vectors are the
++    // upscaler's dilated ones at render size, without jitter.
++    FfxFrameInterpolationContextDescription fiDesc = { };
++    fiDesc.flags = 0u;
++    fiDesc.maxRenderSize = { renderExtent.width, renderExtent.height };
++    fiDesc.displaySize = { displayExtent.width, displayExtent.height };
++    fiDesc.backBufferFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
++    fiDesc.previousInterpolationSourceFormat = FFX_SURFACE_FORMAT_R16G16B16A16_FLOAT;
++    fiDesc.backendInterface = m_ffx->backend;
++
++    error = ffxFrameInterpolationContextCreate(&m_ffx->frameInterpolation, &fiDesc);
++
++    if (error != FFX_OK) {
++      failFrameGeneration(str::format("ffxFrameInterpolationContextCreate failed: ", error));
++      return false;
++    }
++
++    m_ffx->frameInterpolationValid = true;
++
++    FfxOpticalflowSharedResourceDescriptions ofShared = { };
++    error = ffxOpticalflowGetSharedResourceDescriptions(&m_ffx->opticalFlow, &ofShared);
++
++    if (error == FFX_OK)
++      error = m_ffx->backend.fpCreateResource(&m_ffx->backend, &ofShared.opticalFlowVector, m_ffx->sharedContextId, &m_ffx->opticalFlowVector);
++
++    if (error == FFX_OK) {
++      error = m_ffx->backend.fpCreateResource(&m_ffx->backend, &ofShared.opticalFlowSCD, m_ffx->sharedContextId, &m_ffx->opticalFlowScd);
++
++      if (error != FFX_OK)
++        m_ffx->backend.fpDestroyResource(&m_ffx->backend, m_ffx->opticalFlowVector, m_ffx->sharedContextId);
++    }
++
++    if (error != FFX_OK) {
++      failFrameGeneration(str::format("optical flow resources: fpCreateResource failed: ", error));
++      return false;
++    }
++
++    m_ffx->opticalFlowResourcesValid = true;
++    m_fgFrameId = 0u;
++
++    Logger::info(str::format("[FSR3] frame generation: optical flow and frame interpolation contexts created, ",
++      displayExtent.width, "x", displayExtent.height));
++    return true;
++#else
++    (void)renderExtent;
++    (void)displayExtent;
++    return false;
++#endif
++  }
++
++
++  bool DxvkFsr3::dispatchFrameGeneration(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++          bool                        reset) {
++#ifdef DXVK_GENERALSX_FSR3
++    if (!m_ffx->frameInterpolationValid || !m_ffx->opticalFlowResourcesValid)
++      return false;
++
++    // Frame interpolation writes every output pixel; the composite pass of
++    // the previous frame may still read the image.
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_fiOutputImage->handle();
++    barrier.subresourceRange = m_fiOutputView->imageSubresources();
++
++    // The upscaler output was written in GENERAL layout
++    VkMemoryBarrier2 memBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    memBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    memBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    memBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    memBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.memoryBarrierCount = 1;
++    depInfo.pMemoryBarriers = &memBarrier;
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    VkCommandBuffer cmdBuffer = ctx.cmd->getExecCommandBuffer();
++
++    // The upscaled scene without the interface is the interpolation source.
++    // The game's colour is sRGB-encoded LDR.
++    FfxResource sceneColor = getFfxImage(m_outputImage, VK_FORMAT_R16G16B16A16_SFLOAT,
++      m_displayExtent, true, L"FSR3 upscaled scene", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++
++    FfxResource opticalFlowVector = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->opticalFlowVector);
++    FfxResource opticalFlowScd = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->opticalFlowScd);
++
++    FfxOpticalflowDispatchDescription ofDesc = { };
++    ofDesc.commandList = ffxGetCommandListVK(cmdBuffer);
++    ofDesc.color = sceneColor;
++    ofDesc.opticalFlowVector = opticalFlowVector;
++    ofDesc.opticalFlowSCD = opticalFlowScd;
++    ofDesc.reset = reset;
++    ofDesc.backbufferTransferFunction = FFX_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
++    ofDesc.minMaxLuminance = { 0.0f, 1.0f };
++
++    FfxErrorCode error = ffxOpticalflowContextDispatch(&m_ffx->opticalFlow, &ofDesc);
++
++    if (error != FFX_OK) {
++      failFrameGeneration(str::format("ffxOpticalflowContextDispatch failed: ", error));
++      return false;
++    }
++
++    FfxFrameInterpolationDispatchDescription fiDesc = { };
++    fiDesc.flags = m_fgDispatchFlags;
++    fiDesc.commandList = ffxGetCommandListVK(cmdBuffer);
++    fiDesc.displaySize = { m_displayExtent.width, m_displayExtent.height };
++    fiDesc.renderSize = { m_renderExtent.width, m_renderExtent.height };
++    fiDesc.currentBackBuffer = sceneColor;
++    fiDesc.output = getFfxImage(m_fiOutputImage, VK_FORMAT_R16G16B16A16_SFLOAT,
++      m_displayExtent, true, L"FSR3 interpolated scene", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++    fiDesc.interpolationRect = { 0, 0, int32_t(m_displayExtent.width), int32_t(m_displayExtent.height) };
++    fiDesc.opticalFlowVector = opticalFlowVector;
++    fiDesc.opticalFlowSceneChangeDetection = opticalFlowScd;
++    fiDesc.opticalFlowBlockSize = 8;
++    fiDesc.opticalFlowScale = { 1.0f / float(m_displayExtent.width), 1.0f / float(m_displayExtent.height) };
++    fiDesc.cameraNear = inputs.cameraNear;
++    fiDesc.cameraFar = inputs.cameraFar;
++    fiDesc.cameraFovAngleVertical = inputs.fovY;
++    fiDesc.viewSpaceToMetersFactor = 0.3048f;
++    fiDesc.frameTimeDelta = std::clamp(inputs.frameTimeMs, 1.0f, 200.0f);
++    fiDesc.reset = reset;
++    fiDesc.backBufferTransferFunction = FFX_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
++    fiDesc.minMaxLuminance[0] = 0.0f;
++    fiDesc.minMaxLuminance[1] = 1.0f;
++    // Must grow by exactly one per dispatch, or interpolation resets
++    fiDesc.frameID = ++m_fgFrameId;
++    fiDesc.dilatedDepth = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->dilatedDepth);
++    fiDesc.dilatedMotionVectors = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->dilatedMotionVectors);
++    fiDesc.reconstructedPrevDepth = m_ffx->backend.fpGetResource(&m_ffx->backend, m_ffx->reconstructedPrevNearestDepth);
++
++    error = ffxFrameInterpolationDispatch(&m_ffx->frameInterpolation, &fiDesc);
++
++    if (error != FFX_OK) {
++      failFrameGeneration(str::format("ffxFrameInterpolationDispatch failed: ", error));
++      return false;
++    }
++
++    return true;
++#else
++    (void)ctx;
++    (void)inputs;
++    (void)reset;
++    return false;
++#endif
++  }
++
++
++  void DxvkFsr3::failFrameGeneration(const std::string& message) {
++    if (!m_fgFailed)
++      Logger::err(str::format("[FSR3] frame generation: ", message, "; frame generation disabled, upscaling continues"));
++
++    m_fgFailed = true;
++  }
++
++
+   void DxvkFsr3::releaseViews(
+     const DxvkContextObjects&         ctx) {
+ #ifdef DXVK_GENERALSX_FSR3
+diff --git a/src/dxvk/dxvk_fsr3.h b/src/dxvk/dxvk_fsr3.h
+--- a/src/dxvk/dxvk_fsr3.h
++++ b/src/dxvk/dxvk_fsr3.h
+@@ -68,6 +68,59 @@ namespace dxvk {
+       return m_failed;
+     }
+ 
++    /**
++     * \brief Whether frame generation is requested
++     *
++     * DXVK_FSR3_FRAMEGEN=1, which the game sets from FrameGeneration in
++     * Options.ini or -framegen on.
++     */
++    static bool isFrameGenerationRequested();
++
++    /**
++     * \brief Whether frame generation can run
++     *
++     * True when it is requested and the frame interpolation and optical
++     * flow contexts work, or will be created with the next frame.
++     */
++    bool frameGenerationReady() const {
++      return m_fgEnabled && !m_failed && !m_fgFailed;
++    }
++
++    /**
++     * \brief Drops the previous frame of frame generation
++     *
++     * Called for frames that FSR 3 upscaled without \ref interpolate,
++     * so that the next generated frame does not interpolate between two
++     * frames that are not adjacent.
++     */
++    void invalidateFrameGeneration() {
++      m_fgHavePrev = false;
++    }
++
++    /**
++     * \brief Generates the frame between the previous and the current one
++     *
++     * Called after \ref render succeeded for the frame. Interpolates the
++     * upscaled 3D scene of the previous and the current frame with the
++     * FidelityFX optical flow and frame interpolation effects, then draws
++     * the interface of the current, real frame over it with the composite
++     * pass, so that the interface is never interpolated.
++     * \param [in] ctx Context objects
++     * \param [in] inputs Scene inputs of the frame
++     * \param [in] finalView Final image at render size, single-sampled
++     * \param [in] finalRect Area of the final image
++     * \param [in] spatialView Final image upscaled with FSR 1 EASU
++     * \returns Generated frame in GENERAL layout, or \c nullptr if there
++     *    is no previous frame to interpolate from or frame generation
++     *    failed; the caller then presents the real frame twice
++     */
++    Rc<DxvkImageView> interpolate(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++      const Rc<DxvkImageView>&          finalView,
++            VkRect2D                    finalRect,
++      const Rc<DxvkImageView>&          spatialView);
++
+   private:
+ 
+     /// SDK contexts and resources, see dxvk_fsr3.cpp
+@@ -130,6 +183,28 @@ namespace dxvk {
+ 
+     std::vector<VkImageView> m_releasedViews;
+ 
++    // GeneralsX: frame generation, see interpolate
++    bool                    m_fgEnabled = false;
++    bool                    m_fgFailed = false;
++    bool                    m_fgHavePrev = false;
++    uint32_t                m_fgDispatchFlags = 0u;
++    uint64_t                m_fgFrameId = 0u;
++    uint64_t                m_fgFrameCount = 0u;
++
++    Rc<DxvkImage>           m_fiOutputImage;
++    Rc<DxvkImageView>       m_fiOutputView;
++    Rc<DxvkImage>           m_generatedImage;
++    Rc<DxvkImageView>       m_generatedView;
++
++    bool createFrameGeneration(VkExtent2D renderExtent, VkExtent2D displayExtent);
++
++    bool dispatchFrameGeneration(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++            bool                        reset);
++
++    void failFrameGeneration(const std::string& message);
++
+     bool createContext(VkExtent2D renderExtent, VkExtent2D displayExtent);
+ 
+     void destroyContext();
+diff --git a/src/dxvk/dxvk_presenter.h b/src/dxvk/dxvk_presenter.h
+--- a/src/dxvk/dxvk_presenter.h
++++ b/src/dxvk/dxvk_presenter.h
+@@ -115,6 +115,18 @@ namespace dxvk {
+      * \returns Status of the operation. May return
+      *    \c VK_NOT_READY if no swap chain exists.
+      */
++    /**
++     * \brief GeneralsX: number of swap chain images
++     *
++     * Zero while there is no swap chain. FSR 3 frame generation presents
++     * two images per frame and needs at least three.
++     * \returns Swap chain image count
++     */
++    uint32_t getImageCount() {
++      std::lock_guard lock(m_surfaceMutex);
++      return uint32_t(m_images.size());
++    }
++
+     VkResult acquireNextImage(
+             PresenterSync&  sync,
+             Rc<DxvkImage>&  image);
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -650,6 +650,18 @@ namespace dxvk {
+     if (m_fsr3Enabled)
+       Logger::info("[FSR3] Swap chain: FSR 3 temporal upscaling enabled");
+ 
++    // GeneralsX: FSR 3 frame generation, see DxvkFrameGenPass.
++    // DXVK_FSR3_FRAMEGEN_PACING=0 presents the real frame right after the
++    // generated one instead of halfway to the next frame.
++    if (m_fsr3Enabled && DxvkFsr3::isFrameGenerationRequested()) {
++      m_fgRequested = true;
++      m_fgPacing = env::getEnvVar("DXVK_FSR3_FRAMEGEN_PACING") != "0";
++      Logger::info(str::format("[FSR3] Swap chain: frame generation requested, pacing ",
++        m_fgPacing ? "on" : "off"));
++    } else if (DxvkFsr3::isFrameGenerationRequested()) {
++      Logger::warn("[FSR3] frame generation needs Upscaler = FSR3, frame generation disabled");
++    }
++
+     // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
+     // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
+     m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
+@@ -805,6 +817,15 @@ namespace dxvk {
+           VkRect2D            dstRect,
+     const Rc<DxvkImageView>&  gameView,
+           VkRect2D            srcRect) {
++    // GeneralsX: frame generation pass of this present, see DxvkFrameGenPass.
++    // The pass is set and read on the CS thread only, and pacing waits
++    // before taking the lock so that cursor updates are not held back.
++    DxvkFrameGenPass fgPass = m_fgPass;
++    m_fgPass = DxvkFrameGenPass::None;
++
++    if (fgPass != DxvkFrameGenPass::None && m_fgPacing)
++      paceFrameGeneration(fgPass);
++
+     std::unique_lock lock(m_mutex);
+ 
+     Rc<DxvkImageView> srcView = gameView;
+@@ -898,11 +919,23 @@ namespace dxvk {
+     bool useFsr2 = fsr2Usable && haveTemporalInputs;
+     bool useFsr3 = fsr3Usable && haveTemporalInputs;
+ 
++    // GeneralsX: the Real pass of frame generation presents the real frame
++    // that the Generated pass upscaled; it has no scene inputs of its own
++    bool fgReuse = fgPass == DxvkFrameGenPass::Real
++      && m_fgPendingView != nullptr
++      && useFsr && fsr3Usable
++      && m_fgPendingExtent == dstRect.extent;
++
++    if (fgReuse) {
++      useFsr3 = m_presentLogFsr3;
++      useFsr2 = m_presentLogFsr2;
++    }
++
+     // FXAA runs first, at the size of the game image, so that FSR and
+     // post-processing work on the smoothed image. It replaces MSAA when the
+     // game renders without it, so a multisampled image is left as is.
+     // FSR 2 does its own anti-aliasing, so FXAA is skipped with it.
+-    if (m_fxaaEnabled && !useFsr2 && !useFsr3
++    if (m_fxaaEnabled && !useFsr2 && !useFsr3 && !fgReuse
+      && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
+      && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+       renderFxaa(ctx, srcView, srcRect);
+@@ -963,7 +996,11 @@ namespace dxvk {
+     // GeneralsX: RCAS sharpness of the final pass of this frame
+     float presentSharpness = m_fsrSharpness;
+ 
+-    if (useFsr) {
++    if (fgReuse) {
++      blitView = m_fgPendingView;
++      blitRect = { { 0, 0 }, dstRect.extent };
++      presentSharpness = m_fgPendingSharpness;
++    } else if (useFsr) {
+       Rc<DxvkImageView> finalView = blitView;
+       VkRect2D finalRect = blitRect;
+ 
+@@ -983,6 +1020,25 @@ namespace dxvk {
+ 
+           if (m_fsr3->sharpensOutput())
+             presentSharpness = RcasNoSharpening;
++
++          // GeneralsX: the Generated pass presents the interpolated frame
++          // and keeps the real one for the Real pass. Without a generated
++          // frame (first frame, camera cut), the real frame is presented
++          // twice.
++          if (fgPass == DxvkFrameGenPass::Generated) {
++            m_fgPendingView = temporalView;
++            m_fgPendingExtent = dstRect.extent;
++            m_fgPendingSharpness = presentSharpness;
++
++            Rc<DxvkImageView> generatedView = m_fsr3->interpolate(ctx, m_fsr2Inputs,
++              finalView, finalRect, m_fsrView);
++
++            if (generatedView != nullptr) {
++              blitView = generatedView;
++            }
++          } else {
++            m_fsr3->invalidateFrameGeneration();
++          }
+         }
+       } else if (useFsr2) {
+         Rc<DxvkImageView> temporalView = m_fsr2->render(ctx, m_fsr2Inputs,
+@@ -1008,6 +1064,23 @@ namespace dxvk {
+ 
+     m_fsr2Inputs = DxvkTemporalUpscaleInputs();
+ 
++    // GeneralsX: the pending real frame belongs to one Generated pass
++    if (fgPass != DxvkFrameGenPass::Generated || !useFsr3)
++      m_fgPendingView = nullptr;
++
++    // GeneralsX: frame generation stays active while FSR 3 upscales the
++    // scene; the application thread reads this for the next frame
++    if (m_fgRequested && !fgReuse) {
++      bool fgActive = useFsr3 && m_fsr3 && m_fsr3->frameGenerationReady();
++
++      if (m_fgRequested && m_fsr3 && !m_fsr3->frameGenerationReady() && !m_fgLogged) {
++        Logger::warn("[FSR3] frame generation disabled: frame interpolation is not available");
++        m_fgLogged = true;
++      }
++
++      m_fgActive.store(fgActive, std::memory_order_release);
++    }
++
+     // Post-processing runs in the RCAS pass, which reads its source 1:1,
+     // so it needs a single-sampled source at the output size.
+     m_postActive = m_postEnabled
+@@ -1659,6 +1732,47 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkSwapchainBlitter::setFrameGenerationPass(
++          DxvkFrameGenPass    pass) {
++    m_fgPass = pass;
++  }
++
++
++  void DxvkSwapchainBlitter::paceFrameGeneration(
++          DxvkFrameGenPass    pass) {
++    // GeneralsX: the generated frame lies halfway between two real frames,
++    // so the real frame is presented half a real frame interval after it.
++    // The interval is a moving average of the Generated passes, capped so
++    // that a stall never holds a frame back for long.
++    constexpr double MaxDelayUs = 20000.0;
++    constexpr double ResetIntervalUs = 250000.0;
++
++    auto now = dxvk::high_resolution_clock::now();
++
++    if (pass == DxvkFrameGenPass::Generated) {
++      if (m_fgLastGenerated != dxvk::high_resolution_clock::time_point()) {
++        double intervalUs = double(std::chrono::duration_cast<std::chrono::microseconds>(
++          now - m_fgLastGenerated).count());
++
++        if (intervalUs > ResetIntervalUs)
++          m_fgIntervalUs = 0.0;
++        else if (m_fgIntervalUs <= 0.0)
++          m_fgIntervalUs = intervalUs;
++        else
++          m_fgIntervalUs = 0.9 * m_fgIntervalUs + 0.1 * intervalUs;
++      }
++
++      m_fgLastGenerated = now;
++    } else if (pass == DxvkFrameGenPass::Real && m_fgIntervalUs > 0.0) {
++      double delayUs = std::min(0.5 * m_fgIntervalUs, MaxDelayUs);
++      auto target = m_fgLastGenerated + std::chrono::microseconds(int64_t(delayUs));
++
++      if (now < target)
++        Sleep::sleepUntil(now, target);
++    }
++  }
++
++
+   void DxvkSwapchainBlitter::renderFsrEasu(
+     const DxvkContextObjects&         ctx,
+     const Rc<DxvkImageView>&          srcView,
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
+ #include <functional>
+ #include <memory>
+ #include <string>
+@@ -10,6 +11,7 @@
+ #include "./hud/dxvk_hud.h"
+ 
+ #include "../util/thread.h"
++#include "../util/util_sleep.h"
+ 
+ #include "../dxvk/dxvk_device.h"
+ #include "../dxvk/dxvk_context.h"
+@@ -135,6 +137,23 @@ namespace dxvk {
+   class DxvkVideoWriter;
+ 
+ 
++  /**
++   * \brief GeneralsX: frame generation pass of a present
++   *
++   * With FSR 3 frame generation, the D3D9 swap chain presents every
++   * frame twice: first the generated frame between the previous and this
++   * frame, then this, real frame.
++   */
++  enum class DxvkFrameGenPass : uint32_t {
++    /// Ordinary present
++    None      = 0,
++    /// Upscales the frame, then presents the generated frame
++    Generated = 1,
++    /// Presents the real frame upscaled by the previous Generated pass
++    Real      = 2,
++  };
++
++
+   /**
+    * \brief Swap chain blitter
+    *
+@@ -239,6 +258,36 @@ namespace dxvk {
+     void setTemporalInputs(
+       const DxvkTemporalUpscaleInputs& inputs);
+ 
++    /**
++     * \brief GeneralsX: sets the frame generation pass of the next present
++     *
++     * Called on the CS thread right before \ref present. Reset to
++     * \c DxvkFrameGenPass::None by every present.
++     * \param [in] pass Frame generation pass
++     */
++    void setFrameGenerationPass(
++            DxvkFrameGenPass    pass);
++
++    /**
++     * \brief GeneralsX: whether FSR 3 frame generation is requested
++     *
++     * True when DXVK_UPSCALER=fsr3 runs with DXVK_FSR3_FRAMEGEN=1.
++     */
++    bool isFrameGenerationRequested() const {
++      return m_fsr3Enabled && m_fgRequested;
++    }
++
++    /**
++     * \brief GeneralsX: whether presents should use frame generation
++     *
++     * True while FSR 3 upscales the scene and frame generation works.
++     * Read on the application thread, which then presents each frame
++     * with a Generated and a Real pass.
++     */
++    bool isFrameGenerationActive() const {
++      return m_fgActive.load(std::memory_order_acquire);
++    }
++
+   private:
+ 
+     struct SpecConstants {
+@@ -314,6 +363,22 @@ namespace dxvk {
+     std::unique_ptr<DxvkFsr3>  m_fsr3;
+     bool                       m_presentLogFsr3 = false;
+ 
++    // GeneralsX: FSR 3 frame generation, DXVK_FSR3_FRAMEGEN=1. The real
++    // frame upscaled by a Generated pass is kept for the Real pass.
++    bool                       m_fgRequested = false;
++    bool                       m_fgPacing = true;
++    std::atomic<bool>          m_fgActive = { false };
++    DxvkFrameGenPass           m_fgPass = DxvkFrameGenPass::None;
++    Rc<DxvkImageView>          m_fgPendingView;
++    VkExtent2D                 m_fgPendingExtent = { 0u, 0u };
++    float                      m_fgPendingSharpness = 0.0f;
++    bool                       m_fgLogged = false;
++    dxvk::high_resolution_clock::time_point m_fgLastGenerated = { };
++    double                     m_fgIntervalUs = 0.0;
++
++    void paceFrameGeneration(
++            DxvkFrameGenPass    pass);
++
+     // GeneralsX: RCAS sharpness of the final pass, in stops. Equal to
+     // m_fsrSharpness unless FSR 2 sharpened the frame itself. At 64 stops
+     // the RCAS lobe is 2^-64, so the pass leaves the image as it is while

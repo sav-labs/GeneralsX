@@ -1066,6 +1066,9 @@ OptionPreferences::UpscalerType OptionPreferences::parseUpscaler(const char *nam
 		return UPSCALER_DEFAULT;
 	if (stricmp(name, "FSR2") == 0)
 		return UPSCALER_FSR2;
+	// GeneralsX @feature Claude 16/10/2026 FSR 3.1 upscaler, opt-in like FSR 2
+	if (stricmp(name, "FSR3") == 0)
+		return UPSCALER_FSR3;
 	if (stricmp(name, "FSR1") == 0 || stricmp(name, "FSR") == 0)
 		return UPSCALER_FSR1;
 	if (stricmp(name, "OFF") == 0 || stricmp(name, "no") == 0 || stricmp(name, "none") == 0)
@@ -1083,6 +1086,7 @@ const char *OptionPreferences::getUpscalerName(UpscalerType upscaler)
 		case UPSCALER_FSR1: return "FSR1";
 		case UPSCALER_FSR2: return "FSR2";
 		case UPSCALER_DLSS: return "DLSS";
+		case UPSCALER_FSR3: return "FSR3";
 		default: return "default";
 	}
 }
@@ -1158,6 +1162,18 @@ Real OptionPreferences::getUpscalerSharpness() const
 		return 0.5f;
 
 	return clamp(0.0f, sharpness, 1.0f);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini FrameGeneration: FSR 3 frame generation, which presents a frame
+// interpolated between every two real frames. Off unless set to yes; it only takes effect with Upscaler = FSR3.
+// Render only: the game logic and its frame rate do not change.
+Bool OptionPreferences::getFrameGeneration() const
+{
+	OptionPreferences::const_iterator it = find("FrameGeneration");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
 }
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini PostEffects turns the DXVK present pass effects on or off:
@@ -1290,6 +1306,22 @@ Bool OptionPreferences::getSkinCacheEnabled() const
 		return TRUE;
 
 	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @performance Claude 16/10/2026 Map load preloads the models and textures of the map's objects (all
+// their damage and night states) and of the units the players can build, so they are not read from disk in the
+// middle of a match. everything preloads every object of every side for every time of day (slow, much memory).
+OptionPreferences::PreloadAssetsMode OptionPreferences::getPreloadAssetsMode() const
+{
+	OptionPreferences::const_iterator it = find("PreloadAssets");
+	if (it == end())
+		return PRELOAD_ASSETS_YES;
+
+	if (stricmp(it->second.str(), "no") == 0)
+		return PRELOAD_ASSETS_NO;
+	if (stricmp(it->second.str(), "everything") == 0)
+		return PRELOAD_ASSETS_EVERYTHING;
+	return PRELOAD_ASSETS_YES;
 }
 
 // GeneralsX @performance Claude 16/10/2026 Shadow volume caster meshes with at least this many triangles rebuild
