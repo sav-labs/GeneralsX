@@ -6,6 +6,8 @@ pixel is ours and the build is reproducible. Flipbooks are square grids of squar
 row by row from the top left, matching the FlipbookGrid particle field.
 """
 
+import os
+
 import numpy as np
 from PIL import Image
 
@@ -274,12 +276,25 @@ def to_image(rgba):
     return Image.fromarray(np.clip(rgba * 255.0 + 0.5, 0, 255).astype(np.uint8), "RGBA")
 
 
+# Volumetric flipbooks baked offline by blender_flipbook.py (fx_fluid simulation rendered with Cycles)
+# and kept as DXT5 DDS in assets/effects; the engine loads the .dds for the .tga name the INI uses.
+BAKED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "assets", "effects")
+BAKED = {
+    # texture name: (blender_flipbook kind, flipbook grid)
+    "gxfx_fireball.tga": ("explosion", 8),
+    "gxfx_smoke.tga": ("smoke", 8),
+    "gxfx_flame.tga": ("fire", 8),
+    "gxfx_dust.tga": ("dust", 8),
+}
+
+
+def baked_path(name):
+    return os.path.join(BAKED_DIR, os.path.splitext(name)[0] + ".dds")
+
+
 TEXTURES = {
-    # name: (builder, flipbook grid or 1)
-    "gxfx_fireball.tga": (fireball, 4),
-    "gxfx_smoke.tga": (smoke, 4),
-    "gxfx_flame.tga": (flame, 4),
-    "gxfx_dust.tga": (dust, 4),
+    # name: (builder or None when baked, flipbook grid or 1)
+    **{name: (None, grid) for name, (_, grid) in BAKED.items()},
     "gxfx_debris.tga": (debris, 2),
     "gxfx_flash.tga": (flash, 1),
     "gxfx_spark.tga": (spark, 1),
@@ -289,4 +304,4 @@ TEXTURES = {
 
 def build_all():
     """Returns {texture name: RGBA float array}."""
-    return {name: builder() for name, (builder, _) in TEXTURES.items()}
+    return {name: builder() for name, (builder, _) in TEXTURES.items() if builder}

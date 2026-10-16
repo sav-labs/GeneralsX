@@ -35,6 +35,15 @@ def main():
                 errors.append("%s: key frames must rise and number at most 8: %s" % (name, keys))
         if s["Lifetime"][0] < 1 or s["Lifetime"][1] < s["Lifetime"][0]:
             errors.append("%s: bad Lifetime %s" % (name, s["Lifetime"]))
+    for name in fx_textures.BAKED:
+        path = fx_textures.baked_path(name)
+        if not os.path.exists(path):
+            errors.append("%s: baked flipbook %s is missing" % (name, path))
+        else:
+            with open(path, "rb") as f:
+                head = f.read(128)
+            if head[:4] != b"DDS " or head[84:88] != b"DXT5":
+                errors.append("%s: %s is not a DXT5 DDS" % (name, path))
     ini = fx_systems.write_ini()
     text = "".join(ini.values())
     blocks = sum(1 for line in text.splitlines() if line.startswith(("ParticleSystem ", "FXList ")))

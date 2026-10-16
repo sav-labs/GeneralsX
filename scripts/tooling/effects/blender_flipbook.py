@@ -108,7 +108,7 @@ KINDS = {
     # grid shape at scale 1, cell size, smoke colour, density gain, fire emission gain, view framing
     "explosion": dict(setup=setup_explosion, shape=(80, 80, 128), smoke=(0.42, 0.39, 0.36), dens=2.0, fire=12.0),
     "smoke": dict(setup=setup_smoke, shape=(72, 72, 112), smoke=(0.5, 0.47, 0.44), dens=2.5, fire=0.0),
-    "fire": dict(setup=setup_fire, shape=(64, 64, 112), smoke=(0.06, 0.05, 0.045), dens=2.0, fire=1.6, flame_body=0.5),
+    "fire": dict(setup=setup_fire, shape=(64, 64, 112), smoke=(0.06, 0.05, 0.045), dens=2.0, fire=2.2, flame_body=0.3),
     "dust": dict(setup=setup_dust, shape=(96, 96, 56), smoke=(0.85, 0.76, 0.6), dens=0.55, fire=0.0, firm=0.02),
 }
 

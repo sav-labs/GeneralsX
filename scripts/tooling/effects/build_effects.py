@@ -6,7 +6,7 @@ particle system and FX list INI (fx_systems.py) and packs them into one .big nex
 executable. The INI lands in Data\\INI\\GeneralsX, which the game loads before every match, so the
 pack replaces retail explosions by FX list name without touching any retail file.
 
-Usage: build_effects.py <output dir> [--preview <file.mp4>]
+Usage: build_effects.py <output dir>
 """
 
 import argparse
@@ -32,6 +32,9 @@ def build(out_dir):
         fx_textures.to_image(rgba).save(path, format="TGA", compression=None)
         with open(path, "rb") as f:
             files.append(("Art\\Textures\\" + name, f.read()))
+    for name in fx_textures.BAKED:
+        with open(fx_textures.baked_path(name), "rb") as f:
+            files.append(("Art\\Textures\\" + os.path.basename(fx_textures.baked_path(name)), f.read()))
     for name, text in fx_systems.write_ini().items():
         files.append((name, text.replace("\n", "\r\n").encode("ascii")))
     pack = os.path.join(out_dir, PACK_NAME)
@@ -42,14 +45,9 @@ def build(out_dir):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("out")
-    parser.add_argument("--preview")
     args = parser.parse_args()
     os.makedirs(args.out, exist_ok=True)
     print("wrote " + build(args.out))
-    if args.preview:
-        import preview
-        preview.simulate("tank", 9.0, 1280, args.preview)
-        print("wrote " + args.preview)
 
 
 if __name__ == "__main__":

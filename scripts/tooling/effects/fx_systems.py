@@ -2,7 +2,7 @@
 
 GeneralsX @feature Claude 16/10/2026 Each system is a dict of retail ParticleSystem INI fields plus
 the GeneralsX FlipbookGrid / FlipbookRandom fields; write_ini() turns them into the INI the game
-loads from Data\\INI\\GeneralsX, and preview.py simulates the same dicts for the preview video.
+loads from Data\\INI\\GeneralsX.
 FX lists replace retail FXList definitions by name; they keep the retail sounds, view shake and
 terrain scorch and only swap the particles. Everything here is client-side presentation: FX
 lists and particle systems never feed back into game logic, so replays and multiplayer sync are
@@ -68,19 +68,20 @@ SYSTEMS = {
         BurstCount=(1, 1)),
     # Main fireball: a cluster of billowing flipbook puffs that rise and cool into smoke.
     "GXTankBlastFireball": system(
-        ParticleName="gxfx_fireball.tga", FlipbookGrid=4,
-        Lifetime=(34, 46), Size=(16, 22), SizeRate=(2.4, 3.0), SizeRateDamping=(0.9, 0.92),
-        AngularRateZ=(-0.02, 0.02),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 26), (0.0, 0.0, 46)],
+        # The baked flipbook holds the whole blast (flash, fireball, burning-out, rolling smoke) over
+        # 72 frames, so a few large overlapping copies play it once each.
+        ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(66, 78), Size=(36, 46), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 56), (0.0, 0.0, 78)],
         Color=[((255, 255, 255), 0)],
-        BurstCount=(7, 7), Gravity=0.025, VelocityDamping=(0.84, 0.88),
-        VelocityType="SPHERICAL", VelSpherical=(0.8, 1.6),
-        VolumeType="SPHERE", VolSphereRadius=6.0),
+        BurstCount=(3, 3), VelocityDamping=(0.85, 0.88), DriftVelocity=(0.0, 0.0, 0.12),
+        VelocityType="SPHERICAL", VelSpherical=(0.2, 0.5),
+        VolumeType="SPHERE", VolSphereRadius=4.0),
     # Smaller secondary blasts a moment later, as fuel and ammunition go off.
     "GXTankBlastSecondary": system(
-        ParticleName="gxfx_fireball.tga", FlipbookGrid=4,
-        Lifetime=(26, 34), Size=(9, 13), SizeRate=(1.6, 2.0), SizeRateDamping=(0.9, 0.9),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 18), (0.0, 0.0, 34)],
+        ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(48, 58), Size=(16, 22), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 40), (0.0, 0.0, 58)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
         VelocityType="SPHERICAL", VelSpherical=(0.6, 1.2),
@@ -94,11 +95,10 @@ SYSTEMS = {
         BurstCount=(1, 1)),
     # Brown dust thrown up and outwards around the hull.
     "GXTankBlastDust": system(
-        ParticleName="gxfx_dust.tga", FlipbookGrid=4,
-        Lifetime=(60, 85), Size=(10, 15), SizeRate=(0.9, 1.2), SizeRateDamping=(0.965, 0.97),
-        AngularRateZ=(-0.01, 0.01),
-        Alpha=[(0.0, 0.0, 0), (0.8, 0.8, 5), (0.0, 0.0, 85)],
-        Color=[((170, 150, 120), 0), ((150, 136, 116), 60)],
+        ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(60, 85), Size=(14, 20), SizeRate=(0.5, 0.7), SizeRateDamping=(0.965, 0.97),
+        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 5), (0.0, 0.0, 85)],
+        Color=[((235, 225, 210), 0)],
         BurstCount=(14, 14), VelocityDamping=(0.9, 0.92), Gravity=0.004,
         VelocityType="OUTWARD", VelOutward=(1.6, 2.8), VelOutwardOther=(0.1, 0.5),
         VolumeType="CYLINDER", VolCylinderRadius=8.0, VolCylinderLength=1.0, IsHollow="Yes"),
@@ -121,11 +121,10 @@ SYSTEMS = {
         VolumeType="CYLINDER", VolCylinderRadius=4.0, VolCylinderLength=4.0),
     # Thick black smoke that rolls up from the fireball.
     "GXTankBlastSmoke": system(
-        ParticleName="gxfx_smoke.tga", FlipbookGrid=4,
-        Lifetime=(120, 160), Size=(16, 22), SizeRate=(0.7, 0.9), SizeRateDamping=(0.985, 0.988),
-        AngularRateZ=(-0.008, 0.008),
+        ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(120, 160), Size=(20, 26), SizeRate=(0.3, 0.4), SizeRateDamping=(0.99, 0.99),
         Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 14), (0.6, 0.6, 80), (0.0, 0.0, 160)],
-        Color=[((52, 46, 42), 0), ((96, 92, 88), 110)],
+        Color=[((150, 144, 138), 0), ((200, 196, 190), 110)],
         BurstDelay=(2, 2), BurstCount=(2, 2), SystemLifetime=10, InitialDelay=(6, 6),
         DriftVelocity=(0.12, 0.05, 0.42), VelocityDamping=(0.92, 0.94),
         VelocityType="SPHERICAL", VelSpherical=(0.4, 0.9),
@@ -133,19 +132,20 @@ SYSTEMS = {
 
     # ---- Burning wreck (about 6 s, until the retail hulk has sunk into the ground) -------------
     "GXWreckFire": system(
-        Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_flame.tga", FlipbookGrid=4,
-        Lifetime=(22, 30), Size=(8, 12), SizeRate=(0.05, 0.12), SizeRateDamping=(0.97, 0.97),
-        AngleZ=(-0.15, 0.15),
-        Color=[((0, 0, 0), 0), ((255, 225, 180), 4), ((210, 100, 36), 18), ((0, 0, 0), 30)],
+        # Baked fire carries its own colour and soot; alpha blended so the soot darkens.
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8,
+        Lifetime=(28, 36), Size=(10, 14), SizeRate=(0.05, 0.1), SizeRateDamping=(0.97, 0.97),
+        AngleZ=(-0.1, 0.1),
+        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 4), (1.0, 1.0, 24), (0.0, 0.0, 36)],
+        Color=[((255, 255, 255), 0)],
         BurstDelay=(2, 3), BurstCount=(1, 1), SystemLifetime=170,
         DriftVelocity=(0.0, 0.0, 0.3),
         VolumeType="CYLINDER", VolCylinderRadius=6.0, VolCylinderLength=3.0),
     "GXWreckSmoke": system(
-        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=4,
-        Lifetime=(140, 180), Size=(8, 12), SizeRate=(0.2, 0.26), SizeRateDamping=(0.995, 0.995),
-        AngularRateZ=(-0.006, 0.006),
-        Alpha=[(0.0, 0.0, 0), (0.8, 0.8, 18), (0.45, 0.45, 100), (0.0, 0.0, 180)],
-        Color=[((40, 36, 33), 0), ((100, 96, 92), 130)],
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(140, 180), Size=(10, 14), SizeRate=(0.12, 0.16), SizeRateDamping=(0.995, 0.995),
+        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 18), (0.5, 0.5, 100), (0.0, 0.0, 180)],
+        Color=[((120, 114, 108), 0), ((190, 186, 180), 130)],
         BurstDelay=(5, 8), BurstCount=(1, 1), SystemLifetime=200, InitialDelay=(20, 20),
         DriftVelocity=(0.14, 0.06, 0.5),
         VolumeType="CYLINDER", VolCylinderRadius=4.0, VolCylinderLength=2.0),
@@ -169,20 +169,21 @@ SYSTEMS = {
     # Redefining them keeps the retail placement and only changes the look. The scale and emission
     # rates stay close to retail so the particle budget does not grow.
     "SmolderingSmoke": system(
-        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=4,
-        AngleZ=(-2.0, 2.0), AngularRateZ=(-0.01, 0.01),
-        Lifetime=(90, 120), Size=(4.0, 5.0), SizeRate=(0.4, 0.55), SizeRateDamping=(0.985, 0.99),
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=8,
+        AngleZ=(-0.12, 0.12),
+        Lifetime=(90, 120), Size=(5.0, 6.5), SizeRate=(0.25, 0.35), SizeRateDamping=(0.985, 0.99),
         Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 8), (0.45, 0.45, 70), (0.0, 0.0, 120)],
-        Color=[((58, 54, 50), 0), ((122, 118, 112), 100)],
+        Color=[((140, 134, 128), 0), ((210, 206, 200), 100)],
         BurstDelay=(5, 9), BurstCount=(1, 1), SystemLifetime=0,
         DriftVelocity=(-0.05, 0.08, 0.24), VelocityDamping=(0.9, 0.92),
         VelocityType="OUTWARD", VelOutward=(0.1, 0.1), VelOutwardOther=(0.0, 0.0),
         VolumeType="SPHERE", VolSphereRadius=0.5),
     "SmolderingFire": system(
-        Priority="SEMI_CONSTANT", Shader="ADDITIVE", ParticleName="gxfx_flame.tga", FlipbookGrid=4,
-        AngleZ=(-0.15, 0.15),
-        Lifetime=(16, 22), Size=(7.0, 9.0), SizeRate=(0.05, 0.1), SizeRateDamping=(0.95, 0.95),
-        Color=[((0, 0, 0), 0), ((255, 222, 176), 3), ((215, 98, 34), 12), ((0, 0, 0), 22)],
+        Priority="SEMI_CONSTANT", ParticleName="gxfx_flame.tga", FlipbookGrid=8,
+        AngleZ=(-0.1, 0.1),
+        Lifetime=(22, 28), Size=(7.0, 9.0), SizeRate=(0.05, 0.1), SizeRateDamping=(0.95, 0.95),
+        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 3), (1.0, 1.0, 18), (0.0, 0.0, 28)],
+        Color=[((255, 255, 255), 0)],
         BurstDelay=(1, 3), BurstCount=(1, 1), SystemLifetime=0,
         DriftVelocity=(-0.05, 0.08, 0.2),
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
@@ -195,11 +196,10 @@ SYSTEMS = {
         VolumeType="SPHERE", VolSphereRadius=0.4),
     # Badly damaged vehicles.
     "SmallLightSmokeColumn": system(
-        Priority="SEMI_CONSTANT", ParticleName="gxfx_smoke.tga", FlipbookGrid=4,
-        AngularRateZ=(-0.01, 0.01),
-        Lifetime=(60, 80), Size=(2.5, 4.0), SizeRate=(0.4, 0.7), SizeRateDamping=(0.97, 0.975),
+        Priority="SEMI_CONSTANT", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(60, 80), Size=(3.5, 5.0), SizeRate=(0.25, 0.4), SizeRateDamping=(0.97, 0.975),
         Alpha=[(0.0, 0.0, 0), (0.75, 0.75, 5), (0.0, 0.0, 80)],
-        Color=[((64, 60, 56), 0), ((150, 146, 140), 60)],
+        Color=[((150, 146, 140), 0), ((215, 211, 205), 60)],
         BurstDelay=(2, 2), BurstCount=(1, 1), SystemLifetime=0,
         DriftVelocity=(0.1, 0.15, 0.18),
         VolumeType="CYLINDER", VolCylinderRadius=1.0, VolCylinderLength=0.1),
@@ -208,10 +208,9 @@ SYSTEMS = {
 
 def _structure_blast(count, size, speed, radius):
     return system(
-        ParticleName="gxfx_fireball.tga", FlipbookGrid=4,
-        Lifetime=(40, 56), Size=size, SizeRate=(1.2, 1.8), SizeRateDamping=(0.93, 0.95),
-        AngularRateZ=(-0.015, 0.015),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 30), (0.0, 0.0, 56)],
+        ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(60, 72), Size=size, SizeRate=(0.3, 0.45), SizeRateDamping=(0.97, 0.98),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 50), (0.0, 0.0, 72)],
         BurstDelay=(99999, 99999), BurstCount=count, Gravity=0.02, VelocityDamping=(0.86, 0.9),
         DriftVelocity=(0.0, 0.0, 0.25),
         VelocityType="OUTWARD", VelOutward=speed, VelOutwardOther=(0.3, 0.9),
@@ -220,11 +219,10 @@ def _structure_blast(count, size, speed, radius):
 
 def _structure_dust(count, size, rate, speed, radius, length, gravity):
     return system(
-        ParticleName="gxfx_dust.tga", FlipbookGrid=4,
+        ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
         Lifetime=(150, 200), Size=size, SizeRate=rate, SizeRateDamping=(0.95, 0.96),
-        AngularRateZ=(-0.006, 0.006),
         Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 8), (0.5, 0.5, 90), (0.0, 0.0, 200)],
-        Color=[((200, 192, 182), 0), ((186, 176, 160), 60)],
+        Color=[((240, 236, 230), 0), ((226, 220, 210), 60)],
         BurstDelay=(99999, 99999), BurstCount=count, SystemLifetime=20,
         Gravity=gravity * 0.1, VelocityDamping=(0.88, 0.9),
         VelocityType="OUTWARD", VelOutward=speed, VelOutwardOther=(0.0, 0.3),
