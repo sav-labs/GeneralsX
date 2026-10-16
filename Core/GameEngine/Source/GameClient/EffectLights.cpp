@@ -127,10 +127,19 @@ namespace
 	{
 		return a > b ? a : b;
 	}
+
+	Real minReal(Real a, Real b)
+	{
+		return a < b ? a : b;
+	}
 }
 
 FXTraits::FXTraits() :
 	hasLightPulse(FALSE),
+	pulseRadius(0.0f),
+	pulseRed(1.0f),
+	pulseGreen(1.0f),
+	pulseBlue(1.0f),
 	strongestShake(-1),
 	scorchRadius(0.0f),
 	particleSystems(0),
@@ -178,12 +187,44 @@ void addParticleSystemName(FXTraits &traits, const char *particleSystemName)
 		++traits.flameParticles;
 }
 
+static Profile classifyFXListShape(const char *fxListName, const FXTraits &traits);
+
 Profile classifyFXList(const char *fxListName, const FXTraits &traits)
 {
-	Profile profile;
-	if (traits.hasLightPulse)
-		return profile;	// the data lights this one itself
+	// GeneralsX @bugfix Claude 16/10/2026 FXLists with a LightPulse used to get no light here, on the idea that
+	// the data lights them itself. Most retail explosion, shell and muzzle FXLists carry a LightPulse, but with a
+	// radius of about 15, which W3DDisplay::createLightPulse skips as too small to see: those effects were lit by
+	// nothing. They are classified like the others now; the pulse colour and size feed the profile and a pulse
+	// alone still makes an impact flash.
+	Profile profile = classifyFXListShape(fxListName, traits);
+	if (!traits.hasLightPulse)
+		return profile;
+	if (profile.kind == KIND_NONE)
+	{
+		char name[256];
+		toLower(fxListName, name, (Int)sizeof(name));
+		if (containsAny(name, s_ignoreWords))
+			return profile;
+		Bool muzzleName = containsAny(name, s_muzzleWords);
+		for (Int i = 0; !muzzleName && s_muzzleSuffixes[i]; ++i)
+			muzzleName = endsWith(name, s_muzzleSuffixes[i]);
+		profile.kind = muzzleName ? KIND_MUZZLE : (traits.pulseRadius >= 60.0f ? KIND_EXPLOSION : KIND_IMPACT);
+		profile.sizeScale = clampReal(WWMath::Sqrt(maxReal(traits.pulseRadius, 1.0f) / 25.0f), 0.8f, 1.5f);
+	}
+	const Real pulseMax = maxReal(traits.pulseRed, maxReal(traits.pulseGreen, traits.pulseBlue));
+	if (profile.tint == TINT_DEFAULT && pulseMax > 0.05f)
+	{
+		profile.hasColor = TRUE;
+		profile.red = traits.pulseRed / pulseMax;
+		profile.green = traits.pulseGreen / pulseMax;
+		profile.blue = traits.pulseBlue / pulseMax;
+	}
+	return profile;
+}
 
+static Profile classifyFXListShape(const char *fxListName, const FXTraits &traits)
+{
+	Profile profile;
 	char name[256];
 	toLower(fxListName, name, (Int)sizeof(name));
 
@@ -194,7 +235,7 @@ Profile classifyFXList(const char *fxListName, const FXTraits &traits)
 	const Int shake = traits.strongestShake;
 	const Bool hasScorch = traits.scorchRadius > 0.0f;
 	const Bool fireEvidence = traits.fireballParticles > 0 || traits.flameParticles > 0 || hasScorch
-		|| shake >= View::SHAKE_SUBTLE;
+		|| shake >= View::SHAKE_SUBTLE || traits.hasLightPulse;
 
 	// Superweapons: named so, or a camera shake only the biggest blasts use.
 	if (containsAny(name, s_superWords) || shake >= View::SHAKE_SEVERE)
@@ -231,7 +272,8 @@ Profile classifyFXList(const char *fxListName, const FXTraits &traits)
 			return profile;
 		}
 		if (shake >= View::SHAKE_NORMAL || traits.scorchRadius >= 15.0f
-			|| (explosionName && (traits.fireballParticles > 0 || hasScorch || shake >= View::SHAKE_SUBTLE)))
+			|| (explosionName && (traits.fireballParticles > 0 || hasScorch || shake >= View::SHAKE_SUBTLE
+				|| traits.pulseRadius >= 30.0f)))
 		{
 			profile.kind = KIND_EXPLOSION;
 			if (hasScorch)
@@ -268,15 +310,15 @@ Profile classifyFXList(const char *fxListName, const FXTraits &traits)
 	return profile;
 }
 
+// GeneralsX @bugfix Claude 16/10/2026 Property based: the old rules needed a fire or exhaust word in the name
+// (or an attached system) and skipped every one-shot burst, so unnamed fires, burning building systems with
+// other names and explosion bursts made by death modules and object creation lists never lit anything.
 Profile classifyParticleSystem(ParticleSystem *system)
 {
 	Profile profile;
 	if (!system || !system->getTemplate())
 		return profile;
 
-	// One-shot bursts belong to the FXList (or death effect) that made them, which has its own light.
-	if (system->m_isOneShot)
-		return profile;
 	if (system->m_particleType != ParticleSystemInfo::PARTICLE
 		&& system->m_particleType != ParticleSystemInfo::VOLUME_PARTICLE
 		&& system->m_particleType != ParticleSystemInfo::STREAK)
@@ -287,7 +329,8 @@ Profile classifyParticleSystem(ParticleSystem *system)
 
 	char name[256];
 	toLower(system->getTemplate()->getName().str(), name, (Int)sizeof(name));
-	if (containsAny(name, s_psIgnoreWords) && !containsAny(name, s_fireWords))
+	const Bool fireName = containsAny(name, s_fireWords) || containsAny(name, s_psFireballWords);
+	if (containsAny(name, s_psIgnoreWords) && !fireName)
 		return profile;
 
 	// Brightest colour key: for additive particles that is the light they give off.
@@ -308,22 +351,44 @@ Profile classifyParticleSystem(ParticleSystem *system)
 	}
 	const Real bestMax = maxReal(bestRed, maxReal(bestGreen, bestBlue));
 	const Bool warm = bestMax > 0.0f && bestRed >= 0.6f * bestMax && bestBlue <= 0.75f * bestRed;
+	const Int tint = tintFromName(name);
+	// a strongly coloured glow (toxin green, EMP blue, laser red) is a light too, in its own colour
+	const Bool saturated = bestMax > 0.0f && (bestMax - minReal(bestRed, minReal(bestGreen, bestBlue))) >= 0.5f * bestMax;
+	const Real size = system->m_startSize.getMaximumValue() * system->getSizeMultiplier();
 
-	const Bool attached = system->getAttachedDrawable() != INVALID_DRAWABLE_ID || system->getAttachedObject() != INVALID_ID;
-	if (containsAny(name, s_exhaustWords) && !containsAny(name, s_psIgnoreWords))
+	// Glowing: additive and bright, warm or strongly coloured. Alpha blended particles are usually smoke; only
+	// fire coloured ones with a fire name count.
+	const Bool glowing = additive
+		? (bestLum > 0.30f && (warm || saturated || tint != TINT_DEFAULT || fireName))
+		: (fireName && warm && bestLum > 0.35f);
+	if (!glowing)
+		return profile;
+
+	if (system->m_isOneShot)
+	{
+		// bursts: muzzle flashes, impact flashes and explosion fireballs
+		if (size < 3.0f)
+			return profile;	// sparks and tracers
+		if (containsAny(name, s_psMuzzleWords))
+			profile.kind = KIND_MUZZLE;
+		else if (size >= 20.0f)
+			profile.kind = KIND_EXPLOSION;
+		else if (size >= 6.0f || containsAny(name, s_psFireballWords))
+			profile.kind = KIND_IMPACT;
+		else
+			profile.kind = KIND_MUZZLE;
+	}
+	else if (containsAny(name, s_exhaustWords) && !containsAny(name, s_psIgnoreWords))
 	{
 		profile.kind = KIND_EXHAUST;
 	}
-	else if (containsAny(name, s_fireWords))
+	else if (containsAny(name, s_fireWords) || size >= 8.0f)
 	{
-		// alpha blended fire is usually the smoky part: only take it when its colours are fire coloured
-		if (!additive && !(warm && bestLum > 0.35f))
-			return profile;
 		profile.kind = KIND_FIRE;
 	}
-	else if (additive && attached && warm && bestLum > 0.45f)
+	else if (size >= 2.0f)
 	{
-		// unnamed but glowing warm and attached to something: an engine or a burning part
+		// small continuous glow: an engine, a torch, a burning part
 		profile.kind = KIND_EXHAUST;
 	}
 	else
@@ -331,7 +396,7 @@ Profile classifyParticleSystem(ParticleSystem *system)
 		return profile;
 	}
 
-	profile.tint = tintFromName(name);
+	profile.tint = tint;
 	if (bestMax > 0.05f && profile.tint == TINT_DEFAULT)
 	{
 		profile.hasColor = TRUE;
@@ -341,11 +406,17 @@ Profile classifyParticleSystem(ParticleSystem *system)
 	}
 
 	// Bigger particles, bigger light.
-	const Real size = system->m_startSize.getMaximumValue() * system->getSizeMultiplier();
-	profile.sizeScale = clampReal(WWMath::Sqrt(maxReal(size, 1.0f) / 12.0f), 0.6f, 1.8f);
+	profile.sizeScale = clampReal(WWMath::Sqrt(maxReal(size, 1.0f) / 12.0f), 0.6f, 1.4f);
 	if (!additive)
 		profile.sizeScale *= 0.8f;
 	return profile;
+}
+
+const char *kindName(Int kind)
+{
+	static const char *const s_names[KIND_COUNT] = { "none", "muzzle", "impact", "explosion", "large", "super",
+		"flame", "fire", "exhaust" };
+	return (kind >= 0 && kind < KIND_COUNT) ? s_names[kind] : "?";
 }
 
 } // namespace EffectLights

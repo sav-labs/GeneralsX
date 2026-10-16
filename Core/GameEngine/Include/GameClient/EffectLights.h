@@ -61,7 +61,11 @@ namespace EffectLights
 	{
 		FXTraits();
 
-		Bool hasLightPulse;          ///< retail LightPulse: the data already lights it, no automatic light
+		// GeneralsX @bugfix Claude 16/10/2026 A LightPulse is the data saying "this flashes", not "already lit":
+		// retail pulses are mostly 15 units or less, which W3DDisplay::createLightPulse drops as invisible.
+		Bool hasLightPulse;          ///< retail LightPulse nugget: the effect gives off light
+		Real pulseRadius;            ///< largest LightPulse radius
+		Real pulseRed, pulseGreen, pulseBlue; ///< colour of that LightPulse (0..1)
 		Int strongestShake;          ///< View::CameraShakeType, -1 without a ViewShake
 		Real scorchRadius;           ///< largest TerrainScorch radius, 0 without one
 		Int particleSystems;         ///< ParticleSystem nuggets
@@ -89,8 +93,13 @@ namespace EffectLights
 	/// Profile of an FXList from its name and what it does.
 	Profile classifyFXList(const char *fxListName, const FXTraits &traits);
 
-	/// Profile of a running particle system (fires and exhausts only; one-shot bursts belong to their FXList).
+	/// Profile of a particle system from its template: KIND_FIRE or KIND_EXHAUST for continuous systems,
+	/// KIND_MUZZLE, KIND_IMPACT or KIND_EXPLOSION for one-shot bursts, KIND_NONE when it gives off no light.
+	/// Uses the blend mode, colours and particle size first and the name only as a hint, so mods work too.
 	Profile classifyParticleSystem(ParticleSystem *system);
+
+	/// Short name of a kind for logs.
+	const char *kindName(Int kind);
 
 	/// Case-insensitive substring search.
 	Bool nameContains(const char *name, const char *part);
