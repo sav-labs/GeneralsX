@@ -379,12 +379,13 @@ class Kit:
 
 # --- baking ----------------------------------------------------------------------------------
 def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, source=False, base_colour=None,
-                    dust_scale=1.0):
+                    dust_scale=1.0, wear_scale=1.0):
     """Shader whose emission is the finished albedo: paint (camouflage or solid with mottling), ambient
     occlusion, worn edges, dust from below, vertical streaks and, for the damaged model, soot.
     base_colour(node_tree) -> socket replaces the paint colour (a source model's own texture)."""
     base, wear, dust, rough = FINISHES[finish]
     dust *= dust_scale
+    wear *= wear_scale
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree

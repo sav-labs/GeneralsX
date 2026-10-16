@@ -58,6 +58,8 @@ UNITS = {
         # surface detail (plate edges, bolts, welds, hatches) comes from normals and occlusion baked off
         # the full-resolution mesh, with rays reaching 0.25 units either side of the decimated surface.
         "procedural": True, "highpoly": 0.25,
+        # CARC Tan 686A as on US Army vehicles today, lightly used: a fleet tank, not a wreck.
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "parents": {"BARREL": "TURRET"},
         # The retail Crusader's Draw module fires from TurretMS and recoils Barrel.
         "muzzles": {"TURRETMS": "BARREL", "TURRETFX": "BARREL"},
@@ -71,7 +73,6 @@ UNITS = {
             {"name": r"transmin", "box": (8.5, 30.0, -10.0, 10.0, 0.0, 8.0), "bone": "IDLER#"},
             {"name": r"transmin", "bone": "WHEEL#"},
         ],
-        "tint": ((180, 154, 110), None, 1.0),
         "rims": {"WHEEL": ("rubber", 0.8), "SPROCKET": ("metal", 0.82)},
         "track": {"links": 3.5, "sprocket": 0.88},
         # Damaged: the middle skirt section torn off on the left, the rear one hanging on the right, the

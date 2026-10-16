@@ -424,7 +424,8 @@ def weathered(src, image, damaged, burns, spec):
     paint = tint[0] if tint else (166, 148, 106)
     mat = kit._paint_material(f"{src.name}_w", finish if finish != "canvas" else "canvas", [paint], image, damaged,
                               "solid", burns, source=True, base_colour=base,
-                              dust_scale=0.3 if finish in ("rubber", "glass") else 1.0)
+                              dust_scale=(0.3 if finish in ("rubber", "glass") else 1.0) * spec.get("weathering", 1.0),
+                              wear_scale=spec.get("weathering", 1.0))
     nt = mat.node_tree
     if os.environ.get("GX_RAW"):
         em = next(n for n in nt.nodes if n.type == "EMISSION")
