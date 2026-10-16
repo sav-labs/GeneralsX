@@ -157,12 +157,26 @@ def main():
         assert hdpack.cache_settings("onnx", "realesrgan-x4plus", 4, 1024, "textures") == b"onnx|realesrgan-x4plus|4|1024|v1"
         assert hdpack.cache_settings("onnx", "realesrgan-x4plus", 4, 1024, "terrain") == b"onnx|realesrgan-x4plus|4|1024|terrain|v1"
 
+        # --check passes a clean pack and flags a tree sheet (the magenta-tree bug) in an old one.
+        check = [sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--check"]
+        assert subprocess.run(check + [str(terrain)], capture_output=True).returncode == 0
+        old_terrain = Path(tmp, "!HDTerrainOld.big")
+        hdpack.write_big(old_terrain, [("Art\\Terrain\\PTSnowPine01.tga", tga((256, 256), (20, 60, 20, 255)))])
+        flagged = subprocess.run(check + [str(old_terrain)], capture_output=True, text=True)
+        assert flagged.returncode == 1 and "tree_textures: art/terrain/ptsnowpine01.tga" in flagged.stdout, flagged.stdout
+
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")
+        safe_list = Path(tmp, "safe.txt")
+        safe_list.write_text("# lettering\nAVHouse  # sign on the wall\n")
         subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(onnx_out),
-                        "--upscaler", "onnx", "--onnx", str(model), "--tile", "32"], check=True)
+                        "--upscaler", "onnx", "--onnx", str(model), "--tile", "32", "--safe-list", str(safe_list)],
+                       check=True)
         entries = hdpack.read_big(onnx_out)
         assert check_dds(hdpack.read_entry(entries["art/textures/avtank.dds"]), 512, 256) == b"DXT1"
+        # Listed textures (lettering) skip the AI model.
+        report = json.loads(Path(tmp, "!HDTexturesOnnx.report.json").read_text())
+        assert report["safe_upscaled"] == ["avhouse"], report["safe_upscaled"]
     print("hdpack self-test passed")
 
 
