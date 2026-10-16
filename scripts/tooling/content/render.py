@@ -22,12 +22,12 @@ def _quat_matrix(q):
                      [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
 
 
-def _pose(model, frame):
+def _pose(model, frame, tracks):
     """Bone-to-world rotation and translation at an animation frame, applied the way WW3D does: the
     keyed offset in the parent-relative pivot frame, then the keyed rotation."""
     trans = {}
     rot = {}
-    for bone, channel, values in model.tracks:
+    for bone, channel, values in tracks:
         v = values[min(frame, len(values) - 1)]
         if channel == 6:
             rot[bone] = _quat_matrix(v)
@@ -42,9 +42,12 @@ def _pose(model, frame):
 
 
 def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90, 230),
-           background=(0, 0, 0, 0), margin=0.08, light=(-0.4, 0.5, 0.75), supersample=2, hide=(), frame=None):
+           background=(0, 0, 0, 0), margin=0.08, light=(-0.4, 0.5, 0.75), supersample=2, hide=(), frame=None, tracks=None):
     """Orthographic three-quarter view. textures maps texture file name -> PIL image. frame poses the
-    model at that frame of its keyed motion (spins are not posed)."""
+    model at that frame of its keyed motion (spins are not posed), or of `tracks` when given (a clip
+    kept outside the model, like the soldiers' stances)."""
+    if frame is None and getattr(model, "stance", None):
+        frame, tracks = 0, model.stance
     w, h = size[0] * supersample, size[1] * supersample
     yaw_r, pitch_r = math.radians(yaw), math.radians(pitch)
     # Camera looks at the model from the front-left, above.
@@ -63,7 +66,7 @@ def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90,
             pos = np.array(mesh.positions) + _bone_world(model, bone)
             nrm = np.array(mesh.normals)
         else:
-            r, t = _pose(model, frame)[bone]
+            r, t = _pose(model, frame, model.tracks if tracks is None else tracks)[bone]
             pos = np.array(mesh.positions) @ r.T + t
             nrm = np.array(mesh.normals) @ r.T
         uv = np.array(mesh.uvs)

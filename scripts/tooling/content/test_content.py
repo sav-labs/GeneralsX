@@ -47,6 +47,34 @@ def read_big(path):
     return files
 
 
+def check_animation(name, children, anim_name, hierarchy, npivots):
+    header = children[0][1]
+    assert len(header) == 44, f"{name}: animation header is {len(header)} bytes"
+    assert header[4:20].split(b"\0")[0].decode() == anim_name, f"{name}: animation name"
+    assert header[20:36].split(b"\0")[0].decode() == hierarchy, f"{name}: animation hierarchy"
+    frames = struct.unpack_from("<I", header, 36)[0]
+    for ccid, chan, _ in children[1:]:
+        first, last, veclen, _, pivot, _ = struct.unpack_from("<6H", chan)
+        assert ccid == w3d.ANIMATION_CHANNEL and last < frames and pivot < npivots
+        assert len(chan) == 12 + 4 * veclen * (last - first + 1), f"{name}: channel size"
+
+
+def pivot_count(data):
+    hierarchy = w3d.read_chunks(data)[0][2]
+    return struct.unpack_from("<I", hierarchy[0][1], 20)[0]
+
+
+def check_clip(name, data, files):
+    """A standalone animation HIERARCHY.NAME in NAME.w3d, on a model of the pack."""
+    chunks = w3d.read_chunks(data)
+    assert len(chunks) == 1 and chunks[0][0] == w3d.ANIMATION, f"{name}: a clip file holds one animation"
+    header = chunks[0][2][0][1]
+    hierarchy = header[20:36].split(b"\0")[0].decode()
+    owner = files.get(f"art\\w3d\\{hierarchy.lower()}.w3d")
+    assert owner is not None, f"{name}: clip for missing model {hierarchy}"
+    check_animation(name, chunks[0][2], name.upper(), hierarchy, pivot_count(owner))
+
+
 def check_w3d(name, data):
     chunks = w3d.read_chunks(data)
     ids = [c[0] for c in chunks]
@@ -76,14 +104,7 @@ def check_w3d(name, data):
             meshes.add(f"{owner}.{mesh}")
     for cid, payload, children in chunks:
         if cid == w3d.ANIMATION:
-            header = children[0][1]
-            assert len(header) == 44, f"{name}: animation header is {len(header)} bytes"
-            assert header[4:20].split(b"\0")[0].decode() == container, f"{name}: animation name"
-            frames = struct.unpack_from("<I", header, 36)[0]
-            for ccid, chan, _ in children[1:]:
-                first, last, veclen, _, pivot, _ = struct.unpack_from("<6H", chan)
-                assert ccid == w3d.ANIMATION_CHANNEL and last < frames and pivot < npivots
-                assert len(chan) == 12 + 4 * veclen * (last - first + 1), f"{name}: channel size"
+            check_animation(name, children, container, container, npivots)
     hlod = next(ch for c, _, ch in chunks if c == w3d.HLOD)
     lod = next(ch for c, _, ch in hlod if c == w3d.HLOD_LOD_ARRAY)
     for cid, payload, _ in lod:
@@ -100,6 +121,9 @@ def main():
     models = [n for n in files if n.endswith(".w3d")]
     assert models, "no models in the pack"
     for path in models:
+        if w3d.read_chunks(files[path])[0][0] == w3d.ANIMATION:
+            check_clip(path.rsplit("\\", 1)[-1][:-4], files[path], files)
+            continue
         check_w3d(path.rsplit("\\", 1)[-1][:-4], files[path])
         for tex in set(re.findall(rb"([a-z0-9_]+\.tga)\0", files[path])):
             assert f"art\\textures\\{tex.decode()}" in files, f"{path} uses missing texture {tex.decode()}"
@@ -114,11 +138,14 @@ def main():
                 assert f"art\\w3d\\{model.lower()}.w3d" in files, f"{path}: model {model} is not in the pack"
         for anim in re.findall(r"^\s*Animation\s*=\s*\S+\s+(\S+)", text, re.M):
             if anim.upper() != "NONE":
-                owner = anim.split(".")[0].lower()
-                data = files.get(f"art\\w3d\\{owner}.w3d")
-                assert data is not None, f"{path}: animation {anim} has no model {owner} in the pack"
-                has_anim = any(cid == w3d.ANIMATION for cid, _, _ in w3d.read_chunks(data))
-                assert anim.lower() == f"{owner}.{owner}" and has_anim, f"{path}: {owner}.w3d has no animation {anim}"
+                # The asset manager loads HIERARCHY.NAME from NAME.w3d (the model itself when both match).
+                owner, clip = anim.lower().split(".")
+                assert f"art\\w3d\\{owner}.w3d" in files, f"{path}: animation {anim} has no model {owner} in the pack"
+                data = files.get(f"art\\w3d\\{clip}.w3d")
+                assert data is not None, f"{path}: animation {anim} has no file {clip}.w3d"
+                found = [ch[0][1] for cid, _, ch in w3d.read_chunks(data) if cid == w3d.ANIMATION]
+                assert any(h[4:20].split(b"\0")[0].decode().lower() == clip and h[20:36].split(b"\0")[0].decode().lower() == owner
+                           for h in found), f"{path}: {clip}.w3d has no animation {anim}"
         for tex in re.findall(r"^\s*Texture\s*=\s*(\S+)", text, re.M):
             assert f"art\\textures\\{tex.lower()}" in files, f"{path}: texture {tex} is not in the pack"
     assert "data\\generalsx.str" in files

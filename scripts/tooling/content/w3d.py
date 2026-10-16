@@ -367,6 +367,19 @@ class Model:
         return wrapper(ANIMATION, [chunk(ANIMATION_HEADER, header), *channels])
 
 
+def pack_clip(hierarchy, name, frames, tracks, rate=30):
+    """A standalone animation HIERARCHY.NAME, saved as NAME.w3d (the asset manager loads an animation
+    from the file named after the part behind the dot). tracks: (pivot index, channel type, one tuple
+    per frame), the same layout Model.add_motion keeps."""
+    channels = []
+    for bone, channel, values in tracks:
+        width = len(values[0])
+        data = b"".join(struct.pack(f"<{width}f", *v) for v in values)
+        channels.append(chunk(ANIMATION_CHANNEL, struct.pack("<6H", 0, frames - 1, width, channel, bone, 0) + data))
+    header = struct.pack("<I", HANIM_VERSION) + fixed_name(name) + fixed_name(hierarchy) + struct.pack("<II", frames, rate)
+    return wrapper(ANIMATION, [chunk(ANIMATION_HEADER, header), *channels])
+
+
 def read_chunks(data, offset=0, end=None):
     """Parse a chunk tree back; used by the self-test to validate written files."""
     end = len(data) if end is None else end
