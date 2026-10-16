@@ -1034,6 +1034,10 @@ GlobalData::GlobalData()
 	m_cameraTestSeconds = 0.0f;
 	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose
 	m_cameraTestClose = FALSE;
+	// GeneralsX @feature Claude 16/10/2026 Battle -camtest flight and night switch requested with -camtest battle / night
+	m_cameraTestBattle = FALSE;
+	m_cameraTestBattleUnits = 0;
+	m_cameraTestNight = FALSE;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;

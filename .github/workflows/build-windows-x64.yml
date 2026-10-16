@@ -261,6 +261,9 @@ jobs:
           DXVK_CAPTURE_VIDEO_SCALE change the window and size; set DXVK_HUD=fps,frametimes to include the HUD in the video.
           With -camtest, set DXVK_CAPTURE_VIDEO_START=camtest to start recording with the first frame of the camera flight
           (DXVK_CAPTURE_VIDEO_SECONDS then counts from there), so clips of different runs line up whatever the load time.
+          -camtest 10 battle spawns your column and one of the AI opponent's side facing each other in front of your base,
+          sets a building near them on fire and circles the fight for 10 s; add a unit count for both sides together
+          (-camtest 10 battle 60) and night for a night match (-camtest 10 battle 60 night). Use it with -skirmish.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
           ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
           Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
