@@ -48,7 +48,7 @@ def main():
     print("wrote " + build(args.out))
     if args.preview:
         import preview
-        preview.simulate("FX_GenericTankDeathExplosion", 9.0, 1280, args.preview)
+        preview.simulate("tank", 9.0, 1280, args.preview)
         print("wrote " + args.preview)
 
 

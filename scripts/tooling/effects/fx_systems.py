@@ -162,7 +162,87 @@ SYSTEMS = {
         Lifetime=(40, 40), Size=(34, 40),
         Color=[((0, 0, 0), 0), ((110, 50, 14), 10), ((110, 50, 14), 30), ((0, 0, 0), 40)],
         BurstDelay=(30, 30), BurstCount=(1, 1), SystemLifetime=160),
+
+    # ---- Damage states: retail systems redefined in place --------------------------------------
+    # These names are attached to bones of damaged and badly damaged buildings and vehicles by the
+    # retail art INI (W3DModelDraw ParticleSysBone, TransitionDamageFX), thousands of places in all.
+    # Redefining them keeps the retail placement and only changes the look. The scale and emission
+    # rates stay close to retail so the particle budget does not grow.
+    "SmolderingSmoke": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=4,
+        AngleZ=(-2.0, 2.0), AngularRateZ=(-0.01, 0.01),
+        Lifetime=(90, 120), Size=(4.0, 5.0), SizeRate=(0.4, 0.55), SizeRateDamping=(0.985, 0.99),
+        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 8), (0.45, 0.45, 70), (0.0, 0.0, 120)],
+        Color=[((58, 54, 50), 0), ((122, 118, 112), 100)],
+        BurstDelay=(5, 9), BurstCount=(1, 1), SystemLifetime=0,
+        DriftVelocity=(-0.05, 0.08, 0.24), VelocityDamping=(0.9, 0.92),
+        VelocityType="OUTWARD", VelOutward=(0.1, 0.1), VelOutwardOther=(0.0, 0.0),
+        VolumeType="SPHERE", VolSphereRadius=0.5),
+    "SmolderingFire": system(
+        Priority="SEMI_CONSTANT", Shader="ADDITIVE", ParticleName="gxfx_flame.tga", FlipbookGrid=4,
+        AngleZ=(-0.15, 0.15),
+        Lifetime=(16, 22), Size=(7.0, 9.0), SizeRate=(0.05, 0.1), SizeRateDamping=(0.95, 0.95),
+        Color=[((0, 0, 0), 0), ((255, 222, 176), 3), ((215, 98, 34), 12), ((0, 0, 0), 22)],
+        BurstDelay=(1, 3), BurstCount=(1, 1), SystemLifetime=0,
+        DriftVelocity=(-0.05, 0.08, 0.2),
+        VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
+    "SmolderingFlameCore": system(
+        Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_spark.tga",
+        Lifetime=(6, 8), Size=(3.0, 4.5), SizeRate=(0.3, 0.3), SizeRateDamping=(0.5, 0.5),
+        Color=[((255, 236, 190), 0), ((255, 150, 60), 4), ((0, 0, 0), 8)],
+        BurstDelay=(0, 1), BurstCount=(1, 1), SystemLifetime=0, InitialDelay=(2, 3),
+        DriftVelocity=(-0.1, 0.1, 0.2), VelocityDamping=(0.8, 0.95), Gravity=0.05,
+        VolumeType="SPHERE", VolSphereRadius=0.4),
+    # Badly damaged vehicles.
+    "SmallLightSmokeColumn": system(
+        Priority="SEMI_CONSTANT", ParticleName="gxfx_smoke.tga", FlipbookGrid=4,
+        AngularRateZ=(-0.01, 0.01),
+        Lifetime=(60, 80), Size=(2.5, 4.0), SizeRate=(0.4, 0.7), SizeRateDamping=(0.97, 0.975),
+        Alpha=[(0.0, 0.0, 0), (0.75, 0.75, 5), (0.0, 0.0, 80)],
+        Color=[((64, 60, 56), 0), ((150, 146, 140), 60)],
+        BurstDelay=(2, 2), BurstCount=(1, 1), SystemLifetime=0,
+        DriftVelocity=(0.1, 0.15, 0.18),
+        VolumeType="CYLINDER", VolCylinderRadius=1.0, VolCylinderLength=0.1),
 }
+
+
+def _structure_blast(count, size, speed, radius):
+    return system(
+        ParticleName="gxfx_fireball.tga", FlipbookGrid=4,
+        Lifetime=(40, 56), Size=size, SizeRate=(1.2, 1.8), SizeRateDamping=(0.93, 0.95),
+        AngularRateZ=(-0.015, 0.015),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 30), (0.0, 0.0, 56)],
+        BurstDelay=(99999, 99999), BurstCount=count, Gravity=0.02, VelocityDamping=(0.86, 0.9),
+        DriftVelocity=(0.0, 0.0, 0.25),
+        VelocityType="OUTWARD", VelOutward=speed, VelOutwardOther=(0.3, 0.9),
+        VolumeType="CYLINDER", VolCylinderRadius=radius, VolCylinderLength=0.0)
+
+
+def _structure_dust(count, size, rate, speed, radius, length, gravity):
+    return system(
+        ParticleName="gxfx_dust.tga", FlipbookGrid=4,
+        Lifetime=(150, 200), Size=size, SizeRate=rate, SizeRateDamping=(0.95, 0.96),
+        AngularRateZ=(-0.006, 0.006),
+        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 8), (0.5, 0.5, 90), (0.0, 0.0, 200)],
+        Color=[((200, 192, 182), 0), ((186, 176, 160), 60)],
+        BurstDelay=(99999, 99999), BurstCount=count, SystemLifetime=20,
+        Gravity=gravity * 0.1, VelocityDamping=(0.88, 0.9),
+        VelocityType="OUTWARD", VelOutward=speed, VelOutwardOther=(0.0, 0.3),
+        VolumeType="CYLINDER", VolCylinderRadius=radius, VolCylinderLength=length)
+
+
+# Damage transitions of structures: a burst of fire and a cloud of dust and debris when a building
+# drops to damaged or badly damaged. Same names, counts and extents as retail.
+SYSTEMS.update({
+    "StructureTransitionTinyExplosion": _structure_blast((2, 3), (14, 20), (0.8, 1.2), 2.0),
+    "StructureTransitionSmallExplosion": _structure_blast((4, 5), (26, 36), (1.6, 2.4), 5.0),
+    "StructureTransitionMediumExplosion": _structure_blast((7, 10), (30, 42), (3.0, 4.5), 15.0),
+    "StructureTransitionLargeExplosion": _structure_blast((10, 14), (34, 48), (4.0, 6.0), 30.0),
+    "StructureTransitionTinySmoke": _structure_dust((5, 5), (8, 12), (0.6, 0.9), (1.0, 2.0), 1.0, 0.0, 0.1),
+    "StructureTransitionSmallSmoke": _structure_dust((15, 15), (18, 26), (1.0, 1.5), (3.0, 4.5), 10.0, 0.0, 0.25),
+    "StructureTransitionMediumSmoke": _structure_dust((15, 15), (20, 30), (1.6, 2.4), (3.0, 4.5), 30.0, 0.0, 0.0),
+    "StructureTransitionLargeSmoke": _structure_dust((30, 30), (22, 32), (2.0, 3.0), (3.0, 4.5), 50.0, 25.0, 0.2),
+})
 
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {

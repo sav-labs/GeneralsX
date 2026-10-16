@@ -6,7 +6,7 @@ particle rules (bursts, per-frame velocity, damping, gravity, drift, size rates,
 key frames, flipbook frames) and draws them over a simple terrain and tank stand-in from an RTS
 camera. It is a look-development aid only: lighting, sorting and fog differ from the game.
 
-Usage: preview.py <output.mp4> [--fx FX_GenericTankDeathExplosion] [--seconds 10] [--width 960]
+Usage: preview.py <output.mp4> [--scene tank|building] [--seconds 10] [--width 960]
 """
 
 import argparse
@@ -88,14 +88,32 @@ def box_faces(center, size, yaw):
     return [([corners[k] for k in quad], normal) for quad, normal in faces]
 
 
-def draw_tank(img, cam, burnt):
-    """Very simple tank stand-in: hull, turret and gun, sand coloured or charred."""
+TANK = [((0, 0, 1.5), (26, 14, 5.5)), ((-1.5, 0, 7.0), (12, 9, 3.6)), ((9.5, 0, 8.2), (14, 1.3, 1.3))]
+BUILDING = [((0, 0, 0), (60, 44, 22)), ((-12, -6, 22), (22, 18, 8)), ((18, 12, 22), (8, 8, 14))]
+
+# Preview scenes: stand-in model, camera distance, and (system, offset, start frame) entries; an FX list
+# name as the first entry expands to its particle systems.
+SCENES = {
+    "tank": {"model": TANK, "dist": 150.0, "fx": [("FX_GenericTankDeathExplosion", (0, 0, 0), 18)]},
+    "building": {"model": BUILDING, "dist": 260.0, "fx": [
+        ("StructureTransitionSmallExplosion", (6, -4, 24), 18),
+        ("StructureTransitionSmallSmoke", (0, 0, 10), 18),
+        ("SmolderingFire", (-20, -10, 22), 30), ("SmolderingSmoke", (-20, -10, 24), 30),
+        ("SmolderingFire", (14, 8, 30), 40), ("SmolderingSmoke", (14, 8, 33), 40),
+        ("SmolderingFlameCore", (14, 8, 30), 40),
+        ("SmolderingFire", (22, -16, 14), 50), ("SmolderingSmoke", (22, -16, 16), 50),
+        ("SmolderingFire", (-26, 14, 22), 36), ("SmolderingSmoke", (-26, 14, 24), 36),
+    ]},
+}
+
+
+def draw_tank(img, cam, burnt, parts=TANK):
+    """Very simple stand-in model made of boxes, sand coloured or charred."""
     d = ImageDraw.Draw(img)
     light = np.array([-0.4, -0.5, 0.75])
     light /= np.linalg.norm(light)
     base = np.array([0.20, 0.17, 0.14]) if burnt else np.array([0.62, 0.56, 0.40])
     yaw = math.radians(20)
-    parts = [((0, 0, 1.5), (26, 14, 5.5)), ((-1.5, 0, 7.0), (12, 9, 3.6)), ((9.5, 0, 8.2), (14, 1.3, 1.3))]
     faces = []
     for center, size in parts:
         for quad, normal in box_faces(center, size, yaw):
@@ -272,23 +290,31 @@ def splat(canvas, tex, center, axes, color, alpha, additive):
         region[:] = region * (1 - al) + col * al
 
 
-def simulate(fx_name, seconds, width, out_path, boom=0.6):
+def simulate(scene_name, seconds, width, out_path):
     rng = np.random.default_rng(5)
-    cam = Camera(width, int(width * 9 / 16))
+    scene = SCENES[scene_name]
+    cam = Camera(width, int(width * 9 / 16), dist=scene["dist"])
     ground, scorch = terrain(cam)
-    fx = fx_systems.FXLISTS[fx_name]
+    entries = []
+    for name, offset, start in scene["fx"]:
+        if name in fx_systems.FXLISTS:
+            entries += [(n, np.add(offset, off), start) for n, off in fx_systems.FXLISTS[name]["particles"]]
+        else:
+            entries.append((name, offset, start))
+    boom_frame = min(e[2] for e in entries)
     sprites = SpriteCache()
     systems = []
     frames = int(seconds * FPS)
-    boom_frame = int(boom * FPS)
     pulse = 0.0
     proc = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
                              "-s", "%dx%d" % (cam.w, cam.h), "-r", str(FPS), "-i", "-", "-c:v", "libx264",
                              "-preset", "slow", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                              out_path], stdin=subprocess.PIPE)
     for f in range(frames):
-        if f == boom_frame:
-            systems = [System(n, fx_systems.SYSTEMS[n], off, rng) for n, off in fx["particles"]]
+        for n, off, start in entries:
+            if f == start:
+                systems.append(System(n, fx_systems.SYSTEMS[n], off, rng))
+        if f == boom_frame and scene_name == "tank":
             pulse = 1.0
         for s in systems:
             s.step()
@@ -304,7 +330,7 @@ def simulate(fx_name, seconds, width, out_path, boom=0.6):
             base += (np.clip(1 - r, 0, 1) ** 2 * pulse)[..., None] * np.array([1.0, 0.59, 0.27]) * 0.9
             pulse = max(pulse - 1.0 / (0.9 * FPS), 0.0)
         img = Image.fromarray((np.clip(base, 0, 1) * 255).astype(np.uint8))
-        draw_tank(img, cam, burnt)
+        draw_tank(img, cam, burnt, scene["model"])
         canvas = np.asarray(img).astype(float) / 255.0
         canvas = canvas.copy()
         draw = []
@@ -351,11 +377,11 @@ def simulate(fx_name, seconds, width, out_path, boom=0.6):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
-    ap.add_argument("--fx", default="FX_GenericTankDeathExplosion")
+    ap.add_argument("--scene", default="tank", choices=sorted(SCENES))
     ap.add_argument("--seconds", type=float, default=10.0)
     ap.add_argument("--width", type=int, default=960)
     args = ap.parse_args()
-    simulate(args.fx, args.seconds, args.width, args.out)
+    simulate(args.scene, args.seconds, args.width, args.out)
 
 
 if __name__ == "__main__":
