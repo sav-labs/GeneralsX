@@ -36,6 +36,8 @@
 #include "W3DDevice/GameClient/W3DSnow.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/sortingrenderer.h"
+#include "WW3D2/texture.h"
+#include "WW3D2/dx8wrapper.h"
 
 #include <map>
 #include <set>
@@ -367,11 +369,18 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			if (reported.insert(sys->getTemplate()->getName()).second)
 			{
 				TextureClass *tex = texture.Peek();
-				fprintf(stderr, "[FX] flipbook %s tex=%s init=%d missing=%d %dx%d grid=%u points=%u shader=%d\n",
+				IDirect3DTexture8 *d3dTex = tex ? tex->Peek_D3D_Texture() : nullptr;
+				D3DSURFACE_DESC desc;
+				memset(&desc, 0, sizeof(desc));
+				const unsigned levels = d3dTex ? d3dTex->GetLevelCount() : 0;
+				if (d3dTex)
+					d3dTex->GetLevelDesc(0, &desc);
+				fprintf(stderr, "[FX] flipbook %s tex=%s init=%d missing=%d %dx%d grid=%u points=%u shader=%d d3d=%p %ux%u fmt=%d levels=%u\n",
 					sys->getTemplate()->getName().str(), sys->getParticleTypeName().str(),
 					tex ? (int)tex->Is_Initialized() : -1, tex ? (int)tex->Is_Missing_Texture() : -1,
 					tex ? tex->Get_Width() : 0, tex ? tex->Get_Height() : 0, 1u << frameLog2,
-					pointCount - startCount, (int)sys->getShaderType());
+					pointCount - startCount, (int)sys->getShaderType(), (void *)d3dTex,
+					desc.Width, desc.Height, (int)desc.Format, levels);
 				fflush(stderr);
 			}
 		}

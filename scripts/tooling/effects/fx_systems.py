@@ -70,6 +70,8 @@ SYSTEMS = {
     "GXTankBlastFireball": system(
         # The baked flipbook holds the whole blast (flash, fireball, burning-out, rolling smoke) over
         # 72 frames, so a few large overlapping copies play it once each.
+        # GeneralsX diagnostic: ALPHA_TEST skips soft particles.
+        Shader="ALPHA_TEST",
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(66, 78), Size=(36, 46), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
         Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 56), (0.0, 0.0, 78)],
@@ -79,8 +81,9 @@ SYSTEMS = {
         VolumeType="SPHERE", VolSphereRadius=4.0),
     # Smaller secondary blasts a moment later, as fuel and ammunition go off.
     "GXTankBlastSecondary": system(
-        ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
-        Lifetime=(48, 58), Size=(16, 22), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
+        # GeneralsX diagnostic: whole DDS atlas without flipbook.
+        ParticleName="gxfx_fireball.tga", FlipbookGrid=0, AngleZ=(-0.12, 0.12),
+        Lifetime=(48, 58), Size=(40, 40), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
         Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 40), (0.0, 0.0, 58)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
@@ -95,7 +98,8 @@ SYSTEMS = {
         BurstCount=(1, 1)),
     # Brown dust thrown up and outwards around the hull.
     "GXTankBlastDust": system(
-        ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        # GeneralsX diagnostic: flipbook path on a small TGA.
+        ParticleName="gxfx_debris.tga", FlipbookGrid=2, AngleZ=(-0.15, 0.15),
         Lifetime=(60, 85), Size=(14, 20), SizeRate=(0.5, 0.7), SizeRateDamping=(0.965, 0.97),
         Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 5), (0.0, 0.0, 85)],
         Color=[((235, 225, 210), 0)],
