@@ -64,6 +64,28 @@ public:
 		RENDER_SCALE_MIN_HEIGHT = 600
 	};
 
+	// GeneralsX @feature Claude 16/10/2026 Upscaler choice (Options.ini Upscaler, -upscaler). UPSCALER_DEFAULT
+	// keeps the behaviour from before FSR 2: FSR 1.0 when RenderScale is below 100, else none. DLSS is a
+	// placeholder that falls back to FSR 2, no NVIDIA SDK is part of the build.
+	enum UpscalerType CPP_11(: Int)
+	{
+		UPSCALER_DEFAULT = 0,
+		UPSCALER_OFF,
+		UPSCALER_FSR1,
+		UPSCALER_FSR2,
+		UPSCALER_DLSS
+	};
+
+	// GeneralsX @feature Claude 16/10/2026 Render scale of the UpscalerQuality presets, in percent of the
+	// display size: 1.5x, 1.7x, 2x and 3x upscaling as AMD defines them for FSR 2.
+	enum UpscalerQualityScale CPP_11(: Int)
+	{
+		UPSCALER_QUALITY_SCALE = 67,
+		UPSCALER_BALANCED_SCALE = 59,
+		UPSCALER_PERFORMANCE_SCALE = 50,
+		UPSCALER_ULTRA_PERFORMANCE_SCALE = 33
+	};
+
 	Bool loadFromIniFile();
 
 	WW3D::MultiSampleModeEnum getAntiAliasing() const;
@@ -156,6 +178,16 @@ public:
 	static Bool getRenderScaleResolution(Int scale, Int displayWidth, Int displayHeight, Int *xres, Int *yres);
 	// GeneralsX @feature Claude 15/10/2026 FSR RCAS sharpening in stops (Options.ini FSRSharpness, 0 = sharpest)
 	Real getFSRSharpness() const;
+	// GeneralsX @feature Claude 16/10/2026 Whether Options.ini sets RenderScale at all
+	Bool hasRenderScale() const;
+	// GeneralsX @feature Claude 16/10/2026 Upscaler (Options.ini Upscaler = FSR2 | FSR1 | OFF | DLSS)
+	UpscalerType getUpscaler() const;
+	static UpscalerType parseUpscaler(const char *name);
+	static const char *getUpscalerName(UpscalerType upscaler);
+	// GeneralsX @feature Claude 16/10/2026 Render scale of Options.ini UpscalerQuality
+	// (Quality | Balanced | Performance | UltraPerformance, default Quality)
+	Int getUpscalerQualityScale() const;
+	AsciiString getUpscalerQualityName() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK bloom, colour grade and FXAA (Options.ini PostEffects, default yes)
 	Bool getPostEffectsEnabled() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK ambient occlusion (Options.ini AmbientOcclusion, default yes)
