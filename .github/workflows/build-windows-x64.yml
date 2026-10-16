@@ -57,7 +57,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          sparse-checkout: scripts/tooling/content
+          # hdpack holds the mipmapped DDS writer the normal maps use.
+          sparse-checkout: |
+            scripts/tooling/content
+            scripts/tooling/hdpack
 
       - name: Download source models
         env:
