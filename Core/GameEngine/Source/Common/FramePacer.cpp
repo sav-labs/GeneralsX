@@ -42,6 +42,8 @@ FramePacer::FramePacer()
 	m_logicTimeScaleFPS = LOGICFRAMES_PER_SECOND;
 	m_updateTime = 1.0f / (Real)BaseFps; // initialized to something to avoid division by zero on first use
 	m_logicFramePhase = 1.0f;
+	m_accumulatorPhase = 0.0f;
+	m_hasAccumulatorPhase = FALSE;
 	m_enableFpsLimit = FALSE;
 	// GeneralsX @tweak felipebraz 20/06/2026 Enable logic time scale by default to decouple gameplay tick rate from render FPS
 	m_enableLogicTimeScale = TRUE;
@@ -64,7 +66,17 @@ void FramePacer::update()
 	const UnsignedInt maxFps = getActualFramesPerSecondLimit();
 	m_updateTime = m_frameRateLimit.wait(maxFps);
 
-	if (TheGameLogic != nullptr)
+	if (TheGameLogic != nullptr && m_hasAccumulatorPhase)
+	{
+		// GeneralsX @bugfix Claude 16/10/2026 When logic frames are paced by the time accumulator (render rate above
+		// the logic rate), the phase is the accumulator itself: the time already spent towards the next logic frame.
+		// The estimate below restarts at one render step on every logic step and drops the accumulator remainder,
+		// so at 40 fps with 30 Hz logic the drawn motion advanced 25, 33, 33, 8 ms per 25 ms frame (judder).
+		// With the accumulator it advances exactly one render step per frame.
+		m_logicFramePhase = clamp(0.0f, m_accumulatorPhase, 1.0f);
+		m_hasAccumulatorPhase = FALSE;
+	}
+	else if (TheGameLogic != nullptr)
 	{
 		// Set or advance the logic frame phase by the render step that the next update will draw.
 		// It is capped at a whole logic frame, because the render steps in between can add up to more than one.
@@ -87,6 +99,13 @@ void FramePacer::reset()
 	m_frameRateLimit.reset();
 	m_updateTime = 1.0f / (Real)getActualFramesPerSecondLimit();
 	m_logicFramePhase = 1.0f;
+	m_hasAccumulatorPhase = FALSE;
+}
+
+void FramePacer::setLogicTimeAccumulatorPhase(Real phase)
+{
+	m_accumulatorPhase = phase;
+	m_hasAccumulatorPhase = TRUE;
 }
 
 void FramePacer::setFramesPerSecondLimit( Int fps )

@@ -275,6 +275,9 @@ jobs:
           DXVK_CAPTURE_VIDEO_SCALE change the window and size; set DXVK_HUD=fps,frametimes to include the HUD in the video.
           With -camtest, set DXVK_CAPTURE_VIDEO_START=camtest to start recording with the first frame of the camera flight
           (DXVK_CAPTURE_VIDEO_SECONDS then counts from there), so clips of different runs line up whatever the load time.
+          -camtest 10 battle spawns your column and one of the AI opponent's side facing each other in front of your base,
+          sets a building near them on fire and circles the fight for 10 s; add a unit count for both sides together
+          (-camtest 10 battle 60) and night for a night match (-camtest 10 battle 60 night). Use it with -skirmish.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
           ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
           Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
@@ -323,6 +326,15 @@ jobs:
           [delay] seconds after it begins, as perf_<date>_<time>.csv into the capture folder (CapturePath).
           -perf alone only writes the [PERF] lines (-perf 2 every 2 seconds). PerfOverlay = yes in Options.ini
           prints them too and shows four lines of numbers in the top left corner; PerfInterval = 5 sets the period.
+          perf-log.txt is only written when the game is started with Perf.cmd (it redirects stderr there); a plain
+          -perf run prints the [PERF] lines to stderr only.
+          Stutter: every frame of 100 ms or more prints a [PERF] hitch line with that frame's times and what was
+          loaded in it: texloads (textures read from disk while drawing, count and ms), modelloads (.w3d files),
+          shaders and drawables created. The 5 s line counts hitches and the same loads.
+          PreloadAssets = yes (default) loads the models and textures of the map's objects and of the units the
+          players' sides can build while the map loads, so they are not read in the middle of the match; stderr
+          gets a [PRELOAD] line with the time it took. PreloadAssets = everything preloads every side for every time
+          of day (slow, much memory); PreloadAssets = no is the original behaviour.
           Big battle switches in Options.ini (render only, the game itself is unchanged):
           SkinCache = no turns off the skinned vertex cache (default yes; for before/after comparisons).
           ShadowVolumeHighPolyTriangles = 4000 and ShadowVolumeHighPolyAngle = 3: shadow casting parts with at least

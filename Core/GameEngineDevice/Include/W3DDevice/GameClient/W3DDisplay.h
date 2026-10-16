@@ -145,6 +145,7 @@ public:
 #endif
 	virtual void preloadModelAssets( AsciiString model ) override;			///< preload model asset
 	virtual void preloadTextureAssets( AsciiString texture ) override;	///< preload texture asset
+	virtual Int createPreloadedTextures() override;	///< create the GPU textures of all loaded assets
 
 	/// @todo Need a scene abstraction
 	static RTS3DScene *m_3DScene;							///< our 3d scene representation

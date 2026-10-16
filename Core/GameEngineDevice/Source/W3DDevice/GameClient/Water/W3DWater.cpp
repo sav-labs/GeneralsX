@@ -54,6 +54,7 @@
 #include "Common/FramePacer.h"
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "Common/PerfTimer.h"
 #include "Common/Xfer.h"
 #include "Common/GameLOD.h"
@@ -1036,6 +1037,9 @@ void WaterRenderObjClass::ReAcquireResources()
 		if (hr==0) {
 			hr = 	DX8Wrapper::_Get_D3D_Device8()->CreatePixelShader((DWORD*)compiledShader->GetBufferPointer(), &m_riverWaterPixelShader);
 			compiledShader->Release();
+			// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+			if (SUCCEEDED(hr))
+				PerfStats::addShaderCreated();
 		}
 		shader =
 			"ps.1.1\n \
@@ -1049,6 +1053,9 @@ void WaterRenderObjClass::ReAcquireResources()
 		if (hr==0) {
 			hr = 	DX8Wrapper::_Get_D3D_Device8()->CreatePixelShader((DWORD*)compiledShader->GetBufferPointer(), &m_waterPixelShader);
 			compiledShader->Release();
+			// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+			if (SUCCEEDED(hr))
+				PerfStats::addShaderCreated();
 		}
 		shader =
 			"ps.1.1\n \
@@ -1064,6 +1071,9 @@ void WaterRenderObjClass::ReAcquireResources()
 		if (hr==0) {
 			hr = 	DX8Wrapper::_Get_D3D_Device8()->CreatePixelShader((DWORD*)compiledShader->GetBufferPointer(), &m_trapezoidWaterPixelShader);
 			compiledShader->Release();
+			// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+			if (SUCCEEDED(hr))
+				PerfStats::addShaderCreated();
 		}
 #endif // _WIN32 - Runtime shader compilation
 	}

@@ -1280,6 +1280,22 @@ Bool OptionPreferences::getSkinCacheEnabled() const
 	return stricmp(it->second.str(), "no") != 0;
 }
 
+// GeneralsX @performance Claude 16/10/2026 Map load preloads the models and textures of the map's objects (all
+// their damage and night states) and of the units the players can build, so they are not read from disk in the
+// middle of a match. everything preloads every object of every side for every time of day (slow, much memory).
+OptionPreferences::PreloadAssetsMode OptionPreferences::getPreloadAssetsMode() const
+{
+	OptionPreferences::const_iterator it = find("PreloadAssets");
+	if (it == end())
+		return PRELOAD_ASSETS_YES;
+
+	if (stricmp(it->second.str(), "no") == 0)
+		return PRELOAD_ASSETS_NO;
+	if (stricmp(it->second.str(), "everything") == 0)
+		return PRELOAD_ASSETS_EVERYTHING;
+	return PRELOAD_ASSETS_YES;
+}
+
 // GeneralsX @performance Claude 16/10/2026 Shadow volume caster meshes with at least this many triangles rebuild
 // their silhouette only after ShadowVolumeHighPolyAngle degrees of rotation instead of 0.2. Retail models stay
 // below the default of 4000 triangles. 0 turns the throttle off.
