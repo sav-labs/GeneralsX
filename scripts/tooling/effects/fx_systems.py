@@ -368,6 +368,33 @@ SYSTEMS.update({
                                            "Size": (2.5, 4.0), "BurstCount": (3, 3)}),
 })
 
+def _wire_sparks(size, delay):
+    # Shorted wiring on damaged buildings: a spark shower every few seconds instead of loose dots.
+    return system(
+        Priority="CONSTANT", Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8,
+        AngleZ=(-0.4, 0.4), Lifetime=(16, 22), Size=size,
+        Color=[((255, 255, 255), 0), ((255, 255, 255), 12), ((0, 0, 0), 22)],
+        BurstDelay=delay, BurstCount=(1, 1), SystemLifetime=0,
+        VolumeType="SPHERE", VolSphereRadius=0.5)
+
+
+# Damaged buildings, after SmolderingSmoke and SmolderingFire the most used bone systems: steam from
+# broken pipes and sparks from torn wiring.
+SYSTEMS.update({
+    "SteamVent": system(
+        Priority="CONSTANT", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(55, 70), Size=(5.0, 7.0), SizeRate=(0.3, 0.45), SizeRateDamping=(0.96, 0.97),
+        Alpha=[(0.0, 0.0, 0), (0.55, 0.55, 5), (0.25, 0.25, 35), (0.0, 0.0, 70)],
+        Color=[((235, 235, 235), 0), ((250, 250, 250), 40)],
+        BurstDelay=(3, 10), BurstCount=(1, 1), SystemLifetime=0, Gravity=0.0,
+        VelocityDamping=(0.9, 0.92), DriftVelocity=(0.1, 0.15, 0.35),
+        VelocityType="OUTWARD", VelOutward=(0.3, 1.2), VelOutwardOther=(0.5, 1.0),
+        VolumeType="SPHERE", VolSphereRadius=0.25),
+    "SparksMedium": _wire_sparks((6.0, 9.0), (15, 60)),
+    "LiveWireSparks": _wire_sparks((4.0, 6.0), (20, 90)),
+    "LiveWireSparks02": _wire_sparks((4.0, 6.0), (20, 90)),
+})
+
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {
     "FX_GenericTankDeathExplosion": {
