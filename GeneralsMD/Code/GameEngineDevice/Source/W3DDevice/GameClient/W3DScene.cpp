@@ -1748,6 +1748,10 @@ W3DDynamicLight * RTS3DScene::getADynamicLight()
 	for (dynaLightIt.First(); !dynaLightIt.Is_Done(); dynaLightIt.Next())
 	{
 		pLight = (W3DDynamicLight*)dynaLightIt.Peek_Obj();
+		// GeneralsX @feature Claude 16/10/2026 Lights of W3DEffectLights stay with it, even while switched off.
+		if (pLight->isManaged()) {
+			continue;
+		}
 		if (!pLight->isEnabled()) {
 			pLight->setEnabled(true);
 			return(pLight);

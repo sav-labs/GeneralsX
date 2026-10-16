@@ -220,4 +220,9 @@ public:
 	Real getSkinnedShadowDistance() const;		///< Options.ini SkinnedShadowDistance in world units, default 1500, 0 = no limit
 	Bool getSkinnedShadowKeepDecal() const;		///< Options.ini SkinnedShadowKeepDecal, default no
 	Int getSkinnedShadowMinTriangles() const;	///< Options.ini SkinnedShadowMinTriangles, default 2000
+	// GeneralsX @feature Claude 16/10/2026 Coloured lights from explosions, fires, muzzle flashes and missile exhausts
+	// (W3DEffectLights).
+	enum DynamicLightsMode { DYNAMIC_LIGHTS_OFF, DYNAMIC_LIGHTS_LOW, DYNAMIC_LIGHTS_HIGH };
+	Int getDynamicLightsMode() const;			///< Options.ini DynamicLights = Off | Low | High, default High
+	Real getDynamicLightIntensity() const;		///< Options.ini DynamicLightIntensity, 0 to 2, default 1
 };

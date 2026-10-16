@@ -46,6 +46,9 @@ namespace PerfStats
 		// GeneralsX @feature Claude 16/10/2026 Shadows of skinned models (tile updates, terrain pass, volumes); overlaps
 		// render_targets and shadows.
 		SECTION_SKINNED_SHADOWS,  ///< W3DSkinnedShadowManager work
+		// GeneralsX @feature Claude 16/10/2026 Effect lights (light selection before the scene and the terrain light
+		// pass); overlaps render_targets and scene.
+		SECTION_EFFECT_LIGHTS,    ///< W3DEffectLights update and terrain light splats
 		SECTION_COUNT
 	};
 
@@ -87,6 +90,9 @@ namespace PerfStats
 	void addSkinnedShadowUpdate(UnsignedInt triangles);
 	/// Skinned shadows drawn this frame.
 	void addSkinnedShadowsDrawn(UnsignedInt count);
+	// GeneralsX @feature Claude 16/10/2026 Effect light counters (W3DEffectLights).
+	/// Effect lights lit this frame, retail LightPulse lights still on, and light candidates before the budget.
+	void setEffectLights(UnsignedInt active, UnsignedInt retail, UnsignedInt candidates);
 	/// True when the next summary is due, so the display only walks the texture list then.
 	Bool wantsTextureMemory();
 	void setTextureMemory(UnsignedInt64 bytes, UnsignedInt64 freeBytes);

@@ -1409,3 +1409,31 @@ Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, In
 	return TRUE;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini DynamicLights: short coloured lights from explosions, burning
+// buildings and vehicles, muzzle flashes, missile exhausts and superweapons on the ground, units and buildings.
+// Off: only the lights the game data asks for (retail). Low: explosion, muzzle flash and superweapon lights, lit on
+// the terrain vertices like retail lights. High (default): also fires and missile exhausts, more lights at once and
+// a smooth light pool on the ground.
+Int OptionPreferences::getDynamicLightsMode() const
+{
+	OptionPreferences::const_iterator it = find("DynamicLights");
+	if (it == end())
+		return DYNAMIC_LIGHTS_HIGH;
+
+	if (stricmp(it->second.str(), "Off") == 0 || stricmp(it->second.str(), "no") == 0)
+		return DYNAMIC_LIGHTS_OFF;
+	if (stricmp(it->second.str(), "Low") == 0)
+		return DYNAMIC_LIGHTS_LOW;
+	return DYNAMIC_LIGHTS_HIGH;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini DynamicLightIntensity, 0 to 2 (default 1): brightness of the
+// effect lights. 0 leaves only the retail lights.
+Real OptionPreferences::getDynamicLightIntensity() const
+{
+	OptionPreferences::const_iterator it = find("DynamicLightIntensity");
+	if (it == end())
+		return 1.0f;
+
+	return clamp(0.0f, (Real)atof(it->second.str()), 2.0f);
+}

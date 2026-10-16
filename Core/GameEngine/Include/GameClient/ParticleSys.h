@@ -630,6 +630,9 @@ public:
 
 	void setPosition( const Coord3D *pos );			///< set the position of the particle system
 	void getPosition( Coord3D *pos );				///< get the position of the particle system
+	// GeneralsX @feature Claude 16/10/2026 Emitter position in the world (parent drawable transform applied), for
+	// the effect lights. Read only.
+	void getWorldPosition( Coord3D *pos ) const;
 	void setLocalTransform( const Matrix3D *matrix );	///< set the system's local transform
 	void rotateLocalTransformX( Real x );				///< rotate local transform matrix
 	void rotateLocalTransformY( Real y );				///< rotate local transform matrix
