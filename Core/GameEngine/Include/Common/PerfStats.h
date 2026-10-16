@@ -63,6 +63,7 @@ namespace PerfStats
 		UnsignedInt skinMeshes;
 		UnsignedInt skinVertices;
 		UnsignedInt skinCacheHits;
+		UnsignedInt normalMapDraws;	///< GeneralsX @feature Claude 16/10/2026 draws with model normal maps
 		Int particles;
 		Int particlesOnScreen;
 	};

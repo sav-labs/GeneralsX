@@ -134,6 +134,8 @@ set(WW3D2_SRC
     metalmap.h
     missingtexture.cpp
     missingtexture.h
+    modelnormalmap.cpp
+    modelnormalmap.h
     #motchan.cpp
     #motchan.h
     #nullrobj.cpp

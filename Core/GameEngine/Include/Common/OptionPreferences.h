@@ -204,6 +204,10 @@ public:
 	Real getTerrainDetailStrength() const;
 	Bool getTerrainReliefEnabled() const;
 	Bool getTerrainSoftBlendEnabled() const;
+	// GeneralsX @feature Claude 16/10/2026 Normal and gloss maps for unit and building models (Options.ini
+	// ModelNormalMaps, default yes; ModelSpecular 0..2, default 1).
+	Bool getModelNormalMapsEnabled() const;
+	Real getModelSpecular() const;
 	// GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos (Options.ini CapturePath).
 	AsciiString getCapturePath() const;
 	// GeneralsX @performance Claude 16/10/2026 Frame profiler and big battle render options.

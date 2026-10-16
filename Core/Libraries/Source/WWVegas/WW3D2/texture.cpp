@@ -801,6 +801,13 @@ TextureClass::TextureClass
 }
 
 // ----------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 Drop the reference to the normal map found for this texture.
+TextureClass::~TextureClass()
+{
+	REF_PTR_RELEASE(NormalMap);
+}
+
+// ----------------------------------------------------------------------------
 TextureClass::TextureClass(IDirect3DBaseTexture8* d3d_texture)
 :	TextureBaseClass
 	(
