@@ -8,11 +8,51 @@ the CREDITS.md fetched with the sources.
 """
 
 UNITS = {
+    # M1A1 Abrams by MirzaArrafiERV_45, CC-BY. Its objects are split by material, so the turret, gun and
+    # wheels are picked out of the loose pieces by position; misc_a.4 is a decal layer (alpha-cut
+    # markings) and is dropped; chassis_vlo.7 is the static track, replaced by our scrolling band.
+    "crusader": {
+        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 12000, "split": ".",
+        "parents": {"BARREL": "TURRET"},
+        # The retail Crusader's Draw module fires from TurretMS and recoils Barrel.
+        "muzzles": {"TURRETMS": "BARREL", "TURRETFX": "BARREL"},
+        "rules": [
+            {"name": r"misc_a\.4", "bone": "DROP"},
+            {"name": r"chassis_vlo\.7", "bone": "TRACK"},
+            {"box": (4.0, 30.0, -1.2, 1.2, 8.3, 11.0), "bone": "BARREL"},
+            # The turret with its bustle rack and stowage boxes overhanging the engine deck.
+            {"box": (-21.0, 6.0, -8.0, 8.0, 7.9, 30.0), "bone": "TURRET"},
+            # Road wheels (centres 2 up, 6.2 out), drive sprocket at the rear, idler at the front; the
+            # torsion-bar arms just inboard stay on the hull.
+            {"box": (-16.0, 9.0, 5.6, 7.0, 1.2, 2.8), "maxsize": 4.0, "bone": "WHEEL#"},
+            {"box": (-16.0, 9.0, -7.0, -5.6, 1.2, 2.8), "maxsize": 4.0, "bone": "WHEEL#"},
+            {"box": (-20.0, -16.5, 4.8, 7.2, 3.6, 5.4), "maxsize": 4.0, "bone": "SPROCKET#"},
+            {"box": (-20.0, -16.5, -7.2, -4.8, 3.6, 5.4), "maxsize": 4.0, "bone": "SPROCKET#"},
+            {"box": (11.0, 14.0, 4.0, 6.0, 3.6, 5.6), "maxsize": 4.0, "bone": "IDLER#"},
+            {"box": (11.0, 14.0, -6.0, -4.0, 3.6, 5.6), "maxsize": 4.0, "bone": "IDLER#"},
+        ],
+        # Desert tan #B49A6E: (colour, unused, how much of the repaint replaces the source's grey-olive).
+        "tint": ((180, 154, 110), None, 1.0),
+        # Tyres and sprocket teeth: (finish, from what fraction of the wheel's radius outwards).
+        "rims": {"WHEEL": ("rubber", 0.8), "SPROCKET": ("metal", 0.82)},
+        # Side skirt sections: dark seams between them.
+        "seams": [(-25.0, 25.0, 7.4, 9.5, 3.0, 7.5), (-25.0, 25.0, -9.5, -7.4, 3.0, 7.5)],
+        "track": {"links": 3.5, "sprocket": 0.88},
+        # Damaged: a skirt section torn off on the left, one hanging on the right, the left stowage boxes
+        # blown off the turret bustle, the gun sagging.
+        "damage": {"drop": [(-10.5, -6.5, 7.4, 9.5, 3.0, 7.5), (-19.5, -14.5, 2.0, 7.5, 9.0, 12.5)],
+                   "bend": [((1.0, 7.0, -9.5, -7.4, 3.0, 7.5), 28.0)], "droop": 6.0},
+        "burns": [((-15.0, 0.0, 7.0), 6.0), ((-3.0, 6.5, 10.0), 3.5), ((2.0, -7.0, 5.0), 3.5), ((-9.0, 7.5, 5.0), 3.5),
+                  ((8.0, 2.0, 8.0), 2.5), ((-5.0, -3.0, 11.5), 2.5), ((-17.0, 4.5, 10.5), 3.0)],
+        "fx": {"SMOKE01": (-15.0, -2.0, 7.4), "SMOKE02": (-13.0, 3.0, 7.4), "SMOKE03": (-5.0, 3.0, 11.6),
+               "FIRE01": (-15.0, 0.0, 7.4), "FIRE02": (-17.0, -4.5, 7.2), "FIRE03": (-5.0, -3.0, 11.6)},
+    },
     # M1A2 Abrams by coderslava402, CC-BY: desert tan with normal and metal/roughness maps. Four objects
     # share the "abram" material (hull, turret floor, turret with its fittings, gun), split into loose
     # faces; "transmin" is one object per wheel, "track" the static track and its upper run, replaced by
-    # our scrolling band. The whip antennas would stand 20 units tall and are dropped.
-    "crusader": {
+    # our scrolling band. The whip antennas would stand 20 units tall and are dropped. In review, not built
+    # by CI yet: "crusader" stays the approved M1A1 until this one passes.
+    "crusader_m1a2": {
         "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 15000, "split": "abram", "weld": 0.002,
         # Low contrast: the source's dark chevrons and number plates should not show through the repaint.
         "contrast": 0.25,
