@@ -283,8 +283,20 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          zip=$(find package -name 'windows-x64-GeneralsXZH.zip' | head -n 1)
-          unzip -p "$zip" version.txt > version.txt
+          find package -maxdepth 2 | head -n 20
+          zip=$(find package -type f -name '*.zip' | head -n 1)
+          if [ -n "$zip" ]; then
+            unzip -p "$zip" version.txt > version.txt
+            if [ "$(basename "$zip")" != windows-x64-GeneralsXZH.zip ]; then
+              cp "$zip" windows-x64-GeneralsXZH.zip
+              zip=windows-x64-GeneralsXZH.zip
+            fi
+          else
+            # download-artifact unpacks the zip; rebuild it from the extracted files
+            cp package/version.txt version.txt
+            (cd package && zip -qr ../windows-x64-GeneralsXZH.zip .)
+            zip=windows-x64-GeneralsXZH.zip
+          fi
           cat version.txt
           if ! gh release view nightly-x64 >/dev/null 2>&1; then
             gh release create nightly-x64 --target "$GITHUB_SHA" --prerelease \
