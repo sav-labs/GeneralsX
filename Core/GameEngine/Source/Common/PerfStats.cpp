@@ -315,7 +315,7 @@ Bool isDumpRequested()
 void setDumpFile(const char *path)
 {
 	if (path)
-		strlcpy(s_dumpPath, path, sizeof(s_dumpPath));
+		snprintf(s_dumpPath, sizeof(s_dumpPath), "%s", path);
 }
 
 double nowMs()

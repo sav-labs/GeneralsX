@@ -1223,7 +1223,8 @@ Int OptionPreferences::getShadowVolumeHighPolyTriangles() const
 	if (it == end())
 		return 4000;
 
-	return max(0, atoi(it->second.str()));
+	const Int value = atoi(it->second.str());
+	return value > 0 ? value : 0;
 }
 
 // GeneralsX @performance Claude 16/10/2026 Rotation in degrees (0.2 to 30, default 3) that a high poly shadow
@@ -1245,7 +1246,8 @@ Int OptionPreferences::getShadowVolumeMaxTriangles() const
 	if (it == end())
 		return 0;
 
-	return max(0, atoi(it->second.str()));
+	const Int value = atoi(it->second.str());
+	return value > 0 ? value : 0;
 }
 
 // GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos. Options.ini CapturePath
