@@ -48,6 +48,10 @@ TEXTURE_WIDTH = {
     "ConcreteType1": 2,
     "SnowType2": 2,
     "GrassMediumType15": 4,
+    "SnowType3": 2,
+    "ConcreteType2": 2,
+    "ConcreteType4": 2,
+    "AsphaltType2": 2,
 }
 
 # Script templates: (enum value, internal name) from ScriptEngine.cpp. The reader re-matches by
@@ -319,11 +323,11 @@ def sunny_lighting():
     return {"time_of_day": 2, "times": [tod, tod, tod, tod], "shadow_color": 0xFFA0A0A0}
 
 
-def build(terrain, objects, map_name_tag, scripts):
+def build(terrain, objects, map_name_tag, scripts, weather=0):
     m = terrain.encode()
     sides, teams = standard_sides()
     m.update({
-        "world": {"weather": 0, "mapName": map_name_tag},
+        "world": {"weather": weather, "mapName": map_name_tag},
         "sides": sides, "teams": teams,
         "scripts": {1: scripts},  # on PlyrCivilian, so the default skirmish AI scripts still load
         "objects": objects.items,
