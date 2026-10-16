@@ -227,6 +227,51 @@ def join(ps, name):
     return obj
 
 
+def cull_small(objs, size):
+    """Drop loose islands smaller than `size` (bolt heads, rivets, handles): they cost triangles at game
+    distance, and with a high-poly bake their look is already in the atlas."""
+    for o in objs:
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        seen, drop = set(), []
+        for f in bm.faces:
+            if f.index in seen:
+                continue
+            island, stack = [], [f]
+            seen.add(f.index)
+            while stack:
+                g = stack.pop()
+                island.append(g)
+                for e in g.edges:
+                    for h in e.link_faces:
+                        if h.index not in seen:
+                            seen.add(h.index)
+                            stack.append(h)
+            pts = [v.co for g in island for v in g.verts]
+            ext = max(max(p[i] for p in pts) - min(p[i] for p in pts) for i in range(3))
+            if ext < size:
+                drop += island
+        if drop and len(drop) < len(bm.faces):
+            bmesh.ops.delete(bm, geom=drop, context="FACES")
+            bm.to_mesh(o.data)
+        bm.free()
+
+
+def planar(objs, angle):
+    """Merge coplanar faces (within `angle` degrees) without moving any vertex: flat armour plates become
+    a few large polygons and the silhouette stays exact, so the later collapse has less to crush."""
+    for o in objs:
+        mod = o.modifiers.new("planar", "DECIMATE")
+        mod.decimate_type = "DISSOLVE"
+        mod.angle_limit = math.radians(angle)
+        mod.delimit = {"MATERIAL", "SEAM"}
+        tri = o.modifiers.new("tri", "TRIANGULATE")
+        tri.quad_method = "BEAUTY"
+        bpy.context.view_layer.objects.active = o
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+        bpy.ops.object.modifier_apply(modifier=tri.name)
+
+
 def decimate(objs, budget, weights=None):
     """Collapse objs to about `budget` triangles. weights (object -> factor) keep more of the objects
     that read as round or thin at game distance (wheels, guns), which crumple first."""
@@ -900,6 +945,12 @@ def build(path, spec, name, size, damaged=False):
             bpy.context.scene.collection.objects.link(c)
             c["bone"] = bone
             high.append(c)
+    body_objs = [o for (b, g, kd), o in joined.items()]
+    if spec.get("cull"):
+        cull_small(body_objs, spec["cull"])
+    if spec.get("planar"):
+        planar(body_objs, spec["planar"])
+        step(f"planar {sum(len(o.data.polygons) for o in body_objs)} triangles")
     decimate(list(joined.values()), spec.get("tris", 12000),
              {o.name: 3.0 for (b, g, kd), o in joined.items() if re.match(r"WHEEL|TIRE|SPROCKET|IDLER|BARREL", b)})
     step("decimated")

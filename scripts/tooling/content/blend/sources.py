@@ -53,7 +53,10 @@ UNITS = {
     # our scrolling band. The whip antennas would stand 20 units tall and are dropped. In review, not built
     # by CI yet: "crusader" stays the approved M1A1 until this one passes.
     "crusader_m1a2": {
-        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 15000, "split": "abram", "weld": 0.002,
+        "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 28000, "split": "abram", "weld": 0.002,
+        # Large forms first: islands under 0.12 units go (their look is baked), coplanar faces within 4
+        # degrees merge without moving a vertex, and only then is the rest collapsed to the budget.
+        "cull": 0.12, "planar": 4.0,
         # Its 1K texture is too coarse for the game's close camera: the paint is procedural and the
         # surface detail (plate edges, bolts, welds, hatches) comes from normals and occlusion baked off
         # the full-resolution mesh, with rays reaching 0.25 units either side of the decimated surface.
