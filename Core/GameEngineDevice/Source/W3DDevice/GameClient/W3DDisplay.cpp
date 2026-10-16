@@ -2317,7 +2317,9 @@ AGAIN:
 
 			TheParticleSystemManager->DRAW();
 
-			if (TheWaterRenderObj && TheGlobalData->m_waterType == 2)
+			// GeneralsX @feature Claude 16/10/2026 Every water type may render a reflection now (water effects);
+			// updateRenderTargetTextures keeps the retail mirror to water type 2.
+			if (TheWaterRenderObj && primaryW3DView)
 				TheWaterRenderObj->updateRenderTargetTextures(primaryW3DView->get3DCamera());	//do a render into each texture
 
 			//Can't render into textures while rendering to screen so these textures need to be updated

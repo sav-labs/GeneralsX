@@ -173,6 +173,12 @@ public:
 
 	static WW3DErrorType		End_Render(bool flip_frame = true);
 
+	// GeneralsX @feature Claude 16/10/2026 Brackets a render into a texture made in the middle of a frame (the
+	// water reflection) without starting a new frame: no frame counter step, statistics, dynamic buffer reset or
+	// present, so per frame state such as the particle buffers' double buffering is untouched.
+	static WW3DErrorType		Begin_Offscreen_Render(bool clear,bool clearz,const Vector3 & color);
+	static WW3DErrorType		End_Offscreen_Render();
+
 	static bool					Is_Rendering() { return( IsRendering ); }
 
 	static void Flip_To_Primary();

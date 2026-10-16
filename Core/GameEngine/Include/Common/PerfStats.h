@@ -46,6 +46,8 @@ namespace PerfStats
 		// GeneralsX @feature Claude 16/10/2026 Shadows of skinned models (tile updates, terrain pass, volumes); overlaps
 		// render_targets and shadows.
 		SECTION_SKINNED_SHADOWS,  ///< W3DSkinnedShadowManager work
+		// GeneralsX @feature Claude 16/10/2026 Reflection pass of the water effects; overlaps render_targets.
+		SECTION_WATER_REFLECTION, ///< WaterRenderObjClass::renderWaterReflection
 		SECTION_COUNT
 	};
 

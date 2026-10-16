@@ -55,6 +55,7 @@
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DUpscaler.h"
+#include "W3DDevice/GameClient/W3DWater.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8renderer.h"
 #include "WW3D2/sortingrenderer.h"
@@ -436,11 +437,19 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 
 			if( draw )
 			{
+				// GeneralsX @feature Claude 16/10/2026 The reflection of the water effects shows every drawable (retail
+				// mirrors only those flagged for it), and no mirror shows one the player cannot see: hidden, under
+				// the shroud or fading (stealth). The rendering flags of the last main pass are cleared, or objects it
+				// queued for the occlusion passes, which a mirror does not run, would be left out.
+				const Bool drawsInMirror = draw->getDrawsInMirror() || WaterRenderObjClass::isDrawingEffectReflection();
 				if (robj->Is_Force_Visible()) {
 					robj->Set_Visible(true);
 				} else {
-					robj->Set_Visible(draw->getDrawsInMirror() && !camera->Cull_Sphere(robj->Get_Bounding_Sphere()));
+					robj->Set_Visible(drawsInMirror && !robj->Is_Hidden() && !draw->isDrawableEffectivelyHidden() &&
+						!draw->getFullyObscuredByShroud() && draw->getEffectiveOpacity() == 1.0f &&
+						!camera->Cull_Sphere(robj->Get_Bounding_Sphere()));
 				}
+				drawInfo->m_flags = DrawableInfo::ERF_IS_NORMAL;
 			}
 			else
 			{
@@ -854,8 +863,13 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// shadow draw calls. Originally just drawing shadows for trees would not properly prepare shadows.
 	PrepareShadows();
 
+	// GeneralsX @feature Claude 16/10/2026 Mirror passes (water reflections) skip the shadows, ambient occlusion,
+	// the FSR 2 scene copy and, for the water effects, particles: they would land in the main frame or cost more
+	// than they show at reflection size.
+	const Bool mirrorPass = ShaderClass::Is_Backface_Culling_Inverted();
+
 	//don't draw shadows in this mode because they interfere with destination alpha or are invisible (wireframe)
-	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE && !mirrorPass)
 	{
 		// GeneralsX @performance Claude 16/10/2026 Shadow time for the frame profiler.
 		PERF_STATS_SCOPE(SECTION_SHADOWS);
@@ -882,7 +896,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// GeneralsX @feature Claude 16/10/2026 Ambient occlusion over the opaque scene, before trees, shadows,
 	// water and translucent objects. DXVK computes it from the depth buffer when render state 253 is set
 	// (DXVK_SSAO=1, Options.ini AmbientOcclusion); other drivers ignore the unknown state.
-	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE && !mirrorPass)
 	{
 		DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)AMBIENT_OCCLUSION_RENDER_STATE, 1);
 		DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)AMBIENT_OCCLUSION_RENDER_STATE, 0);
@@ -892,7 +906,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	DoTrees(rinfo);
 
 	//don't draw shadows in this mode because they interfere with destination alpha
-	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE && !mirrorPass)
 	{
 		// GeneralsX @performance Claude 16/10/2026 Shadow volume time for the frame profiler.
 		PERF_STATS_SCOPE(SECTION_SHADOWS);
@@ -906,7 +920,8 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask: everything up to here is the opaque scene.
 		// Translucent objects, particles and sorted alpha-blended polygons follow; DXVK copies the scene here
 		// while FSR 2 is active (render state 251), other drivers never see the state. Render only.
-		W3DUpscaler::markOpaqueScene();
+		if (!mirrorPass)
+			W3DUpscaler::markOpaqueScene();
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
 	}
 
@@ -916,7 +931,8 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		PERF_STATS_SCOPE(SECTION_PARTICLE_RENDER);
 
 		//don't draw transparent in this mode because they interfere with destination alpha
-		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE &&
+			!WaterRenderObjClass::isDrawingEffectReflection())
 			DoParticles(rinfo);	//queue up particles for rendering.
 
 		SortingRendererClass::Flush();	//draw sorted translucent polygons like particles.
