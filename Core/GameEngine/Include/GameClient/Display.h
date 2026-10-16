@@ -55,6 +55,8 @@ class DebugDisplayInterface;
 class Radar;
 class Image;
 class DisplayString;
+// GeneralsX @feature Claude 16/10/2026 Effect light profile (GameClient/EffectLights.h).
+namespace EffectLights { struct Profile; }
 enum StaticGameLODLevel CPP_11(: Int);
 /**
  * The Display class implements the Display interface
@@ -136,6 +138,9 @@ public:
 	virtual void createLightPulse( const Coord3D *pos, const RGBColor *color, Real innerRadius,Real attenuationWidth,
 																 UnsignedInt increaseFrameTime, UnsignedInt decayFrameTime//, Bool donut = FALSE
 																 ) = 0;
+	// GeneralsX @feature Claude 16/10/2026 Automatic coloured light for an effect (explosion, muzzle flash, flame burst)
+	// whose data has no LightPulse. Displays without 3D lights ignore it; W3DDisplay hands it to W3DEffectLights.
+	virtual void addEffectLight( const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius ) { (void)pos; (void)profile; (void)objectRadius; }
 
 	/// draw a line on the display in pixel coordinates with the specified color
 	virtual void drawLine( Int startX, Int startY, Int endX, Int endY,

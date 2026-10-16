@@ -220,6 +220,11 @@ public:
 	Real getSkinnedShadowDistance() const;		///< Options.ini SkinnedShadowDistance in world units, default 1500, 0 = no limit
 	Bool getSkinnedShadowKeepDecal() const;		///< Options.ini SkinnedShadowKeepDecal, default no
 	Int getSkinnedShadowMinTriangles() const;	///< Options.ini SkinnedShadowMinTriangles, default 2000
+	// GeneralsX @feature Claude 16/10/2026 Coloured lights from explosions, fires, muzzle flashes and missile exhausts
+	// (W3DEffectLights).
+	enum DynamicLightsMode { DYNAMIC_LIGHTS_OFF, DYNAMIC_LIGHTS_LOW, DYNAMIC_LIGHTS_HIGH };
+	Int getDynamicLightsMode() const;			///< Options.ini DynamicLights = Off | Low | High, default High
+	Real getDynamicLightIntensity() const;		///< Options.ini DynamicLightIntensity, 0 to 2, default 1
 	// GeneralsX @feature Claude 16/10/2026 Water effects of standing water and rivers (W3DWaterEffects.cpp).
 	Int getWaterReflections() const;			///< Options.ini WaterReflections = Off | Sky | Full (0, 1, 2), default Full
 	Real getWaterReflectionScale() const;		///< Options.ini WaterReflectionScale, 0.25 to 1, default 0.5

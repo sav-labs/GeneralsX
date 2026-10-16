@@ -89,6 +89,8 @@ public:
 	virtual void createLightPulse( const Coord3D *pos, const RGBColor *color, Real innerRadius,Real outerRadius,
 																 UnsignedInt increaseFrameTime, UnsignedInt decayFrameTime//, Bool donut = FALSE
 																 ) override;
+	// GeneralsX @feature Claude 16/10/2026 Automatic effect light (W3DEffectLights).
+	virtual void addEffectLight( const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius ) override;
 	virtual void setTimeOfDay ( TimeOfDay tod ) override;
 
 	/// draw a line on the display in screen coordinates

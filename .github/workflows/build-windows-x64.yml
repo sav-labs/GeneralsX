@@ -314,6 +314,13 @@ jobs:
           SkinnedShadowMinTriangles = 2000: units the game gives a round shadow switch to the new shadow only
           from this many triangles, so infantry keep theirs. They follow the 3D Shadows option (2D Shadows
           for units that had a round shadow). stderr gets [SHADOW] lines (settings, each model, every 600 frames).
+          Coloured lights from explosions, burning buildings and vehicles, muzzle flashes, missile exhausts and
+          superweapons on the ground, units and buildings (strongest at night):
+          DynamicLights = High (default): all of them, up to 16 at once, smooth light pools on the ground.
+          DynamicLights = Low: explosions, muzzle flashes and superweapons only, up to 6, ground lit on the
+          terrain grid like the game's own lights. DynamicLights = Off: only the lights the game data asks for.
+          DynamicLightIntensity = 1 (0 to 2): brightness of these lights. stderr gets [LIGHTS] lines; the
+          [PERF] line shows lights, retail lights, candidates and lights_ms.
           Water (lakes, ponds and rivers; Options.ini, read when the game starts, render only):
           WaterReflections = Full (default) mirrors the sky, terrain, buildings, units and trees in the water,
           stronger towards the horizon; Sky mirrors only the clouds (cheaper); Off keeps the original water.

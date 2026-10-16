@@ -52,6 +52,11 @@ namespace
 		UnsignedInt64 skinnedShadowUpdates;
 		UnsignedInt64 skinnedShadowUpdateTriangles;
 		UnsignedInt64 skinnedShadowsDrawn;
+		// GeneralsX @feature Claude 16/10/2026 Effect light sums.
+		UnsignedInt64 effectLights;
+		UnsignedInt64 retailLights;
+		UnsignedInt64 lightCandidates;
+		UnsignedInt effectLightsMax;
 		UnsignedInt drawCallsMax;
 		Int particlesMax;
 		Int particlesOnScreenLast;
@@ -87,6 +92,10 @@ namespace
 	UnsignedInt s_frameSkinnedShadowUpdates = 0;
 	UnsignedInt s_frameSkinnedShadowUpdateTriangles = 0;
 	UnsignedInt s_frameSkinnedShadowsDrawn = 0;
+	// GeneralsX @feature Claude 16/10/2026 Effect light counters of the current frame.
+	UnsignedInt s_frameEffectLights = 0;
+	UnsignedInt s_frameRetailLights = 0;
+	UnsignedInt s_frameLightCandidates = 0;
 
 	Window s_interval;
 	Window s_overlay;
@@ -96,7 +105,7 @@ namespace
 	UnsignedInt64 s_freeTextureBytes = 0;
 	Bool s_textureMemoryKnown = FALSE;
 
-	char s_overlayText[640] = { 0 };
+	char s_overlayText[704] = { 0 };
 
 	const char *s_sectionNames[SECTION_COUNT] =
 	{
@@ -112,6 +121,7 @@ namespace
 		"particle_render_ms",
 		"present_ms",
 		"skinned_shadows_ms",
+		"lights_ms",
 		"water_reflection_ms",
 	};
 
@@ -134,6 +144,11 @@ namespace
 		w.skinnedShadowUpdates += s_frameSkinnedShadowUpdates;
 		w.skinnedShadowUpdateTriangles += s_frameSkinnedShadowUpdateTriangles;
 		w.skinnedShadowsDrawn += s_frameSkinnedShadowsDrawn;
+		w.effectLights += s_frameEffectLights;
+		w.retailLights += s_frameRetailLights;
+		w.lightCandidates += s_frameLightCandidates;
+		if (s_frameEffectLights > w.effectLightsMax)
+			w.effectLightsMax = s_frameEffectLights;
 		if (s_frameCounters.drawCalls > w.drawCallsMax)
 			w.drawCallsMax = s_frameCounters.drawCalls;
 		if (s_frameCounters.particles > w.particlesMax)
@@ -163,6 +178,7 @@ namespace
 			" | skins=%.1f skinverts=%.1fk cachehits=%.1f"
 			" | shadowrebuilds=%.1f (%.1fk tris)"
 			" | skinshadows=%.1f updates=%.1f (%.1fk tris) skinshadow_ms=%.2f"
+			" | lights=%.1f max=%u retail=%.1f candidates=%.1f lights_ms=%.2f"
 			" | particles=%d max=%d onscreen=%d",
 			seconds, n, fps, avg(w.frameMsSum, n), w.frameMsMax,
 			avg(w.sectionMs[SECTION_LOGIC], n), avg(w.sectionMs[SECTION_CLIENT], n),
@@ -177,6 +193,8 @@ namespace
 			avg((double)w.shadowRebuilds, n), avg((double)w.shadowRebuildTriangles, n) / 1000.0,
 			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
 			avg((double)w.skinnedShadowUpdateTriangles, n) / 1000.0, avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n),
+			avg((double)w.effectLights, n), w.effectLightsMax, avg((double)w.retailLights, n),
+			avg((double)w.lightCandidates, n), avg(w.sectionMs[SECTION_EFFECT_LIGHTS], n),
 			w.particlesLast, w.particlesMax, w.particlesOnScreenLast);
 		if (s_textureMemoryKnown)
 		{
@@ -198,7 +216,7 @@ namespace
 			"PERF %.0f fps  frame %.1f ms (max %.1f)\n"
 			"logic %.1f  client %.1f  draw %.1f  scene %.1f  meshes %.1f  shadows %.1f  fx %.1f  present %.1f\n"
 			"draws %.0f  tris %.0fk  skins %.0f (%.0fk verts, %.0f cached)  shadow rebuilds %.0f  particles %d/%d  tex %.0f MB\n"
-			"skinned shadows %.0f  updates %.1f  %.2f ms",
+			"skinned shadows %.0f  updates %.1f  %.2f ms  lights %.0f (%.0f retail)  %.2f ms",
 			fps, avg(w.frameMsSum, n), w.frameMsMax,
 			avg(w.sectionMs[SECTION_LOGIC], n), avg(w.sectionMs[SECTION_CLIENT], n), avg(w.sectionMs[SECTION_DRAW], n),
 			avg(w.sectionMs[SECTION_SCENE], n), avg(w.sectionMs[SECTION_MESH_FLUSH], n), avg(w.sectionMs[SECTION_SHADOWS], n),
@@ -210,7 +228,8 @@ namespace
 			w.particlesOnScreenLast, w.particlesLast,
 			(double)s_textureBytes / (1024.0 * 1024.0),
 			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
-			avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n));
+			avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n),
+			avg((double)w.effectLights, n), avg((double)w.retailLights, n), avg(w.sectionMs[SECTION_EFFECT_LIGHTS], n));
 	}
 
 	void closeDump(const char *reason)
@@ -256,7 +275,8 @@ namespace
 				fprintf(s_dumpFile, ",%s", s_sectionNames[i]);
 			fprintf(s_dumpFile, ",draw_calls,triangles,sorted_triangles,skin_meshes,skin_vertices,skin_cache_hits,"
 				"shadow_rebuilds,shadow_rebuild_triangles,particles,particles_on_screen,texture_mb,"
-				"skinned_shadows,skinned_shadow_updates,skinned_shadow_update_triangles\n");
+				"skinned_shadows,skinned_shadow_updates,skinned_shadow_update_triangles,"
+				"effect_lights,retail_lights,light_candidates\n");
 			fprintf(stderr, "[PERF] perfdump: recording %.0f seconds to %s\n", s_dumpSeconds, s_dumpPath);
 			fflush(stderr);
 			s_dumpLastFlushMs = now;
@@ -265,13 +285,14 @@ namespace
 		fprintf(s_dumpFile, "%.3f,%u,%.3f", sinceStart - s_dumpDelaySeconds, logicFrame, frameMs);
 		for (Int i = 0; i < SECTION_COUNT; ++i)
 			fprintf(s_dumpFile, ",%.3f", s_frameSectionMs[i]);
-		fprintf(s_dumpFile, ",%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%.0f,%u,%u,%u\n",
+		fprintf(s_dumpFile, ",%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%.0f,%u,%u,%u,%u,%u,%u\n",
 			s_frameCounters.drawCalls, s_frameCounters.triangles, s_frameCounters.sortedTriangles,
 			s_frameCounters.skinMeshes, s_frameCounters.skinVertices, s_frameCounters.skinCacheHits,
 			s_frameShadowRebuilds, s_frameShadowRebuildTriangles,
 			s_frameCounters.particles, s_frameCounters.particlesOnScreen,
 			(double)s_textureBytes / (1024.0 * 1024.0),
-			s_frameSkinnedShadowsDrawn, s_frameSkinnedShadowUpdates, s_frameSkinnedShadowUpdateTriangles);
+			s_frameSkinnedShadowsDrawn, s_frameSkinnedShadowUpdates, s_frameSkinnedShadowUpdateTriangles,
+			s_frameEffectLights, s_frameRetailLights, s_frameLightCandidates);
 		++s_dumpRows;
 
 		if (now - s_dumpLastFlushMs >= 1000.0)
@@ -377,6 +398,16 @@ void addSkinnedShadowsDrawn(UnsignedInt count)
 	s_frameSkinnedShadowsDrawn += count;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Effect light counters, set once per rendered frame by W3DEffectLights.
+void setEffectLights(UnsignedInt active, UnsignedInt retail, UnsignedInt candidates)
+{
+	if (!s_enabled)
+		return;
+	s_frameEffectLights = active;
+	s_frameRetailLights = retail;
+	s_frameLightCandidates = candidates;
+}
+
 Bool wantsTextureMemory()
 {
 	if (!s_enabled)
@@ -448,6 +479,9 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_frameSkinnedShadowUpdates = 0;
 	s_frameSkinnedShadowUpdateTriangles = 0;
 	s_frameSkinnedShadowsDrawn = 0;
+	s_frameEffectLights = 0;
+	s_frameRetailLights = 0;
+	s_frameLightCandidates = 0;
 }
 
 const char *getOverlayText()
