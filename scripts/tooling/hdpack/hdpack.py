@@ -59,9 +59,23 @@ TEXTURE_EXTS = (".tga", ".dds")
 TERRAIN_DIR = "art/terrain/"
 TERRAIN_EXTS = (".tga",)
 MIN_SOURCE_SIZE = 32
-# Name parts of textures that carry lettering; these skip the AI model.
-SAFE_PATTERNS = ("*sign*", "*text*", "*logo*", "*letter*", "*number*", "*digit*", "*font*", "*billboard*",
-                 "*poster*", "*banner*", "*decal*")
+# Textures that skip the AI model (Lanczos plus unsharp mask instead). Found in the review sheets of the
+# full retail set (16/10/2026): the model warps lettering and flags, turns the soft water caustics into
+# hard cells, smooths fine ground and snow noise into flat paint with a seam, hardens the soft glow of
+# night window maps and draws figures into them, and invents patterns on some plates and walls.
+SAFE_PATTERNS = (
+    # lettering, emblems, flags
+    "*sign*", "*text*", "*logo*", "*letter*", "*number*", "*digit*", "*font*", "*billboard*",
+    "*poster*", "*banner*", "*decal*", "*flag*", "cvbigrig", "cbwrfwhrs*", "cbtmplhvn*", "ubpalwall*",
+    # water caustics (animated, soft by design)
+    "caust*",
+    # ground, snow and effect noise
+    "tray*", "trgrass*", "trdirt*", "*noise*", "exavalanche*",
+    # night light maps (soft glows)
+    "*_n", "*_ng", "*_nd", "*_dn", "*_sn", "*_esn", "*_en", "*_en2",
+    # invented patterns
+    "pmgrruin*", "cbnsubst_vent*", "ciburn", "atdiaplate", "pmcement*", "pmropecoil",
+)
 MAX_OUTPUT_SIZE = 2048
 
 
