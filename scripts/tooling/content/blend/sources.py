@@ -54,8 +54,10 @@ UNITS = {
     # by CI yet: "crusader" stays the approved M1A1 until this one passes.
     "crusader_m1a2": {
         "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 15000, "split": "abram", "weld": 0.002,
-        # Low contrast: the source's dark chevrons and number plates should not show through the repaint.
-        "contrast": 0.25,
+        # Its 1K texture is too coarse for the game's close camera: the paint is procedural and the
+        # surface detail (plate edges, bolts, welds, hatches) comes from normals and occlusion baked off
+        # the full-resolution mesh, with rays reaching 0.25 units either side of the decimated surface.
+        "procedural": True, "highpoly": 0.25,
         "parents": {"BARREL": "TURRET"},
         # The retail Crusader's Draw module fires from TurretMS and recoils Barrel.
         "muzzles": {"TURRETMS": "BARREL", "TURRETFX": "BARREL"},

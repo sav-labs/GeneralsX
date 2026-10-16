@@ -352,7 +352,11 @@ def weathered(src, image, damaged, burns, spec):
 
     def base(nt):
         out = repaint(nt)
-        relief = source_relief(src, nt, spec.get("relief", 0.7))
+        baked = spec.get("_highpoly")
+        if baked:
+            relief, out = highpoly_relief(nt, baked, spec.get("relief", 0.9)), occluded(nt, out, baked)
+        else:
+            relief = source_relief(src, nt, spec.get("relief", 0.7))
         if relief is None:
             return out
         m = nt.nodes.new("ShaderNodeMix")
@@ -364,6 +368,12 @@ def weathered(src, image, damaged, burns, spec):
 
     def repaint(nt):
         colour = source_colour(src, nt)
+        if spec.get("procedural") and finish in ("paint", "canvas") and tint:
+            # The source's own texture is too coarse to keep: flat paint, with all detail from the
+            # high-poly bake and the weathering.
+            rgb = nt.nodes.new("ShaderNodeRGB")
+            rgb.outputs[0].default_value = kit.srgb(tint[0] if finish == "paint" else spec.get("canvas", (128, 116, 84)))
+            return rgb.outputs[0]
 
         def node(kind, **inputs):
             n = nt.nodes.new(kind)
@@ -426,6 +436,96 @@ def weathered(src, image, damaged, burns, spec):
     return mat
 
 
+def atlas_image(nt, image):
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = image
+    uvn = nt.nodes.new("ShaderNodeUVMap")
+    uvn.uv_map = "Atlas"
+    nt.links.new(uvn.outputs[0], tex.inputs["Vector"])
+    return tex
+
+
+def highpoly_relief(nt, baked, strength):
+    """Relief from the object-space normals baked off the high-poly source."""
+    tex = atlas_image(nt, baked["normal"])
+    unpack = nt.nodes.new("ShaderNodeVectorMath")
+    unpack.operation = "MULTIPLY_ADD"
+    nt.links.new(tex.outputs["Color"], unpack.inputs[0])
+    unpack.inputs[1].default_value = (2.0, 2.0, 2.0)
+    unpack.inputs[2].default_value = (-1.0, -1.0, -1.0)
+    return relief_from(nt, unpack.outputs[0], strength)
+
+
+def occluded(nt, colour, baked):
+    """Colour darkened by the occlusion baked off the high-poly source (panel gaps, bolt rings, the
+    shadowed sides of fittings), eased so open plates stay at full colour."""
+    tex = atlas_image(nt, baked["ao"])
+    ramp = nt.nodes.new("ShaderNodeMapRange")
+    nt.links.new(tex.outputs["Color"], ramp.inputs["Value"])
+    ramp.inputs["From Min"].default_value, ramp.inputs["From Max"].default_value = 0.2, 0.85
+    ramp.inputs["To Min"].default_value, ramp.inputs["To Max"].default_value = 0.45, 1.0
+    grey = nt.nodes.new("ShaderNodeCombineColor")
+    for i in range(3):
+        nt.links.new(ramp.outputs[0], grey.inputs[i])
+    m = nt.nodes.new("ShaderNodeMix")
+    m.data_type, m.blend_type = "RGBA", "MULTIPLY"
+    m.inputs[0].default_value = 1.0
+    nt.links.new(colour, m.inputs[6])
+    nt.links.new(grey.outputs[0], m.inputs[7])
+    return m.outputs[2]
+
+
+def bake_highpoly(low, high, size, extrusion):
+    """Object-space normals and occlusion of the full-resolution source pieces (high), baked through the
+    decimated meshes' atlas UVs (low). Both are joined into temporary objects for the selected-to-active
+    bake and removed afterwards; the low meshes themselves are untouched."""
+    def merged(objs, name):
+        copies = []
+        for o in objs:
+            c = o.copy()
+            c.data = o.data.copy()
+            bpy.context.scene.collection.objects.link(c)
+            copies.append(c)
+        bpy.ops.object.select_all(action="DESELECT")
+        for c in copies:
+            c.select_set(True)
+        bpy.context.view_layer.objects.active = copies[0]
+        if len(copies) > 1:
+            bpy.ops.object.join()
+        out = bpy.context.view_layer.objects.active
+        out.name = name
+        return out
+    target = merged(low, "bake_low")
+    target.data.uv_layers.active = target.data.uv_layers["Atlas"]
+    source = merged(high, "bake_high")
+    out = {}
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    for kind, samples in (("normal", 1), ("ao", 64)):
+        img = bpy.data.images.new(f"hp_{kind}", size, size, alpha=False, float_buffer=True)
+        img.colorspace_settings.name = "Non-Color"
+        mat = bpy.data.materials.new(f"hp_{kind}")
+        mat.use_nodes = True
+        node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+        node.image = img
+        mat.node_tree.nodes.active = node
+        target.data.materials.clear()
+        target.data.materials.append(mat)
+        scene.cycles.samples = samples
+        bpy.ops.object.select_all(action="DESELECT")
+        source.select_set(True)
+        target.select_set(True)
+        bpy.context.view_layer.objects.active = target
+        kwargs = dict(normal_space="OBJECT") if kind == "normal" else {}
+        bpy.ops.object.bake(type="NORMAL" if kind == "normal" else "AO", use_selected_to_active=True,
+                            cage_extrusion=extrusion, max_ray_distance=extrusion * 2.5, margin=6, use_clear=True,
+                            **kwargs)
+        out[kind] = img
+    for o in (target, source, *high):
+        bpy.data.objects.remove(o)
+    return out
+
+
 def source_relief(src, nt, strength):
     """Relief of the source's normal map, lit into the colour: 1 + strength x (N_map . L - N . L) under a
     light from above, clamped, as a grey socket; None when the source has no normal map. The game has no
@@ -454,12 +554,18 @@ def source_relief(src, nt, strength):
     nm = nt.nodes.new("ShaderNodeNormalMap")
     nm.uv_map = uv_name
     nt.links.new(tex.outputs["Color"], nm.inputs["Color"])
+    return relief_from(nt, nm.outputs[0], strength)
+
+
+def relief_from(nt, normal, strength):
+    """Grey socket 1 + strength x (normal . L - N . L), clamped: relief of a detailed normal lit into the
+    colour against the flat-shaded face it lies on."""
     geo = nt.nodes.new("ShaderNodeNewGeometry")
     light = nt.nodes.new("ShaderNodeCombineXYZ")
     for i, v in enumerate((0.35, 0.3, 0.89)):
         light.inputs[i].default_value = v
     dots = []
-    for sock in (nm.outputs[0], geo.outputs["Normal"]):
+    for sock in (normal, geo.outputs["Normal"]):
         d = nt.nodes.new("ShaderNodeVectorMath")
         d.operation = "DOT_PRODUCT"
         nt.links.new(sock, d.inputs[0])
@@ -785,6 +891,14 @@ def build(path, spec, name, size, damaged=False):
         obj["bone"], obj["group"], obj["kind"] = bone, group, kind
         joined[(bone, group, kind)] = obj
     step("joined")
+    high = []
+    if spec.get("highpoly"):
+        for (bone, group, kind), obj in joined.items():
+            c = obj.copy()
+            c.data = obj.data.copy()
+            bpy.context.scene.collection.objects.link(c)
+            c["bone"] = bone
+            high.append(c)
     decimate(list(joined.values()), spec.get("tris", 12000),
              {o.name: 3.0 for (b, g, kd), o in joined.items() if re.match(r"WHEEL|TIRE|SPROCKET|IDLER|BARREL", b)})
     step("decimated")
@@ -802,9 +916,8 @@ def build(path, spec, name, size, damaged=False):
         # A knocked-out tank's gun sags on its trunnions.
         pivot = Vector(next(p for b, _, p in k.bones if b == "BARREL"))
         rot = Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(droop), 4, "Y") @ Matrix.Translation(-pivot)
-        for (bone, group, kind), obj in joined.items():
-            if bone == "BARREL":
-                obj.data.transform(rot)
+        for obj in [o for (bone, g, kd), o in joined.items() if bone == "BARREL"] + [h for h in high if h["bone"] == "BARREL"]:
+            obj.data.transform(rot)
     # Points the damage effects use (smoke and fire), on both models; the retail Draw modules start their
     # really-damaged smoke on a random SMOKE* bone.
     body = [o for (b, g, kd), o in joined.items() if kd == "body"]
@@ -842,6 +955,10 @@ def build(path, spec, name, size, damaged=False):
     step("shadows")
     kit.unwrap(visible)
     step("unwrapped")
+    spec.pop("_highpoly", None)
+    if high:
+        spec["_highpoly"] = bake_highpoly(visible, high, size, spec["highpoly"])
+        step("high-poly normals and occlusion baked")
     px = bake_source(visible, size, damaged, k.burns, f"{name}_body", spec)
     split_finishes(joined, spec)
     # Custom normals for to_w3d.
