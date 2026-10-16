@@ -242,6 +242,82 @@ SYSTEMS.update({
     "StructureTransitionLargeSmoke": _structure_dust((30, 30), (22, 32), (2.0, 3.0), (3.0, 4.5), 50.0, 25.0, 0.2),
 })
 
+# Gun fire and shell impacts: retail systems behind WeaponFX_GenericTankGunNoTracer (most tank guns)
+# and WeaponFX_GenericTankShellDetonation / WeaponFX_RocketBuggyMissileDetonation (shell and rocket
+# hits), redefined in place so every weapon that uses them changes. The FX lists orient the muzzle
+# systems to the turret, so ORTHO X points down the barrel.
+SYSTEMS.update({
+    # Fireball pushed out of the muzzle.
+    "TankMuzzleFlashFlame": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_burst.tga", FlipbookGrid=8, AngleZ=(-0.3, 0.3),
+        Lifetime=(10, 14), Size=(4.0, 6.0), SizeRate=(0.5, 0.7), SizeRateDamping=(0.9, 0.9),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 8), (0.0, 0.0, 14)],
+        BurstCount=(3, 3), SystemLifetime=10, VelocityDamping=(0.6, 0.75),
+        VelocityType="ORTHO", VelOrthoX=(1.5, 4.5), VelOrthoY=(-0.3, 0.3), VelOrthoZ=(-0.2, 0.3),
+        VolumeType="CYLINDER", VolCylinderRadius=0.5, VolCylinderLength=0.0),
+    # Grey gun smoke that drifts off the barrel.
+    "TankMuzzleFlashSmoke": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(60, 80), Size=(4.0, 6.0), SizeRate=(0.35, 0.5), SizeRateDamping=(0.97, 0.98),
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 4), (0.35, 0.35, 40), (0.0, 0.0, 80)],
+        Color=[((210, 206, 200), 0), ((235, 232, 228), 60)],
+        BurstCount=(4, 4), SystemLifetime=10, VelocityDamping=(0.82, 0.88),
+        DriftVelocity=(-0.05, 0.05, 0.12),
+        VelocityType="ORTHO", VelOrthoX=(0.5, 2.5), VelOrthoY=(-0.8, 0.8), VelOrthoZ=(0.1, 0.6),
+        VolumeType="CYLINDER", VolCylinderRadius=0.8, VolCylinderLength=0.0),
+    # Short white flash at the muzzle instead of the retail lens flare.
+    "TankMuzzleFlare": system(
+        Priority="CRITICAL", Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
+        Lifetime=(5, 5), Size=(12, 12), SizeRate=(2.0, 2.0), SizeRateDamping=(0.6, 0.6),
+        Color=[((255, 246, 220), 0), ((255, 160, 70), 2), ((0, 0, 0), 5)],
+        BurstCount=(1, 1), SystemLifetime=1),
+    # Dust kicked up from the ground by the muzzle blast.
+    "TankMuzzleWave": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(45, 60), Size=(5.0, 8.0), SizeRate=(0.3, 0.45), SizeRateDamping=(0.96, 0.97),
+        Alpha=[(0.0, 0.0, 0), (0.75, 0.75, 4), (0.0, 0.0, 60)],
+        Color=[((235, 225, 210), 0)],
+        BurstCount=(4, 4), SystemLifetime=1, VelocityDamping=(0.85, 0.9),
+        VelocityType="ORTHO", VelOrthoX=(0.5, 2.0), VelOrthoY=(-1.5, 1.5), VelOrthoZ=(0.0, 0.3),
+        VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=0.0),
+    # Shell and rocket hit: a quick fireball. UseCallersRadius in the FX list scales the volume to
+    # the weapon's damage radius.
+    "BuggyMissileExplosion": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_burst.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(18, 24), Size=(8.0, 12.0), SizeRate=(0.35, 0.5), SizeRateDamping=(0.93, 0.95),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 14), (0.0, 0.0, 24)],
+        BurstCount=(3, 3), SystemLifetime=10, VelocityDamping=(0.75, 0.8),
+        VelocityType="SPHERICAL", VelSpherical=(0.3, 0.8),
+        VolumeType="SPHERE", VolSphereRadius=0.0),
+    "BuggyMissileExplosionSmoke": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(90, 120), Size=(8.0, 12.0), SizeRate=(0.2, 0.3), SizeRateDamping=(0.99, 0.99),
+        Alpha=[(0.0, 0.0, 0), (0.8, 0.8, 6), (0.4, 0.4, 60), (0.0, 0.0, 120)],
+        Color=[((150, 144, 138), 0), ((205, 200, 194), 90)],
+        BurstCount=(3, 3), SystemLifetime=10, VelocityDamping=(0.8, 0.85),
+        DriftVelocity=(0.05, 0.03, 0.2),
+        VelocityType="SPHERICAL", VelSpherical=(0.3, 0.6),
+        VolumeType="SPHERE", VolSphereRadius=1.0),
+    # Badly damaged vehicles: several of these hang on the Smoke bones of most tanks.
+    "SmokeSmallContinuous01": system(
+        Priority="CONSTANT", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(50, 60), Size=(2.0, 3.0), SizeRate=(0.25, 0.4), SizeRateDamping=(0.97, 0.98),
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 4), (0.0, 0.0, 60)],
+        Color=[((120, 114, 108), 0), ((200, 196, 190), 45)],
+        BurstDelay=(1, 1), BurstCount=(1, 1), SystemLifetime=0, Gravity=0.05,
+        VelocityDamping=(0.98, 0.98), DriftVelocity=(0.08, 0.16, 0.01),
+        VelocityType="OUTWARD", VelOutward=(0.08, 0.1), VelOutwardOther=(0.0, 0.0),
+        VolumeType="SPHERE", VolSphereRadius=4.0),
+    # A vehicle dropping to badly damaged (FX_BattleMasterDamageTransition, most vehicles).
+    "BattleMasterTransitionExplosion": system(
+        Priority="UNIT_DAMAGE_FX", ParticleName="gxfx_burst.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(18, 24), Size=(8.0, 11.0), SizeRate=(0.3, 0.45), SizeRateDamping=(0.93, 0.95),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 14), (0.0, 0.0, 24)],
+        BurstCount=(3, 3), SystemLifetime=10, VelocityDamping=(0.75, 0.8),
+        VelocityType="SPHERICAL", VelSpherical=(0.3, 0.7),
+        VolumeType="SPHERE", VolSphereRadius=3.0),
+})
+
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {
     "FX_GenericTankDeathExplosion": {
@@ -317,6 +393,10 @@ def write_system(name, s):
     elif vt == "OUTWARD":
         out.append("  VelOutward = %s" % _pair(s["VelOutward"]))
         out.append("  VelOutwardOther = %s" % _pair(s["VelOutwardOther"]))
+    elif vt == "ORTHO":
+        # With OrientToObject in the FX list, X runs along the gun barrel.
+        for axis in ("X", "Y", "Z"):
+            out.append("  VelOrtho%s = %s" % (axis, _pair(s["VelOrtho" + axis])))
     out.append("  VolumeType = %s" % s["VolumeType"])
     if s["VolumeType"] == "SPHERE":
         out.append("  VolSphereRadius = %.2f" % s["VolSphereRadius"])

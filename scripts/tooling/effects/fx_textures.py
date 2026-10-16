@@ -285,6 +285,7 @@ BAKED = {
     "gxfx_smoke.tga": ("smoke", 8),
     "gxfx_flame.tga": ("fire", 8),
     "gxfx_dust.tga": ("dust", 8),
+    "gxfx_burst.tga": ("burst", 8),
 }
 
 
