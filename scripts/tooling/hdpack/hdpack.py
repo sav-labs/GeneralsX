@@ -143,15 +143,34 @@ def glob_escape(text):
     return re.sub(r"([\[\]*?])", r"[\1]", text)
 
 
+def is_own_content(big):
+    """GeneralsX's own content packs (GeneralsXContent.big and later ones)."""
+    return big.name.lower().startswith("generalsx")
+
+
 def collect_archives(game_dirs):
     """Later directories and later archives win, like the game's load order."""
     merged = {}
     for d in game_dirs:
         for big in sorted(Path(d).glob("*.big"), key=lambda p: p.name.lower()):
-            if big.name.startswith("!"):
+            if big.name.startswith("!") or is_own_content(big):
                 continue  # never read our own or other mods' output
             merged.update(read_big(big))
     return merged
+
+
+def own_content_textures(game_dirs):
+    """Texture stems shipped in GeneralsX content packs.
+
+    `!` packs load with mod priority and the loader prefers .dds over .tga, so an HD
+    copy of any of these names would hide the content pack's own (and newer) art.
+    """
+    names = set()
+    for d in game_dirs:
+        for big in Path(d).glob("*.big"):
+            if is_own_content(big):
+                names |= {Path(n).stem for n in read_big(big) if n.endswith(TEXTURE_EXTS)}
+    return names
 
 
 # ---------------------------------------------------------------- exclusions
@@ -394,7 +413,8 @@ def main():
 
     archives = collect_archives(args.game_dir)
     ui_textures = mapped_image_textures(archives, args.game_dir)
-    excluded = set(ui_textures)
+    content_textures = own_content_textures(args.game_dir)
+    excluded = set(ui_textures) | content_textures
     terrain_tiles = None
     if args.terrain:
         terrain_tiles, tree_textures = terrain_tile_textures(archives, args.game_dir)
@@ -506,7 +526,8 @@ def main():
         "skipped_unreadable": len(skipped["unreadable"]),
         "skipped_files": skipped,  # originals stay in the game as they are
         "ui_textures_excluded": len(ui_textures),
-        "tree_textures_excluded": len(excluded - ui_textures) if args.terrain else 0,
+        "tree_textures_excluded": len(excluded - ui_textures - content_textures) if args.terrain else 0,
+        "content_pack_textures_excluded": sorted(content_textures),
         "parts": {str(p): p.stat().st_size for p in paths},
         "total_bytes": sum(p.stat().st_size for p in paths),
         "seconds": round(time.monotonic() - started, 1),
