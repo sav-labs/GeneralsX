@@ -106,6 +106,10 @@ def build_models(w3d_dir, tex):
         for variant, texture in (("", "gxbld_wall.tga"), ("D", "gxbld_walld.tga"), ("E", "gxbld_walld.tga")):
             full = name + (f"_{variant}" if variant else "")
             models[full] = builder(full, texture, "gxteam.tga", "gxglass.tga", variant=variant)
+    for name, builder in gx_buildings.DOORS.items():
+        for variant, texture in (("", "gxbld_wall.tga"), ("D", "gxbld_walld.tga")):
+            full = name + (f"_{variant}" if variant else "")
+            models[full] = builder(full, texture, "gxteam.tga", "gxglass.tga", variant=variant)
     models["ABGXSTRATGUN"] = gx_buildings.strategy_gun("ABGXSTRATGUN", "gxbld_wall.tga", "gxteam.tga", "gxglass.tga")
     for name, model in models.items():
         with open(os.path.join(w3d_dir, name + ".w3d"), "wb") as f:
@@ -255,7 +259,7 @@ def main():
     if args.preview:
         os.makedirs(args.preview, exist_ok=True)
         for name, model in models.items():
-            if name.endswith("_D") or name.endswith("_E") or name == "ABGXSTRATGUN":
+            if name.endswith("_D") or name.endswith("_E") or name == "ABGXSTRATGUN" or name in gx_buildings.DOORS:
                 continue
             for yaw in (35, 150):
                 render(model, tex, size=(960, 720), yaw=yaw, pitch=26, background=(70, 78, 70, 255), hide=DEFAULT_HIDDEN).save(

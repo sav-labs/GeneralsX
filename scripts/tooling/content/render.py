@@ -15,9 +15,36 @@ def _bone_world(model, index):
     return np.array(model.bone_world(index))
 
 
+def _quat_matrix(q):
+    x, y, z, w = q
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def _pose(model, frame):
+    """Bone-to-world rotation and translation at an animation frame, applied the way WW3D does: the
+    keyed offset in the parent-relative pivot frame, then the keyed rotation."""
+    trans = {}
+    rot = {}
+    for bone, channel, values in model.tracks:
+        v = values[min(frame, len(values) - 1)]
+        if channel == 6:
+            rot[bone] = _quat_matrix(v)
+        else:
+            trans.setdefault(bone, np.zeros(3))[channel] = v[0]
+    poses = []
+    for i, bone in enumerate(model.bones):
+        r, t = (np.eye(3), np.zeros(3)) if bone.parent is None else poses[bone.parent]
+        t = t + r @ (np.array(bone.translation) + trans.get(i, np.zeros(3)))
+        poses.append((r @ rot.get(i, np.eye(3)), t))
+    return poses
+
+
 def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90, 230),
-           background=(0, 0, 0, 0), margin=0.08, light=(-0.4, 0.5, 0.75), supersample=2, hide=()):
-    """Orthographic three-quarter view. textures maps texture file name -> PIL image."""
+           background=(0, 0, 0, 0), margin=0.08, light=(-0.4, 0.5, 0.75), supersample=2, hide=(), frame=None):
+    """Orthographic three-quarter view. textures maps texture file name -> PIL image. frame poses the
+    model at that frame of its keyed motion (spins are not posed)."""
     w, h = size[0] * supersample, size[1] * supersample
     yaw_r, pitch_r = math.radians(yaw), math.radians(pitch)
     # Camera looks at the model from the front-left, above.
@@ -32,9 +59,13 @@ def render(model, textures, size=(512, 512), yaw=35.0, pitch=28.0, team=(40, 90,
     for bone, mesh in model.meshes:
         if mesh.attributes & 0x1000 or mesh.material.shader.dest_blend != 0 or mesh.name in hide:
             continue  # hidden (muzzle flash) or blended (rotor blur): not part of a still picture
-        offset = _bone_world(model, bone)
-        pos = np.array(mesh.positions) + offset
-        nrm = np.array(mesh.normals)
+        if frame is None:
+            pos = np.array(mesh.positions) + _bone_world(model, bone)
+            nrm = np.array(mesh.normals)
+        else:
+            r, t = _pose(model, frame)[bone]
+            pos = np.array(mesh.positions) @ r.T + t
+            nrm = np.array(mesh.normals) @ r.T
         uv = np.array(mesh.uvs)
         col = np.array(mesh.colors, float)[:, :3] / 255.0
         tex = np.asarray(textures[mesh.material.texture].convert("RGB"), float) / 255.0
