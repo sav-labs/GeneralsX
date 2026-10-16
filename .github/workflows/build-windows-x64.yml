@@ -251,6 +251,10 @@ jobs:
           DXVK_SATURATION=1.1 and DXVK_CONTRAST=1.05 (1 = unchanged) in the environment or in Play-FSR.cmd.
           Ambient occlusion adds soft shade where units and buildings meet the ground. AmbientOcclusion = no in
           Options.ini turns it off; DXVK_SSAO_STRENGTH=0.6 and DXVK_SSAO_RADIUS=12 tune it.
+          Close-up terrain: TerrainDetail = yes adds a fine detail texture to the ground (TerrainDetailStrength,
+          0 to 1, default 0.7), TerrainRelief = yes lights the tile surfaces with the map's sun (needs high
+          texture quality) and TerrainSoftBlend = yes gives the edges between terrain layers a natural shape.
+          Set all three to no for the original ground.
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
           into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and

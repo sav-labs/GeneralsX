@@ -61,13 +61,17 @@ ARTILLERY_OFFSETS = [(310.0, -350.0), (310.0, 350.0)]
 SANDBAG_U = 450.0
 
 
-def base_kit(objs, m, base, east, dozer, tag, pyrng, names, centre):
-    """Docks, an unmanned dozer, bunkers and artillery around one start position."""
-    sx = -1.0 if east else 1.0
+def base_kit(objs, m, base, east, dozer, tag, pyrng, names, centre, frame=None):
+    """Docks, an unmanned dozer, bunkers and artillery around one start position. The kit faces
+    east (or west when `east`), or along frame = ((fx, fy), (sx, sy)): forward and side unit
+    vectors."""
+    if frame is None:
+        frame = ((-1.0 if east else 1.0, 0.0), (0.0, 1.0))
+    (fx, fy), (sx, sy) = frame
     bx, by = base
 
     def at(du, dv):
-        return bx + sx * du, by + dv
+        return bx + fx * du + sx * dv, by + fy * du + sy * dv
 
     for i, off in enumerate(DOCK_OFFSETS):
         x, y = at(*off)
@@ -85,7 +89,8 @@ def base_kit(objs, m, base, east, dozer, tag, pyrng, names, centre):
     name = f"GXDozer{tag}"
     objs.add(dozer, x, y, m.facing(x, y, centre), indestructible=True, name=name, radius=30)
     names["dozers"].append(name)
-    front = 0.0 if not east else math.pi
+    front = math.atan2(fy, fx)
+    along = math.atan2(sy, sx)
     for v in BUNKER_V:
         x, y = at(BUNKER_U, v)
         objs.add("CivilianBunker01", x, y, front, owner=mapgen.NEUTRAL_TEAM, indestructible=True, radius=45)
@@ -98,7 +103,7 @@ def base_kit(objs, m, base, east, dozer, tag, pyrng, names, centre):
     v = -320.0
     while v <= 320.0:
         if abs(v) > 50 and all(abs(v - b) > 22 for b in BUNKER_V):
-            objs.add("SandBagWall01", *at(SANDBAG_U, v), math.pi / 2, owner=mapgen.NEUTRAL_TEAM)
+            objs.add("SandBagWall01", *at(SANDBAG_U, v), along, owner=mapgen.NEUTRAL_TEAM)
         v += 40.0
 
 

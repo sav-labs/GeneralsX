@@ -19,6 +19,8 @@ CLASS_COLOURS = {
     "SnowType2": (226, 230, 234), "GrassMediumType15": (96, 112, 64), "CliffMediumType16": (118, 108, 96),
     "SandLargeType3Light": (204, 184, 140), "SandLargeType4": (190, 164, 118), "SandMediumType13d": (170, 140, 100),
     "CliffLargeType8": (150, 112, 80), "ConcreteType1": (160, 156, 148),
+    "SnowType3": (214, 220, 228), "ConcreteType2": (150, 152, 154), "ConcreteType4": (136, 138, 140),
+    "AsphaltType2": (74, 76, 80),
 }
 WATER = np.array((52, 92, 120), dtype=np.float64)
 
@@ -92,20 +94,24 @@ def _icons(objs):
     return out
 
 
-def top_view(t, objs, size=1200, legend=True, starts=True):
+def top_view(t, objs, size=1200, legend=True, starts=True, stretch=False):
+    """Top-down picture `size` pixels wide; north up. stretch=True squeezes the map into a square
+    the way the skirmish menu draws its preview."""
     rgb = colour_map(t)[::-1]  # north up
-    img = Image.fromarray(rgb.astype(np.uint8)).resize((size, size), Image.LANCZOS)
+    height = size if stretch else int(round(size * t.height / t.width))
+    img = Image.fromarray(rgb.astype(np.uint8)).resize((size, height), Image.LANCZOS)
     d = ImageDraw.Draw(img)
-    total = t.width * mapgen.CELL
-    s = size / total
+    sx = size / (t.width * mapgen.CELL)
+    sy = height / (t.height * mapgen.CELL)
+    s = sx
     b = t.border * mapgen.CELL
 
     def px(x, y):
-        return (x + b) * s, size - (y + b) * s
+        return (x + b) * sx, height - (y + b) * sy
 
     # Playable border.
     x0, y0 = px(0, 0)
-    x1, y1 = px(total - 2 * b, total - 2 * b)
+    x1, y1 = px((t.width - 2 * t.border) * mapgen.CELL, (t.height - 2 * t.border) * mapgen.CELL)
     d.rectangle([x0, y1, x1, y0], outline=(255, 255, 255, 120), width=2)
     # Roads and bridges.
     pending = None
@@ -172,7 +178,7 @@ def _with_legend(img):
 
 def tga(t, objs, path):
     """The 128x128 map preview the skirmish menu shows, 32-bit and bottom-up like WorldBuilder's."""
-    img = top_view(t, objs, size=128, legend=False, starts=False).convert("RGBA")
+    img = top_view(t, objs, size=128, legend=False, starts=False, stretch=True).convert("RGBA")
     _write_tga(img, path)
 
 
@@ -187,13 +193,13 @@ def _write_tga(img, path):
 def perspective(t, objs, yaw_deg, pitch_deg=38, size=(1600, 1000), target=None, distance=None, fov=50, step=2):
     """A painter's-algorithm render of the height field as quads, with objects as boxes."""
     rgb = colour_map(t)
-    total = t.width * mapgen.CELL
     b = t.border * mapgen.CELL
+    play_w, play_h = (t.width - 2 * t.border) * mapgen.CELL, (t.height - 2 * t.border) * mapgen.CELL
     z = t.h * mapgen.HEIGHT_SCALE
     zw = np.maximum(z, t.water_z)
     wx, wy = t.wx, t.wy
-    tx, ty = target or ((total - 2 * b) / 2, (total - 2 * b) / 2)
-    dist = distance or total * 0.95
+    tx, ty = target or (play_w / 2, play_h / 2)
+    dist = distance or (max(play_w, play_h) + 2 * b) * 0.95
     yaw, pitch = math.radians(yaw_deg), math.radians(pitch_deg)
     eye = np.array([tx - dist * math.cos(pitch) * math.cos(yaw), ty - dist * math.cos(pitch) * math.sin(yaw),
                     dist * math.sin(pitch)])

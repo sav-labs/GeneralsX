@@ -17,10 +17,11 @@ sys.path.insert(0, HERE)
 
 import preview  # noqa: E402
 import desert_oasis  # noqa: E402
+import frozen_divide  # noqa: E402
 import mountain_pass  # noqa: E402
 import twin_rivers  # noqa: E402
 
-LAYOUTS = [twin_rivers, mountain_pass, desert_oasis]
+LAYOUTS = [twin_rivers, mountain_pass, desert_oasis, frozen_divide]
 
 
 def main():
