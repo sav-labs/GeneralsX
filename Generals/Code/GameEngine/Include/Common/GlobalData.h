@@ -454,9 +454,6 @@ public:
 	Real m_terrainDetailStrength;		///< TerrainDetailStrength: 0..1
 	Bool m_terrainRelief;				///< TerrainRelief: sun-lit relief from the tile textures
 	Bool m_terrainSoftBlend;			///< TerrainSoftBlend: noise-shaped edges between terrain textures
-	// GeneralsX @feature Claude 16/10/2026 Normal and gloss maps for unit and building models (Options.ini).
-	Bool m_modelNormalMaps;				///< ModelNormalMaps: use <texture>_n maps on models
-	Real m_modelSpecular;				///< ModelSpecular: 0..2 highlight strength from the gloss
 
 	Bool m_languageFilterPref;        ///< Bool if user wants to filter language
 	Bool m_loadScreenDemo;						///< Bool if true, run the loadscreen demo movie

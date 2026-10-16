@@ -1241,34 +1241,6 @@ Bool OptionPreferences::getTerrainSoftBlendEnabled() const
 	return stricmp(it->second.str(), "no") != 0;
 }
 
-// GeneralsX @feature Claude 16/10/2026 Options.ini ModelNormalMaps uses <texture>_n.dds/.tga normal and gloss
-// maps on unit and building models that have them. On unless set to "no".
-Bool OptionPreferences::getModelNormalMapsEnabled() const
-{
-	OptionPreferences::const_iterator it = find("ModelNormalMaps");
-	if (it == end())
-		return TRUE;
-
-	return stricmp(it->second.str(), "no") != 0;
-}
-
-// GeneralsX @feature Claude 16/10/2026 Options.ini ModelSpecular scales the highlight from the gloss of the
-// model normal maps: 0 none, 1 default, 2 strongest.
-Real OptionPreferences::getModelSpecular() const
-{
-	OptionPreferences::const_iterator it = find("ModelSpecular");
-	if (it == end())
-		return 1.0f;
-
-	Real strength = (Real)atof(it->second.str());
-	if (strength < 0.0f)
-		strength = 0.0f;
-	if (strength > 2.0f)
-		strength = 2.0f;
-
-	return strength;
-}
-
 // GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
 // on or off: soft darkening where units and buildings meet the ground and in creases. On unless set to "no".
 Bool OptionPreferences::getAmbientOcclusionEnabled() const

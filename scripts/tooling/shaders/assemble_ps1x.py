@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # GeneralsX @feature Claude 16/10/2026 Minimal Direct3D pixel shader 1.x assembler.
-# GeneralsX @feature Claude 16/10/2026 Also assembles vs.1.1 vertex shaders (model normal maps).
 #
 # The 64-bit and non-Windows builds have no D3DXAssembleShader (CompatLib stubs it),
 # so shaders that are not shipped as .pso files are embedded as token arrays.
@@ -15,10 +14,6 @@
 # mul, mad, lrp, dp3, dp4, cnd, cmp, nop, phase; instruction modifiers _x2 _x4 _x8
 # _d2 _d4 _d8 _sat; co-issue prefix "+"; destination write masks; source negate,
 # 1-x complement, _bias, _bx2, _x2 and single channel or full swizzles.
-#
-# vs.1.1: mov, add, mul, mad, rcp, rsq, dp3, dp4, min, max, slt, sge; registers r, v, c,
-# oPos, oFog, oPts, oD0-1, oT0-7; write masks, negate and 1 to 4 channel swizzles (a short
-# swizzle repeats its last channel, as in the D3D assembler).
 
 import argparse
 import re
@@ -31,15 +26,6 @@ OPCODES = {
     "texcrd": (64, 1), "texcoord": (64, 0), "tex": (66, 0), "texld": (66, 1),
     "cnd": (80, 3), "cmp": (88, 3), "phase": (0xFFFD, -1),
 }
-
-VS_OPCODES = {
-    "mov": (1, 1), "add": (2, 2), "mad": (4, 3), "mul": (5, 2), "rcp": (6, 1),
-    "rsq": (7, 1), "dp3": (8, 2), "dp4": (9, 2), "min": (10, 2), "max": (11, 2),
-    "slt": (12, 2), "sge": (13, 2),
-}
-
-# vertex shader output registers: name -> (register type, number)
-VS_OUTPUTS = {"opos": (4, 0), "ofog": (4, 1), "opts": (4, 2)}
 
 REGTYPES = {"r": 0, "v": 1, "c": 2, "t": 3}
 CHANNELS = {"r": 0, "g": 1, "b": 2, "a": 3, "x": 0, "y": 1, "z": 2, "w": 3}
@@ -55,19 +41,11 @@ class AsmError(Exception):
 
 
 def reg_bits(text):
-    low = text.lower()
     m = re.fullmatch(r"([rvct])(\d+)", text)
-    if low in VS_OUTPUTS:
-        rtype, num = VS_OUTPUTS[low]
-    elif re.fullmatch(r"od[01]", low):
-        rtype, num = 5, int(low[2])
-    elif re.fullmatch(r"ot[0-7]", low):
-        rtype, num = 6, int(low[2])
-    elif m:
-        rtype = REGTYPES[m.group(1)]
-        num = int(m.group(2))
-    else:
+    if not m:
         raise AsmError(f"bad register '{text}'")
+    rtype = REGTYPES[m.group(1)]
+    num = int(m.group(2))
     return 0x80000000 | ((rtype & 7) << 28) | ((rtype & 0x18) << 8) | (num & 0x7FF)
 
 
@@ -106,9 +84,10 @@ def src_token(text):
     tok = reg_bits(reg)
     if swz:
         chans = [CHANNELS[c] for c in swz]
-        if not 1 <= len(chans) <= 4:
+        if len(chans) == 1:
+            chans = chans * 4
+        elif len(chans) != 4:
             raise AsmError(f"unsupported swizzle '.{swz}'")
-        chans = chans + [chans[-1]] * (4 - len(chans))
     else:
         chans = [0, 1, 2, 3]
     tok |= (chans[0] | chans[1] << 2 | chans[2] << 4 | chans[3] << 6) << 16
@@ -135,34 +114,11 @@ def assemble(source):
             continue
         try:
             if version is None:
-                if line == "vs.1.1":
-                    version = "vs"
-                    tokens.append(0xFFFE0101)
-                    continue
                 m = re.fullmatch(r"ps\.1\.([1-4])", line)
                 if not m:
-                    raise AsmError("first statement must be ps.1.x or vs.1.1")
+                    raise AsmError("first statement must be ps.1.x")
                 version = int(m.group(1))
                 tokens.append(0xFFFF0100 | version)
-                continue
-            if version == "vs":
-                parts = line.split(None, 1)
-                name = parts[0].lower()
-                args = [a.strip() for a in parts[1].split(",")] if len(parts) > 1 else []
-                if name not in VS_OPCODES:
-                    raise AsmError(f"unknown vs.1.1 instruction '{name}'")
-                opcode, nsrc = VS_OPCODES[name]
-                if len(args) != 1 + nsrc:
-                    raise AsmError(f"{name} takes {1 + nsrc} operands")
-                consts = {a.lstrip("-").split(".")[0] for a in args[1:] if a.lstrip("-").startswith("c")}
-                if len(consts) > 1:
-                    raise AsmError("vs.1.1 reads at most one constant register per instruction")
-                tokens.append(opcode)
-                tokens.append(dest_token(args[0], []))
-                for src in args[1:]:
-                    if src.lstrip("-").startswith("1-") or "_" in src:
-                        raise AsmError(f"vs.1.1 sources only take negate: '{src}'")
-                    tokens.append(src_token(src))
                 continue
             coissue = line.startswith("+")
             if coissue:
@@ -203,7 +159,7 @@ def assemble(source):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("source")
-    ap.add_argument("--name", default="kShaderTokens")
+    ap.add_argument("--name", default="kPixelShaderTokens")
     ap.add_argument("--bin")
     args = ap.parse_args()
     with open(args.source, encoding="utf-8") as fh:
