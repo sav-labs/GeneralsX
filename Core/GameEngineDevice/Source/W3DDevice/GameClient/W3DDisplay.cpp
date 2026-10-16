@@ -89,6 +89,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DScreenshot.h"
+#include "W3DDevice/GameClient/W3DCapture.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WWMath/wwmath.h"
 #include "WWLib/registry.h"
@@ -2072,6 +2073,8 @@ void W3DDisplay::draw()
 
 	// TheSuperHackers @feature bobtista 10/07/2026 Show messages for screenshots finished by the screenshot thread.
 	W3D_UpdateScreenshotMessages();
+	// GeneralsX @feature Claude 15/10/2026 Follow the bug report video clip and report when it is saved.
+	W3D_UpdateVideoCapture();
 
 	updateAverageFPS();
 	if (TheGlobalData->m_enableDynamicLOD && TheGameLogic->getShowDynamicLOD())
@@ -3326,6 +3329,12 @@ void W3DDisplay::toggleMovieCapture()
 void W3DDisplay::takeScreenShot(ScreenshotFormat format, Int jpegQuality)
 {
 	W3D_TakeCompressedScreenshot(format, jpegQuality);
+}
+
+// GeneralsX @feature Claude 15/10/2026 Start or stop a bug report video clip, recorded by DXVK.
+void W3DDisplay::toggleVideoCapture()
+{
+	W3D_ToggleVideoCapture();
 }
 
 

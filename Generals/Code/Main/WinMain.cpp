@@ -66,6 +66,9 @@
 #include "resource.h"
 #ifdef RTS_ENABLE_CRASHDUMP
 #include "Common/MiniDumper.h"
+#ifdef RTS_HAS_FFMPEG
+#include "VideoDevice/FFmpeg/FFmpegCaptureEncoder.h"
+#endif
 #endif
 
 
@@ -871,6 +874,16 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 		// initialize the memory manager early
 		initMemoryManager();
+
+#ifdef RTS_HAS_FFMPEG
+		// GeneralsX @feature Claude 15/10/2026 Started by DXVK as the encoder of a bug report video clip:
+		// encode standard input to the file named on the command line and exit before any game initialization.
+		{
+			int encoderExitCode = 0;
+			if (FFmpegCaptureEncoder_RunFromCommandLine(0, nullptr, encoderExitCode))
+				return encoderExitCode;
+		}
+#endif
 
 		CommandLine::parseCommandLineForStartup();
 

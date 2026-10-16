@@ -38,6 +38,8 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "MiniAudioDevice/MiniAudioManager.h"
 #include "MiniAudioDevice/MiniAudioStream.h"
+// GeneralsX @bugfix Claude 15/10/2026 Release-build audio diagnostics.
+#include "AudioDevice/AudioDiagnostics.h"
 
 #include "Common/AudioAffect.h"
 #include "Common/AudioHandleSpecialValues.h"
@@ -85,7 +87,9 @@ static ma_result vfsFileSeek(ma_vfs *pVFS, ma_vfs_file file, ma_int64 offset, ma
 
 //-------------------------------------------------------------------------------------------------
 MiniAudioManager::MiniAudioManager() :
+	m_playbackDevices(NULL),
 	m_playbackDeviceCount(0),
+	m_deviceOpened(false),
 	m_selectedPlaybackDevice(PROVIDER_ERROR),
 	m_selectedSpeakerType(0),
 	m_lastSelectedPlaybackDevice(PROVIDER_ERROR),
@@ -354,6 +358,10 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	File *file = TheFileSystem->openFile(fileToPlay.str());
 	if (!file) {
 		DEBUG_LOG(("MiniAudio: Failed to open file: %s\n", fileToPlay.str()));
+		// GeneralsX @bugfix Claude 15/10/2026 Report missing sound files in release builds. Events without a
+		// sound file (an empty name) are expected and stay silent, as the original Miles code treated them.
+		if (!fileToPlay.isEmpty())
+			AudioDiagnostics::noteFileFailure("file not found in the file system or .big archives", fileToPlay.str());
 		releasePlayingAudio(audio);
 		return;
 	}
@@ -361,6 +369,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	FFmpegFile *ffmpegFile = NEW FFmpegFile();
 	if (!ffmpegFile->open(file)) {
 		DEBUG_LOG(("MiniAudio: Failed to open FFmpeg file: %s\n", fileToPlay.str()));
+		AudioDiagnostics::noteFileFailure("FFmpeg could not open the file", fileToPlay.str());
 		delete ffmpegFile;
 		releasePlayingAudio(audio);
 		return;
@@ -407,6 +416,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 
 	if (pcmData.empty() || sampleRate == 0 || bytesPerSample == 0) {
 		DEBUG_LOG(("MiniAudio: No audio data decoded from: %s\n", fileToPlay.str()));
+		AudioDiagnostics::noteFileFailure("FFmpeg decoded no audio", fileToPlay.str());
 		releasePlayingAudio(audio);
 		return;
 	}
@@ -419,6 +429,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 
 	if (maFmt == ma_format_unknown) {
 		DEBUG_LOG(("MiniAudio: Unsupported format (%d bps) for: %s\n", bytesPerSample, fileToPlay.str()));
+		AudioDiagnostics::noteFileFailure("unsupported sample format", fileToPlay.str());
 		releasePlayingAudio(audio);
 		return;
 	}
@@ -433,6 +444,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	ma_result result = ma_audio_buffer_init_copy(&abConfig, audioBuffer);
 	if (result != MA_SUCCESS) {
 		DEBUG_LOG(("MiniAudio: Failed to create audio buffer: %d for '%s'\n", result, fileToPlay.str()));
+		AudioDiagnostics::noteFileFailure("ma_audio_buffer_init_copy failed", fileToPlay.str());
 		free(audioBuffer);
 		releasePlayingAudio(audio);
 		return;
@@ -443,12 +455,15 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	result = ma_sound_init_from_data_source(&m_engine, audioBuffer, flags, groupToUse, sound);
 	if (result != MA_SUCCESS) {
 		DEBUG_LOG(("MiniAudio: Failed to init sound: %d for '%s'\n", result, fileToPlay.str()));
+		AudioDiagnostics::noteFileFailure("ma_sound_init_from_data_source failed", fileToPlay.str());
 		ma_audio_buffer_uninit(audioBuffer);
 		free(audioBuffer);
 		free(sound);
 		releasePlayingAudio(audio);
 		return;
 	}
+
+	AudioDiagnostics::noteFilePlayed(fileToPlay.str(), sampleRate, channels);
 
 	// Assign to PlayingAudio before any early returns below
 	audio->m_sound = sound;
@@ -775,9 +790,62 @@ AsciiString MiniAudioManager::getMusicTrackName(void) const
 }
 
 //-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 15/10/2026 Describe the COM state miniaudio found on the calling thread (Windows only).
+static const char *describeCoInitializeResult(const ma_context &context)
+{
+#if defined(MA_WIN32) && !defined(MA_XBOX)
+	switch ((unsigned long)context.win32.CoInitializeResult)
+	{
+	case 0x00000000UL: return "S_OK (COM initialized as MTA)";
+	case 0x00000001UL: return "S_FALSE (COM was already initialized as MTA)";
+	case 0x80010106UL: return "RPC_E_CHANGED_MODE (thread is already an STA, e.g. from OleInitialize)";
+	default: return "unexpected HRESULT";
+	}
+#else
+	(void)context;
+	return "n/a";
+#endif
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 15/10/2026 Forward miniaudio's own log to the audio diagnostics.
+// miniaudio reports why a backend or device fails (with the HRESULT on Windows) only through its log,
+// which used to go to DEBUG_LOG and so was compiled out of release builds.
+static void onMiniAudioLog(void *pUserData, ma_uint32 logLevel, const char *message)
+{
+	(void)pUserData;
+	if (logLevel > MA_LOG_LEVEL_INFO || message == NULL) {
+		return;
+	}
+	char line[512];
+	snprintf(line, sizeof(line), "%s", message);
+	size_t length = strlen(line);
+	while (length > 0 && (line[length - 1] == '\n' || line[length - 1] == '\r')) {
+		line[--length] = '\0';
+	}
+	AudioDiagnostics::print("miniaudio %s: %s", ma_log_level_to_string(logLevel), line);
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 15/10/2026 Open the output device on a real backend and report every step.
+// The engine used to be created without a context, so ma_engine_init() picked its own backend through
+// ma_device_init_ex() with miniaudio's full default list. That list ends with the Null backend, so when
+// every real backend failed to open the default output (as on the Windows x64 build, where the separate
+// enumeration context found 0 playback devices) the engine silently "succeeded" on the Null backend and
+// no sound was ever heard, while openDevice() reported the backend as loaded. Now each real backend is
+// tried in miniaudio's priority order (WASAPI, DirectSound, WinMM on Windows; CoreAudio on macOS;
+// PulseAudio, ALSA, JACK on Linux), the engine is created on that same context with the default device
+// (a NULL device id, also when enumeration returned no devices), and the Null backend is never accepted.
+// If no real backend can open an output, audio is turned off and the log says so.
 void MiniAudioManager::openDevice(void)
 {
+	AudioDiagnostics::print("Audio backend: MiniAudio %s", ma_version_string());
+	AudioDiagnostics::print("GlobalData: audioOn=%d musicOn=%d soundsOn=%d sounds3DOn=%d speechOn=%d headless=%d",
+		(Int)TheGlobalData->m_audioOn, (Int)TheGlobalData->m_musicOn, (Int)TheGlobalData->m_soundsOn,
+		(Int)TheGlobalData->m_sounds3DOn, (Int)TheGlobalData->m_speechOn, (Int)TheGlobalData->m_headless);
+
 	if (!TheGlobalData->m_audioOn) {
+		AudioDiagnostics::print("Audio is off in GlobalData (AudioOn = no or -noaudio); no device opened");
 		return;
 	}
 
@@ -797,47 +865,78 @@ void MiniAudioManager::openDevice(void)
 	resourceManagerConfig.pVFS = (ma_vfs *)&vfs;
 	result = ma_resource_manager_init(&resourceManagerConfig, &m_resourceManager);
 	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to initialize resource manager: %d\n", result));
+		AudioDiagnostics::print("ma_resource_manager_init failed: %d (%s); audio disabled", (Int)result, ma_result_description(result));
 		setOn(false, AudioAffect_All);
 		return;
 	}
 
 	result = ma_log_init(NULL, &m_log);
 	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to initialize log: %d\n", result));
+		AudioDiagnostics::print("ma_log_init failed: %d (%s); audio disabled", (Int)result, ma_result_description(result));
+		ma_resource_manager_uninit(&m_resourceManager);
 		setOn(false, AudioAffect_All);
 		return;
 	}
+	ma_log_register_callback(&m_log, ma_log_callback_init(onMiniAudioLog, NULL));
 
-	auto on_log = [](void *pUserData, ma_uint32 logLevel, const char *message) {
-		DEBUG_LOG(("miniaudio [%s]: %s", ma_log_level_to_string(logLevel), message));
-	};
-	ma_log_register_callback(&m_log, ma_log_callback_init(on_log, NULL));
-
-	contextConfig = ma_context_config_init();
-	contextConfig.pLog = &m_log;
-
-	result = ma_context_init(NULL, 0, &contextConfig, &m_context);
-	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to initialize context: %d\n", result));
-		setOn(false, AudioAffect_All);
-		return;
+	ma_backend backends[MA_BACKEND_COUNT];
+	size_t backendCount = 0;
+	if (ma_get_enabled_backends(backends, MA_BACKEND_COUNT, &backendCount) != MA_SUCCESS) {
+		backendCount = 0;
 	}
 
-	result = ma_context_get_devices(&m_context, &m_playbackDevices, &m_playbackDeviceCount, NULL, NULL);
-	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to enumerate devices: %d\n", result));
-		ma_context_uninit(&m_context);
-		setOn(false, AudioAffect_All);
-		return;
+	Bool opened = false;
+	for (size_t i = 0; i < backendCount && !opened; ++i) {
+		const ma_backend backend = backends[i];
+		if (backend == ma_backend_null || backend == ma_backend_custom) {
+			continue;
+		}
+		const char *backendName = ma_get_backend_name(backend);
+
+		contextConfig = ma_context_config_init();
+		contextConfig.pLog = &m_log;
+		result = ma_context_init(&backend, 1, &contextConfig, &m_context);
+		if (result != MA_SUCCESS) {
+			AudioDiagnostics::print("Backend %s: ma_context_init failed: %d (%s)", backendName, (Int)result, ma_result_description(result));
+			continue;
+		}
+		AudioDiagnostics::print("Backend %s: context ready, COM: %s", backendName, describeCoInitializeResult(m_context));
+
+		result = ma_context_get_devices(&m_context, &m_playbackDevices, &m_playbackDeviceCount, NULL, NULL);
+		if (result != MA_SUCCESS) {
+			AudioDiagnostics::print("Backend %s: device enumeration failed: %d (%s)", backendName, (Int)result, ma_result_description(result));
+			m_playbackDevices = NULL;
+			m_playbackDeviceCount = 0;
+		}
+		AudioDiagnostics::print("Backend %s: %u playback device(s) enumerated", backendName, (UnsignedInt)m_playbackDeviceCount);
+		for (ma_uint32 d = 0; d < m_playbackDeviceCount; ++d) {
+			AudioDiagnostics::print("  playback device %u: '%s'%s", (UnsignedInt)d, m_playbackDevices[d].name,
+				m_playbackDevices[d].isDefault ? " (default)" : "");
+		}
+
+		engineConfig = ma_engine_config_init();
+		engineConfig.pResourceManager = &m_resourceManager;
+		engineConfig.pContext = &m_context;
+		engineConfig.pLog = &m_log;
+		engineConfig.pPlaybackDeviceID = NULL; // The system default output, also when enumeration found none.
+
+		result = ma_engine_init(&engineConfig, &m_engine);
+		if (result != MA_SUCCESS) {
+			AudioDiagnostics::print("Backend %s: opening the default playback device failed: %d (%s)",
+				backendName, (Int)result, ma_result_description(result));
+			m_playbackDevices = NULL;
+			m_playbackDeviceCount = 0;
+			ma_context_uninit(&m_context);
+			continue;
+		}
+
+		opened = true;
 	}
 
-	engineConfig = ma_engine_config_init();
-	engineConfig.pResourceManager = &m_resourceManager;
-
-	result = ma_engine_init(&engineConfig, &m_engine);
-	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to initialize engine: %d\n", result));
+	if (!opened) {
+		AudioDiagnostics::print("No audio backend could open an output device; audio disabled");
+		ma_log_uninit(&m_log);
+		ma_resource_manager_uninit(&m_resourceManager);
 		setOn(false, AudioAffect_All);
 		return;
 	}
@@ -846,18 +945,32 @@ void MiniAudioManager::openDevice(void)
 	ma_sound_group_init(&m_engine, 0, NULL, &m_soundGroup);
 	ma_sound_group_init(&m_engine, 0, NULL, &m_sound3DGroup);
 	ma_sound_group_init(&m_engine, 0, NULL, &m_speechGroup);
+	m_deviceOpened = true;
 
-	fprintf(stderr, "AUDIO: MiniAudio backend loaded - version %s, device: %s, playback devices: %d\n",
-		ma_version_string(),
-		m_playbackDeviceCount > 0 ? m_playbackDevices[0].name : "default",
-		m_playbackDeviceCount);
+	const ma_device *device = ma_engine_get_device(&m_engine);
+	AudioDiagnostics::print("Output opened: backend %s, device '%s', %u Hz, %u channels",
+		ma_get_backend_name(m_context.backend), device ? device->playback.name : "unknown",
+		(UnsignedInt)ma_engine_get_sample_rate(&m_engine), (UnsignedInt)ma_engine_get_channels(&m_engine));
 
 	TheAudio->refreshCachedVariables();
+
+	AudioDiagnostics::print("Volumes: master %.2f, music %.2f, sound %.2f, 3D sound %.2f, speech %.2f",
+		ma_node_get_output_bus_volume(ma_engine_get_endpoint(&m_engine), 0),
+		m_musicVolume, m_soundVolume, m_sound3DVolume, m_speechVolume);
+	AudioDiagnostics::print("Enabled: music %d, sound %d, 3D sound %d, speech %d",
+		(Int)isOn(AudioAffect_Music), (Int)isOn(AudioAffect_Sound), (Int)isOn(AudioAffect_Sound3D), (Int)isOn(AudioAffect_Speech));
 }
 
 //-------------------------------------------------------------------------------------------------
 void MiniAudioManager::closeDevice(void)
 {
+	// GeneralsX @bugfix Claude 15/10/2026 Only tear down what openDevice() created; it can return early.
+	if (!m_deviceOpened) {
+		return;
+	}
+	m_deviceOpened = false;
+	AudioDiagnostics::logSummary("shutdown");
+
 	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
 	ScopedFPUGuard fpuGuard;
 	// Stop all audio first to prevent use-after-free in audio callbacks

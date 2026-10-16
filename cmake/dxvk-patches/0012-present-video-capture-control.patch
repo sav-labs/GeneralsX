@@ -1,0 +1,190 @@
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -33,6 +33,46 @@
+ namespace dxvk {
+ 
+   /**
++   * \brief Reads a process environment variable of any length
++   *
++   * env::getEnvVar is limited to MAX_PATH characters on Windows, which
++   * is too short for a video capture command line.
++   */
++  static std::string getVideoControlEnvVar(const char* name) {
++#ifdef _WIN32
++    std::wstring wname = str::tows(name);
++    DWORD size = ::GetEnvironmentVariableW(wname.c_str(), nullptr, 0);
++
++    if (!size)
++      return std::string();
++
++    std::vector<WCHAR> value(size + 1u);
++    DWORD len = ::GetEnvironmentVariableW(wname.c_str(), value.data(), size + 1u);
++
++    if (!len || len > size)
++      return std::string();
++
++    return str::fromws(value.data());
++#else
++    const char* value = std::getenv(name);
++    return value ? value : "";
++#endif
++  }
++
++
++  /**
++   * \brief Sets a process environment variable
++   */
++  static void setVideoControlEnvVar(const char* name, const std::string& value) {
++#ifdef _WIN32
++    ::SetEnvironmentVariableW(str::tows(name).c_str(), str::tows(value.c_str()).c_str());
++#else
++    ::setenv(name, value.c_str(), 1);
++#endif
++  }
++
++
++  /**
+    * \brief Video capture writer
+    *
+    * Writes captured BGRA frames on a dedicated thread, so that a slow
+@@ -634,6 +674,18 @@
+       }
+     }
+ 
++    // Without DXVK_CAPTURE_VIDEO, the application can start and stop any
++    // number of clips at run time through the process environment variable
++    // DXVK_CAPTURE_VIDEO_CONTROL. A value of the form <height>|<target>
++    // starts a clip with the given DXVK_CAPTURE_VIDEO target, scaled down
++    // to at most <height> lines; an empty value stops it. Clips are limited
++    // to 30 minutes. DXVK reports back through DXVK_CAPTURE_VIDEO_STATE:
++    // recording|<target> once the clip is accepted and stopped|<target>
++    // once its writer has finished, including when the swap chain goes away
++    // or the writer fails. The variables are process environment variables,
++    // so that an application with its own C runtime can use them.
++    m_videoControl = m_videoTarget.empty();
++
+     // DXVK_POST=1 adds bloom and a light colour grade to the final pass.
+     // DXVK_BLOOM is the bloom strength (0 disables it), DXVK_BLOOM_THRESHOLD
+     // the brightness where bloom starts, DXVK_SATURATION and DXVK_CONTRAST
+@@ -738,6 +790,9 @@
+     if (m_cursorBuffer)
+       uploadCursorImage(ctx);
+ 
++    if (m_videoControl)
++      pollVideoControl();
++
+     auto presentTime = high_resolution_clock::now();
+     bool videoActive = updateVideoState(presentTime);
+ 
+@@ -1965,11 +2020,17 @@
+     // Only record one clip per process, even if the swap chain is recreated
+     static std::atomic<bool> s_videoStarted = { false };
+ 
+-    if (s_videoStarted.exchange(true)) {
++    if (!m_videoControl && s_videoStarted.exchange(true)) {
+       m_videoState = VideoState::Finished;
+       return;
+     }
+ 
++    // Clips started at run time are sized by their maximum height
++    if (m_videoControl && presentExtent.height) {
++      m_videoScale = uint32_t(std::clamp<uint64_t>(
++        uint64_t(m_videoMaxHeight) * 100u / presentExtent.height, 10u, 100u));
++    }
++
+     // Even dimensions keep 4:2:0 encoders happy
+     VkExtent3D extent = {
+       std::max(16u, presentExtent.width  * m_videoScale / 100u) & ~1u,
+@@ -2233,6 +2294,9 @@
+ 
+   void DxvkSwapchainBlitter::finishVideo(
+           bool                        drain) {
++    bool active = m_videoState == VideoState::Waiting
++               || m_videoState == VideoState::Recording;
++
+     if (m_videoWriter) {
+       if (drain)
+         drainVideoFrames(VideoSlotCount);
+@@ -2255,6 +2319,60 @@
+     m_videoFullView = nullptr;
+     m_videoPending = 0u;
+     m_videoState = VideoState::Finished;
++
++    if (m_videoControl) {
++      m_videoState = VideoState::Disabled;
++
++      if (active) {
++        Logger::info(str::format("Swap chain: video clip finished: ", m_videoTarget));
++        setVideoControlEnvVar("DXVK_CAPTURE_VIDEO_STATE", "stopped|" + m_videoTarget);
++      }
++    }
++  }
++
++
++  void DxvkSwapchainBlitter::pollVideoControl() {
++    // Every swap chain sees the same variable, so each value is only acted
++    // on once per process. A swap chain created while a clip is recording
++    // does not restart it; the clip ended with the old swap chain.
++    static dxvk::mutex s_controlMutex;
++    static std::string s_controlHandled;
++
++    std::string control = getVideoControlEnvVar("DXVK_CAPTURE_VIDEO_CONTROL");
++
++    { std::lock_guard lock(s_controlMutex);
++
++      if (control == s_controlHandled)
++        return;
++
++      s_controlHandled = control;
++    }
++
++    if (m_videoState == VideoState::Waiting || m_videoState == VideoState::Recording)
++      finishVideo(true);
++
++    if (control.empty())
++      return;
++
++    size_t separator = control.find('|');
++
++    if (separator == std::string::npos || separator + 1u >= control.size()) {
++      Logger::err(str::format("Swap chain: invalid DXVK_CAPTURE_VIDEO_CONTROL: ", control));
++      setVideoControlEnvVar("DXVK_CAPTURE_VIDEO_STATE", "invalid|" + control);
++      return;
++    }
++
++    m_videoMaxHeight = uint32_t(std::clamp(std::strtol(control.c_str(), nullptr, 10), 120l, 4320l));
++    m_videoTarget = control.substr(separator + 1u);
++    m_videoEvent.clear();
++    m_videoStart = std::chrono::microseconds(0);
++    m_videoLength = std::chrono::minutes(30);
++    m_videoFirstPresent = high_resolution_clock::time_point();
++    m_videoState = VideoState::Waiting;
++
++    Logger::info(str::format("Swap chain: video clip of up to ", m_videoMaxHeight,
++      " lines requested: ", m_videoTarget));
++    setVideoControlEnvVar("DXVK_CAPTURE_VIDEO_STATE", "recording|" + m_videoTarget);
+   }
+ 
+ 
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -361,6 +361,8 @@
+     std::string         m_videoEvent;
+     uint32_t            m_videoSignalPolled = 0u;
+     uint32_t            m_videoSignal = 0u;
++    bool                m_videoControl = false;
++    uint32_t            m_videoMaxHeight = 1080u;
+     VideoState          m_videoState = VideoState::Disabled;
+     high_resolution_clock::time_point m_videoFirstPresent = { };
+     high_resolution_clock::time_point m_videoBegin = { };
+@@ -430,6 +432,8 @@
+     bool updateVideoState(
+             high_resolution_clock::time_point now);
+ 
++    void pollVideoControl();
++
+     void processVideo(
+       const DxvkContextObjects&         ctx,
+             high_resolution_clock::time_point now,
