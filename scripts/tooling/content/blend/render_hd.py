@@ -64,6 +64,7 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
 
     body, _ = material("body", os.path.join(a.tex_dir, f"{a.stem}_body{d}.png"), 0.62)
+    finishes = {"body": body}  # plus team, tread and the source models' metal, rubber, canvas
     team_png = os.path.join(a.tex_dir, f"{a.stem}_team{d}.png")
     if not os.path.exists(team_png):  # models from source files carry no team atlas
         team_png = os.path.join(a.tex_dir, f"{a.stem}_body{d}.png")
@@ -72,6 +73,7 @@ def main():
     if not os.path.exists(tread_png):
         tread_png = os.path.join(a.tex_dir, f"{a.stem}_body{d}.png")
     tread, tread_tex = material("tread", tread_png, 0.8)
+    finishes.update(team=team, tread=tread)
     mapping = tread.node_tree.nodes.new("ShaderNodeMapping")
     uv = tread.node_tree.nodes.new("ShaderNodeTexCoord")
     tread.node_tree.links.new(uv.outputs["UV"], mapping.inputs["Vector"])
@@ -111,7 +113,10 @@ def main():
                                     team=(0.05, 0.16, 0.75, 1) if kind == "team" else None)[0]
             obj.data.materials.append(own[key])
         else:
-            obj.data.materials.append({"body": body, "team": team, "tread": tread}[kind])
+            if kind not in finishes:
+                finishes[kind] = material(kind, os.path.join(a.tex_dir, f"{a.stem}_body{d}.png"),
+                                          {"metal": 0.35, "rubber": 0.92, "canvas": 0.95, "glass": 0.08}.get(kind, 0.62))[0]
+            obj.data.materials.append(finishes[kind])
         for poly in obj.data.polygons:
             poly.material_index = 0
         e, pv = empties[obj["bone"]]

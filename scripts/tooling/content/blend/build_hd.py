@@ -17,17 +17,16 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import bpy  # noqa: E402
 import kit  # noqa: E402
-import abrams  # noqa: E402
 import w3d  # noqa: E402
 import textures  # noqa: E402
 from PIL import Image, ImageFilter  # noqa: E402
 
 TAN = [(176, 160, 118), (128, 116, 82), (92, 86, 64)]
 
-# Unit name -> (builder module, texture stem, palette, pattern)
-UNITS = {
-    "AVGXMBT": (abrams, "gxmbt2", [(166, 148, 106)], "solid"),
-}
+# Unit name -> (builder module, texture stem, palette, pattern). The procedural Abrams gave way
+# to one built from an openly licensed source model (build_src.py, sources.py); this keeps the procedural
+# pipeline and the track texture both use.
+UNITS = {}
 
 
 def track_texture(seed=13, links=4, w=512, h=256):
@@ -89,6 +88,11 @@ def track_texture(seed=13, links=4, w=512, h=256):
     # Packed dirt in the low parts, polish on the high parts of the ground side.
     dust = np.clip((0.5 - height) * 1.4 + (textures.fbm(w, rng, base=6)[:h, :w] - 0.5), 0, 1)[..., None] * 0.7
     img = img * (1 - dust) + np.array([128, 110, 82]) * dust
+    # Dry dust caked on the band's edges and end connectors: from above the track reads as a light-edged
+    # band, not one dark mass with the wheels.
+    edges = (side | (conn & ((wo < 0.16) | (wo > 0.84)))).astype(float)
+    edges = (edges * (0.45 + 0.35 * textures.fbm(w, rng, base=24)[:h, :w]))[..., None]
+    img = img * (1 - edges) + np.array([156, 138, 104]) * edges
     return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB")
 
 

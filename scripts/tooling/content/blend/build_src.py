@@ -1,8 +1,8 @@
 """Build detailed units from third-party source models (see import_src.py and sources.py).
 
 GeneralsX @feature Claude 16/10/2026 Usage: build_src.py <source dir with <unit>.glb> <out dir>
-[--only UNIT] [--size 2048] [--blend dir]. Writes <out>/w3d, <out>/tex (TGA plus PNG copies) like
-build_hd.py, so build_content.py --hd packs both the same way.
+[--only UNIT] [--size 2048] [--blend dir]. Writes <out>/w3d, <out>/tex (TGA plus PNG copies) and
+<out>/cameos like build_hd.py, so build_content.py --hd packs both the same way.
 """
 
 import argparse
@@ -40,19 +40,27 @@ def level(px, target, reference=None):
     return out
 
 
-def build(unit, spec, src, w3d_dir, tex_dir, size, blend_dir=None):
+# W3D material per finish: same atlas, own specular, so paint, bare metal and rubber catch the sun
+# differently.
+FINISH_SPECULAR = {"body": ((46, 44, 40), 12.0), "metal": ((110, 108, 100), 28.0), "rubber": ((10, 10, 10), 3.0),
+                   "canvas": ((14, 13, 12), 3.0), "glass": ((170, 170, 170), 40.0)}
+
+
+def build(unit, spec, src, w3d_dir, tex_dir, size, blend_dir=None, cameo_dir=None, intact_only=False):
     reference = None
-    for suffix, damaged in (("", False), ("_D", True)):
+    for suffix, damaged in (("", False), ("_D", True))[:1 if intact_only else 2]:
         name = spec["model"] + suffix
         d = "d" if damaged else ""
         k, objs, px = import_src.build(src, spec, name, size, damaged)
-        px = level(px, spec.get("level", 0.5), reference)
+        if spec.get("level"):
+            px = level(px, spec["level"], reference)
         reference = reference if damaged else px
         body_tex = f"{spec['stem']}_body{d}.tga"
         img = Image.fromarray(kit.save_image(px, os.path.join(tex_dir, body_tex.replace(".tga", ".png"))))
         textures.save_tga(img, os.path.join(tex_dir, body_tex))
-        body = w3d.Material("GXBody", body_tex, specular=(50, 50, 46), shininess=10.0)
-        materials = {"body": body, "shadow": body, "team": body}
+        materials = {kind: w3d.Material(f"GX{kind.capitalize()}", body_tex, specular=spec_, shininess=shine)
+                     for kind, (spec_, shine) in FINISH_SPECULAR.items()}
+        materials["shadow"] = materials["team"] = materials["body"]
         if any(kind == "tread" for _, _, kind in objs):
             tread_tex = f"{spec['stem']}_tread.tga"
             import build_hd
@@ -63,8 +71,15 @@ def build(unit, spec, src, w3d_dir, tex_dir, size, blend_dir=None):
         model = kit.to_w3d(k, objs, name, None, materials)
         with open(os.path.join(w3d_dir, name + ".w3d"), "wb") as f:
             f.write(model.pack())
-        if blend_dir:
-            bpy.ops.wm.save_as_mainfile(filepath=os.path.join(blend_dir, name + ".blend"))
+        blend = os.path.join(blend_dir or tex_dir, name + ".blend")
+        bpy.ops.wm.save_as_mainfile(filepath=blend)
+        if not damaged and cameo_dir:
+            # Command bar art, rendered in a separate Blender session from the saved file.
+            import subprocess
+            subprocess.run([sys.executable, os.path.join(HERE, "render_hd.py"), blend, tex_dir, cameo_dir, "--cameo",
+                            "--stem", spec["stem"], "--samples", "32"], check=True, stdout=subprocess.DEVNULL)
+        if not blend_dir:
+            os.remove(blend)
         tris = sum(len(m.triangles) for _, m in model.meshes)
         print(f"{name}: {tris} triangles, {len(model.meshes)} meshes, {len(model.bones)} bones", flush=True)
 
@@ -76,16 +91,19 @@ def main():
     p.add_argument("--only")
     p.add_argument("--size", type=int, default=2048)
     p.add_argument("--blend")
+    p.add_argument("--no-cameos", action="store_true")
+    p.add_argument("--intact-only", action="store_true", help="skip the damaged model (quick looks)")
     a = p.parse_args()
-    w3d_dir, tex_dir = os.path.join(a.out, "w3d"), os.path.join(a.out, "tex")
-    for dd in (w3d_dir, tex_dir, a.blend):
+    w3d_dir, tex_dir, cameo_dir = (os.path.join(a.out, d) for d in ("w3d", "tex", "cameos"))
+    for dd in (w3d_dir, tex_dir, cameo_dir, a.blend):
         if dd:
             os.makedirs(dd, exist_ok=True)
     for unit, spec in sources.UNITS.items():
         src = os.path.join(a.src, unit + ".glb")
         if (a.only and a.only != unit) or not os.path.exists(src):
             continue
-        build(unit, spec, src, w3d_dir, tex_dir, a.size, a.blend)
+        build(unit, spec, src, w3d_dir, tex_dir, a.size, a.blend, None if a.no_cameos else cameo_dir,
+              a.intact_only)
 
 
 if __name__ == "__main__":

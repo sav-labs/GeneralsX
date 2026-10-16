@@ -378,10 +378,13 @@ class Kit:
 
 
 # --- baking ----------------------------------------------------------------------------------
-def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, source=False):
+def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, source=False, base_colour=None,
+                    dust_scale=1.0):
     """Shader whose emission is the finished albedo: paint (camouflage or solid with mottling), ambient
-    occlusion, worn edges, dust from below, vertical streaks and, for the damaged model, soot."""
+    occlusion, worn edges, dust from below, vertical streaks and, for the damaged model, soot.
+    base_colour(node_tree) -> socket replaces the paint colour (a source model's own texture)."""
     base, wear, dust, rough = FINISHES[finish]
+    dust *= dust_scale
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -458,7 +461,9 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
     coords = tc.outputs["Object"]
     geo = N("ShaderNodeNewGeometry")
 
-    if finish == "paint":
+    if base_colour is not None:
+        col = base_colour(nt)
+    elif finish == "paint":
         colour = srgb(palette[0])
         if pattern == "camo" and len(palette) > 2:
             n1 = noise(0.07, 2.0, coords, w=1.3)
@@ -527,22 +532,28 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
     wn = N("ShaderNodeTexWhiteNoise")
     wn.noise_dimensions = "1D"
     L(attr.outputs["Fac"], wn.inputs["W"])
-    tint = math_node("ADD", math_node("MULTIPLY", wn.outputs["Value"], 0.0 if source else 0.14), 1.0 if source else 0.93)
+    tint = math_node("ADD", math_node("MULTIPLY", wn.outputs["Value"], 0.08 if source else 0.14), 0.96 if source else 0.93)
     g3 = N("ShaderNodeCombineColor")
     for i in range(3):
         L(tint, g3.inputs[i])
     col = multiply(col, g3.outputs[0])
+    # Dark seams where separate plates meet (the "seam" point attribute, see import_src.mark_seams).
+    sa = N("ShaderNodeAttribute")
+    sa.attribute_type = "GEOMETRY"
+    sa.attribute_name = "seam"
+    col = mix(math_node("MULTIPLY", sa.outputs["Fac"], 0.7, clamp=True), col, srgb((30, 27, 22)))
 
     # Ambient occlusion.
     ao = N("ShaderNodeAmbientOcclusion")
     ao.samples = 24
-    ao.inputs["Distance"].default_value = 2.5
+    # A source model is far busier than our procedural ones: at 2.5 units nearly every face is occluded.
+    ao.inputs["Distance"].default_value = 1.2 if source else 2.5
     occl = ao.outputs["AO"]
     shade = ramp(occl, 0.0, 1.0)
     shade = math_node("ADD", math_node("MULTIPLY", shade, 0.72), 0.28)
     ao2 = N("ShaderNodeAmbientOcclusion")
     ao2.samples = 16
-    ao2.inputs["Distance"].default_value = 0.45
+    ao2.inputs["Distance"].default_value = 0.3 if source else 0.45
     shade = math_node("MULTIPLY", shade, math_node("ADD", math_node("MULTIPLY", ao2.outputs["AO"], 0.45), 0.55))
     g2 = N("ShaderNodeCombineColor")
     for i in range(3):
@@ -552,30 +563,34 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
     # Dust: low on the vehicle, in cavities and on upward faces, broken up by noise.
     sep = N("ShaderNodeSeparateXYZ")
     L(tc.outputs["Object"], sep.inputs[0])
-    low = math_node("SUBTRACT", 1.0, ramp(sep.outputs["Z"], 0.5, 5.5))
+    low = math_node("SUBTRACT", 1.0, ramp(sep.outputs["Z"], 0.5, 4.5 if source else 5.5))
     nz = N("ShaderNodeSeparateXYZ")
     L(geo.outputs["Normal"], nz.inputs[0])
     up = ramp(nz.outputs["Z"], 0.6, 1.0)
     cav = math_node("SUBTRACT", 1.0, occl)
     amount = math_node("ADD", math_node("MULTIPLY", low, 0.75), math_node("MULTIPLY", math_node("MULTIPLY", up, cav), 1.4))
-    amount = math_node("MULTIPLY", amount, ramp(noise(0.9, 5.0, coords, w=4.0), 0.3, 0.75))
+    amount = math_node("MULTIPLY", amount, ramp(noise(3.0 if source else 0.9, 6.0, coords, w=4.0), 0.3, 0.75))
     amount = math_node("MULTIPLY", amount, dust * 1.1, clamp=True)
     col = mix(amount, col, srgb((128, 108, 78)))
-    grime = math_node("MULTIPLY", math_node("MULTIPLY", cav, cav), 0.9 * min(1.0, dust), clamp=True)
+    grime = math_node("MULTIPLY", math_node("MULTIPLY", cav, cav), (0.5 if source else 0.9) * min(1.0, dust), clamp=True)
     col = mix(grime, col, srgb((62, 52, 40)))
 
     # Dust lying in patches on upward faces.
-    patches = math_node("MULTIPLY", up, ramp(noise(0.18, 3.0, coords, w=15.0), 0.45, 0.65))
-    col = mix(math_node("MULTIPLY", patches, 0.7 * min(1.0, dust), clamp=True), col, srgb((198, 184, 150)))
+    # Source models: no large patches (they read as winter camouflage), only fine dust in the low parts.
+    patches = math_node("MULTIPLY", up, ramp(noise(2.5 if source else 0.18, 5.0, coords, w=15.0), 0.45, 0.65))
+    if source:
+        patches = math_node("MULTIPLY", patches, low)
+    col = mix(math_node("MULTIPLY", patches, (0.4 if source else 0.7) * min(1.0, dust), clamp=True), col,
+              srgb((176, 156, 120) if source else (198, 184, 150)))
 
     # Mud thrown up by the running gear on the lowest parts.
     low2 = math_node("SUBTRACT", 1.0, ramp(sep.outputs["Z"], 0.4, 3.6))
-    mud = math_node("MULTIPLY", low2, ramp(noise(0.7, 6.0, coords, w=14.0), 0.35, 0.6))
+    mud = math_node("MULTIPLY", low2, ramp(noise(2.2 if source else 0.7, 6.0, coords, w=14.0), 0.35, 0.6))
     col = mix(math_node("MULTIPLY", mud, 1.0 * min(1.0, dust), clamp=True), col, srgb((92, 76, 56)))
 
     # Streaks running down vertical faces.
     vert = math_node("SUBTRACT", 1.0, ramp(math_node("ABSOLUTE", nz.outputs["Z"]), 0.2, 0.6))
-    streak = ramp(noise(2.0, 2.0, coords, stretch=(1.0, 1.0, 0.06), w=6.0), 0.58, 0.72)
+    streak = ramp(noise(3.5 if source else 2.0, 2.0, coords, stretch=(1.0, 1.0, 0.05), w=6.0), 0.58, 0.72)
     streak = math_node("MULTIPLY", math_node("MULTIPLY", streak, vert), 0.85 * min(1.0, dust))
     col = mix(streak, col, srgb((70, 62, 50)))
 
@@ -588,9 +603,9 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
     col = mix(math_node("MULTIPLY", oil, 0.75 * min(1.0, dust), clamp=True), col, srgb((38, 33, 26)))
 
     if damaged:
-        # The whole vehicle is smoke-stained; around each hit and fire (burns: [(centre, radius)]) the paint is
-        # burnt from blistered tan through rust brown and grey ash to black. Heat reaches further upwards.
-        col = mix(0.5, col, multiply(col, (0.6, 0.58, 0.55, 1.0)))
+        # The whole vehicle is smoke-stained and about 45% darker; around each hit and fire (burns: [(centre,
+        # radius)]) the paint is scorched dark brown, then soot black. Rust only on the ragged fringe.
+        col = multiply(col, (0.55, 0.54, 0.52, 1.0))
         # Burns are ragged blobs, not rings: warp the position by a noise vector before measuring.
         nv = N("ShaderNodeTexNoise")
         nv.inputs["Scale"].default_value = 0.35
@@ -626,23 +641,27 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, 
             heat = h if heat is None else math_node("MAXIMUM", heat, h)
         if heat is None:
             heat = noise(0.22, 5.0, coords, w=11.0)
-        heat = math_node("ADD", heat, math_node("MULTIPLY", math_node("SUBTRACT", noise(0.9, 6.0, coords, w=12.0), 0.5),
-                                                0.55))
+        heat = math_node("ADD", heat, math_node("MULTIPLY", math_node("SUBTRACT", noise(1.8, 6.0, coords, w=12.0), 0.5),
+                                                0.5))
+        # Rust on the fringe of each burn, broken up so it never closes into a ring.
+        fringe = math_node("MULTIPLY", ramp(heat, 0.0, 0.05), math_node("SUBTRACT", 1.0, ramp(heat, 0.08, 0.14)))
+        fringe = math_node("MULTIPLY", fringe, ramp(noise(4.0, 6.0, coords, w=13.0), 0.5, 0.65))
+        col = mix(math_node("MULTIPLY", fringe, 0.6, clamp=True), col, srgb((84, 50, 30)))
         cr = N("ShaderNodeValToRGB")
         L(heat, cr.inputs["Fac"])
         el = cr.color_ramp.elements
-        el[0].position, el[0].color = 0.0, (0.5, 0.5, 0.5, 0.0)
-        el[1].position, el[1].color = 0.82, srgb((12, 11, 10))
-        for pos, c in ((0.06, (96, 82, 60)), (0.13, (112, 62, 32)), (0.2, (70, 40, 24)), (0.3, (40, 37, 34)),
-                       (0.45, (22, 20, 19))):
+        # The transparent end has the scorch colour too, so the fade is only in alpha (no light rim).
+        el[0].position, el[0].color = 0.0, (*srgb((62, 50, 38))[:3], 0.0)
+        el[1].position, el[1].color = 0.82, srgb((11, 10, 9))
+        for pos, c in ((0.07, (62, 50, 38)), (0.16, (44, 36, 29)), (0.3, (30, 26, 22)), (0.5, (19, 17, 15))):
             e = el.new(pos)
             e.color = srgb(c)
         el[0].alpha = 0.0
         for e in list(el)[1:]:
             e.alpha = 1.0
         col = mix(cr.outputs["Alpha"], col, cr.outputs["Color"])
-        soot = ramp(noise(0.35, 4.0, coords, w=19.0), 0.45, 0.62)
-        col = mix(math_node("MULTIPLY", math_node("MULTIPLY", soot, up), 0.55, clamp=True), col, srgb((20, 19, 18)))
+        soot = ramp(noise(1.2, 5.0, coords, w=19.0), 0.45, 0.62)
+        col = mix(math_node("MULTIPLY", math_node("MULTIPLY", soot, up), 0.55, clamp=True), col, srgb((20, 18, 16)))
 
     # Relief baked into the albedo (the game has no normal maps): cast and rolled steel pitting and small
     # dents, lit from the upper left like the game's sun.

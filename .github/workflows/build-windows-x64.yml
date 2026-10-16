@@ -46,6 +46,8 @@ jobs:
   # GeneralsX @feature Claude 16/10/2026 Detailed unit models: built and baked with Blender's Python module (bpy) from
   # scripts/tooling/content/blend, cached on the hash of those scripts so a push that does not touch them reuses the
   # last bake. The Windows job folds them into the content pack (build_content.py --hd).
+  # GeneralsX @feature Claude 16/10/2026 Most units now come from openly licensed source models (release model-sources,
+  # see model-sources.yml) through blend/build_src.py; their CREDITS.md ships next to the content pack.
   hd-models:
     name: Detailed models (Blender)
     runs-on: ubuntu-24.04
@@ -57,12 +59,19 @@ jobs:
         with:
           sparse-checkout: scripts/tooling/content
 
+      - name: Download source models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Openly licensed source models and their CREDITS.md, fetched by model-sources.yml.
+          gh release download model-sources --repo "${{ github.repository }}" --dir src --pattern '*.glb' --pattern CREDITS.md
+
       - name: Cache baked models
         id: cache
         uses: actions/cache@v4
         with:
           path: hd-out
-          key: hd-models-${{ hashFiles('scripts/tooling/content/blend/**', 'scripts/tooling/content/w3d.py', 'scripts/tooling/content/textures.py') }}
+          key: hd-models-${{ hashFiles('scripts/tooling/content/blend/**', 'scripts/tooling/content/w3d.py', 'scripts/tooling/content/textures.py', 'src/**') }}
 
       - name: Set up Python
         if: steps.cache.outputs.cache-hit != 'true'
@@ -77,7 +86,10 @@ jobs:
           sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6 libegl1
           python -m pip install bpy==5.2.2 pillow==12.0.0 numpy==2.2.6
           python scripts/tooling/content/blend/build_hd.py hd-out
+          # Units whose spec has passed review; the rest of sources.py is still being tuned.
+          python scripts/tooling/content/blend/build_src.py src hd-out --only crusader
           rm -f hd-out/tex/*.blend
+          cp src/CREDITS.md hd-out/CREDITS.md
 
       - name: Upload
         uses: actions/upload-artifact@v7
@@ -87,6 +99,7 @@ jobs:
             hd-out/w3d
             hd-out/tex/*.tga
             hd-out/cameos
+            hd-out/CREDITS.md
           retention-days: 3
 
   dxvk-fsr:
@@ -239,6 +252,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Copy-Item content-out/GeneralsXContent.big artifacts/
+          # Authors and licences of the third-party models in the content pack (CC-BY asks for credit).
+          if (Test-Path hd-models/CREDITS.md) { Copy-Item hd-models/CREDITS.md artifacts/GeneralsXContent-CREDITS.md }
           Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.exe artifacts/
           Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.pdb artifacts/ -ErrorAction SilentlyContinue
           Get-ChildItem -Path @("vcpkg_installed/x64-windows/bin/*.dll", "build/win64-vcpkg/vcpkg_installed/x64-windows/bin/*.dll") -ErrorAction SilentlyContinue | ForEach-Object {
