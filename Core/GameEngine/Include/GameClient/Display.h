@@ -186,6 +186,9 @@ public:
 #endif
 	virtual void preloadModelAssets( AsciiString model ) = 0;	///< preload model asset
 	virtual void preloadTextureAssets( AsciiString texture ) = 0;	///< preload texture asset
+	// GeneralsX @performance Claude 16/10/2026 Creates the GPU textures of everything loaded so far, so that the
+	// first sight of a preloaded model does not load its textures in the middle of a frame.
+	virtual Int createPreloadedTextures() = 0;	///< returns how many textures were created
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence

@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "Common/GlobalData.h"
+#include "Common/PerfStats.h"
 #include "WW3D2/dx8caps.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WWMath/wwmath.h"
@@ -459,6 +460,9 @@ Bool W3DTerrainDetail::init()
 		shutdown();
 		return FALSE;
 	}
+	// GeneralsX @performance Claude 16/10/2026 Shader creations for the frame profiler's hitch lines.
+	PerfStats::addShaderCreated();
+	PerfStats::addShaderCreated();
 
 	s_whiteTexture = MSGNEW("TextureClass") TextureClass(1, 1, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
 		TextureBaseClass::POOL_MANAGED, false, false);

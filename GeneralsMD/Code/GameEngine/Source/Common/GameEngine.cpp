@@ -1001,14 +1001,16 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 		const Real targetFrameTime = 1.0f / logicTimeScaleFps;
 		m_logicTimeAccumulator += min(TheFramePacer->getUpdateTime(), targetFrameTime);
 
-		if (m_logicTimeAccumulator >= targetFrameTime)
+		// GeneralsX @bugfix Claude 16/10/2026 The render interpolation phase follows the accumulator, so drawn
+		// motion advances by the real render step instead of jumping at logic steps (FramePacer::update).
+		const Bool step = m_logicTimeAccumulator >= targetFrameTime;
+		if (step)
 		{
 			m_logicTimeAccumulator -= targetFrameTime;
-			return true;
 		}
+		TheFramePacer->setLogicTimeAccumulatorPhase(m_logicTimeAccumulator / targetFrameTime);
+		return step;
 	}
-
-	return false;
 }
 
 /// -----------------------------------------------------------------------------------------------

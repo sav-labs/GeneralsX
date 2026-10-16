@@ -210,6 +210,9 @@ public:
 	Bool getPerfOverlayEnabled() const;			///< Options.ini PerfOverlay, default no
 	Real getPerfIntervalSeconds() const;		///< Options.ini PerfInterval, default 5
 	Bool getSkinCacheEnabled() const;			///< Options.ini SkinCache, default yes
+	// GeneralsX @performance Claude 16/10/2026 Options.ini PreloadAssets = yes | no | everything, default yes.
+	enum PreloadAssetsMode { PRELOAD_ASSETS_NO, PRELOAD_ASSETS_YES, PRELOAD_ASSETS_EVERYTHING };
+	PreloadAssetsMode getPreloadAssetsMode() const;
 	Int getShadowVolumeHighPolyTriangles() const;	///< Options.ini ShadowVolumeHighPolyTriangles, default 4000
 	Real getShadowVolumeHighPolyAngle() const;	///< Options.ini ShadowVolumeHighPolyAngle in degrees, default 3
 	Int getShadowVolumeMaxTriangles() const;	///< Options.ini ShadowVolumeMaxTriangles, default 0 (no limit)
