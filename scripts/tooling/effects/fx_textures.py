@@ -276,16 +276,19 @@ def to_image(rgba):
     return Image.fromarray(np.clip(rgba * 255.0 + 0.5, 0, 255).astype(np.uint8), "RGBA")
 
 
-# Volumetric flipbooks baked offline by blender_flipbook.py (fx_fluid simulation rendered with Cycles)
-# and kept as DXT5 DDS in assets/effects; the engine loads the .dds for the .tga name the INI uses.
+# Flipbooks baked offline and kept as DXT5 DDS in assets/effects; the engine loads the .dds for the
+# .tga name the INI uses. Volumes come from blender_flipbook.py (fx_fluid simulation rendered with
+# Cycles), sparks and gun flashes from fx_bake2d.py.
 BAKED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "assets", "effects")
 BAKED = {
-    # texture name: (blender_flipbook kind, flipbook grid)
+    # texture name: (blender_flipbook.py or fx_bake2d.py kind, flipbook grid)
     "gxfx_fireball.tga": ("explosion", 8),
     "gxfx_smoke.tga": ("smoke", 8),
     "gxfx_flame.tga": ("fire", 8),
     "gxfx_dust.tga": ("dust", 8),
     "gxfx_burst.tga": ("burst", 8),
+    "gxfx_sparks.tga": ("sparks", 8),
+    "gxfx_muzzle.tga": ("muzzle", 4),
 }
 
 

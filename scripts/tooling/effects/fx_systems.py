@@ -318,6 +318,56 @@ SYSTEMS.update({
         VolumeType="SPHERE", VolSphereRadius=3.0),
 })
 
+def _gun_flash(size, lifetime=3):
+    # One random flash per shot from the gxfx_muzzle frames; ADDITIVE, so it only brightens.
+    return system(
+        Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_muzzle.tga",
+        FlipbookGrid=4, FlipbookRandom="Yes",
+        Lifetime=(lifetime, lifetime), Size=size, SizeRate=(0.4, 0.4), SizeRateDamping=(0.7, 0.7),
+        Color=[((255, 255, 255), 0), ((150, 110, 70), lifetime - 1), ((0, 0, 0), lifetime)],
+        BurstCount=(1, 1), SystemLifetime=1, VelocityType="ORTHO", VelOrthoX=(0.0, 0.0),
+        VelOrthoY=(0.0, 0.0), VelOrthoZ=(0.0, 0.0))
+
+
+def _struck_sparks(size):
+    # A whole spark shower in one sprite (gxfx_sparks): flash, sparks arcing out, cooling, falling.
+    return system(
+        Priority="UNIT_DAMAGE_FX", Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8,
+        AngleZ=(-0.3, 0.3), Lifetime=(18, 24), Size=size,
+        Color=[((255, 255, 255), 0), ((255, 255, 255), 14), ((0, 0, 0), 24)],
+        BurstCount=(1, 1), SystemLifetime=1)
+
+
+def _struck_smoke(count, size, lifetime, alpha):
+    return system(
+        Priority="UNIT_DAMAGE_FX", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=lifetime, Size=size, SizeRate=(0.25, 0.35), SizeRateDamping=(0.96, 0.97),
+        Alpha=[(0.0, 0.0, 0), (alpha, alpha, 3), (alpha * 0.5, alpha * 0.5, lifetime[0] // 2),
+               (0.0, 0.0, lifetime[1])],
+        Color=[((170, 164, 156), 0), ((215, 211, 205), lifetime[0] // 2)],
+        BurstCount=count, SystemLifetime=1, VelocityDamping=(0.8, 0.85),
+        DriftVelocity=(0.08, 0.16, 0.08),
+        VelocityType="ORTHO", VelOrthoX=(0.3, 1.5), VelOrthoY=(-0.8, 0.8), VelOrthoZ=(0.0, 0.4))
+
+
+# Machine gun fire and hits on armour: WeaponFX_GenericMachineGunFire and its relatives flash
+# GattlingCannonLenzflare at the muzzle; FX_DamageTankStruck and FX_DamageTankStruckSmallArms (every
+# vehicle hit) throw TankStruckSparks, a flare and smoke. Small tank guns use TankSmallMuzzle*.
+SYSTEMS.update({
+    "GattlingCannonLenzflare": _gun_flash((5.0, 7.0)),
+    "GattlingCannonLenzflareIntense": _gun_flash((8.0, 10.0)),
+    "TankStruckSparks": _struck_sparks((12.0, 16.0)),
+    "SmallTankStruckSparks": _struck_sparks((8.0, 11.0)),
+    "TankStruckLenzflare": _gun_flash((10.0, 12.0), lifetime=4),
+    "TankStruckSmoke": _struck_smoke((3, 3), (3.0, 4.5), (70, 90), 0.6),
+    "TankStruckSmallArmsSmoke": _struck_smoke((1, 1), (1.5, 2.5), (25, 35), 0.45),
+    "TankSmallMuzzleFlare": _gun_flash((7.0, 9.0), lifetime=4),
+    "TankSmallMuzzleFlashFlame": system(**{**SYSTEMS["TankMuzzleFlashFlame"],
+                                           "Size": (2.5, 3.5), "VelOrthoX": (1.0, 3.0)}),
+    "TankSmallMuzzleFlashSmoke": system(**{**SYSTEMS["TankMuzzleFlashSmoke"],
+                                           "Size": (2.5, 4.0), "BurstCount": (3, 3)}),
+})
+
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {
     "FX_GenericTankDeathExplosion": {
