@@ -68,6 +68,7 @@
 #include "GameLogic/TerrainLogic.h"
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "W3DDevice/GameClient/W3DEffectLights.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/W3DBibBuffer.h"
@@ -174,6 +175,10 @@ void BaseHeightMapRenderObjClass::drawScorches()
 	if (m_map && Is_Hidden() == 0 && !ShaderClass::Is_Backface_Culling_Inverted()) {
 		m_staticScorches->drawScorches(*m_map);
 		m_scorches->drawScorches(*m_map);
+		// GeneralsX @feature Claude 16/10/2026 Light pools of explosions, fires and exhausts on the ground, on top of
+		// the terrain, roads and scorch marks (DynamicLights = High).
+		if (TheW3DEffectLights)
+			TheW3DEffectLights->drawTerrainSplats(*m_map);
 	}
 }
 

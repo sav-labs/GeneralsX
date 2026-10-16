@@ -1392,6 +1392,11 @@ void HeightMapRenderObjClass::On_Frame_Update()
 	{
 		W3DDynamicLight *pLight = (W3DDynamicLight*)pDynamicLightsIterator.Peek_Obj();
 		pLight->m_processMe = false;
+		// GeneralsX @feature Claude 16/10/2026 Effect lights drawn by the terrain light splat pass (DynamicLights = High)
+		// leave the terrain vertex colours alone.
+		if (pLight->skipsTerrainVertices()) {
+			continue;
+		}
 		if (pLight->m_enabled || pLight->m_priorEnable) {
 			Real range = pLight->Get_Attenuation_Range();
 			if (pLight->m_priorEnable) {

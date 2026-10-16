@@ -91,6 +91,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DSkinnedShadow.h"
+#include "W3DDevice/GameClient/W3DEffectLights.h"
 #include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DCapture.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -488,6 +489,10 @@ W3DDisplay::~W3DDisplay()
 	// free them BEFORE we shutdown W3D
 	//
 	Display::deleteViews();
+
+	// GeneralsX @feature Claude 16/10/2026 Effect lights live in the 3D scene.
+	delete TheW3DEffectLights;
+	TheW3DEffectLights = nullptr;
 
 	REF_PTR_RELEASE( m_3DScene );
 	REF_PTR_RELEASE( m_2DScene );
@@ -967,6 +972,10 @@ void W3DDisplay::init()
 		{	m_3DScene->setGlobalLight( m_myLight[lindex], lindex );
 		}
 
+		// GeneralsX @feature Claude 16/10/2026 Effect lights (Options.ini DynamicLights, DynamicLightIntensity).
+		TheW3DEffectLights = NEW W3DEffectLights;
+		TheW3DEffectLights->init( m_3DScene );
+
 	#ifdef SAMPLE_DYNAMIC_LIGHT
 		theDynamicLight = NEW_REF(W3DDynamicLight, ());
 		Real red = 1;
@@ -1246,6 +1255,10 @@ void W3DDisplay::reset()
 	}
 
 	m_isClippedEnabled = FALSE;
+
+	// GeneralsX @feature Claude 16/10/2026 Forget the effect lights of the last map and read the options again.
+	if (TheW3DEffectLights)
+		TheW3DEffectLights->reset();
 
 	// release any unused assets from W3D
 	/// @todo really need that "scene abstraction", having this stuff in the display is icky
@@ -2317,6 +2330,10 @@ AGAIN:
 
 			TheParticleSystemManager->DRAW();
 
+			// GeneralsX @feature Claude 16/10/2026 Pick this frame's effect lights before any view draws the scene.
+			if (TheW3DEffectLights)
+				TheW3DEffectLights->update(primaryW3DView ? primaryW3DView->get3DCamera() : nullptr);
+
 			// GeneralsX @feature Claude 16/10/2026 Every water type may render a reflection now (water effects);
 			// updateRenderTargetTextures keeps the retail mirror to water type 2.
 			if (TheWaterRenderObj && primaryW3DView)
@@ -2593,6 +2610,13 @@ void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
 	//theDynamicLight->setDonut(donut);
 	// (gth) CNC3 enable far attenuation.  C&C3 defaults to disabled.  Must enable to match Generals. MW 8-06-03
 	theDynamicLight->Set_Flag(LightClass::FAR_ATTENUATION,true);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Automatic light of an effect without a LightPulse (see W3DEffectLights).
+void W3DDisplay::addEffectLight( const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius )
+{
+	if (TheW3DEffectLights)
+		TheW3DEffectLights->addEffect(pos, profile, objectRadius);
 }
 
 void W3DDisplay::toggleLetterBox()

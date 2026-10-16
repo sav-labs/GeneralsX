@@ -366,6 +366,12 @@ public:
 		((FXList*)instance)->addFXNugget(nugget);
 	}
 
+	// GeneralsX @feature Claude 16/10/2026 The data lights this effect itself: no automatic light on top.
+	virtual void addLightTraits(EffectLights::FXTraits &traits) const override
+	{
+		traits.hasLightPulse = TRUE;
+	}
+
 private:
 	RGBColor			m_color;
 	Real					m_radius;
@@ -427,6 +433,14 @@ protected:
 		static_assert(ARRAY_SIZE(shakeTypeNames) == View::SHAKE_COUNT + 1, "Incorrect array size");
 
 		*(Int *)store = INI::scanLookupList(ini->getNextToken(), shakeTypeNames);
+	}
+
+public:
+	// GeneralsX @feature Claude 16/10/2026 Camera shake strength tells how big a blast is.
+	virtual void addLightTraits(EffectLights::FXTraits &traits) const override
+	{
+		if ((Int)m_shake > traits.strongestShake)
+			traits.strongestShake = (Int)m_shake;
 	}
 
 private:
@@ -493,6 +507,14 @@ protected:
 		static_assert(ARRAY_SIZE(scorchTypeNames) == SCORCH_COUNT + 2, "Incorrect array size");
 
 		*(Int *)store = INI::scanLookupList(ini->getNextToken(), scorchTypeNames);
+	}
+
+public:
+	// GeneralsX @feature Claude 16/10/2026 A burn mark on the ground means fire: its size sizes the light.
+	virtual void addLightTraits(EffectLights::FXTraits &traits) const override
+	{
+		if (m_scorch != SHADOW_SCORCH && m_radius > traits.scorchRadius)
+			traits.scorchRadius = m_radius;
 	}
 
 private:
@@ -666,6 +688,14 @@ protected:
 	}
 
 
+public:
+	// GeneralsX @feature Claude 16/10/2026 Particle system names say whether the effect is a fireball, fire or a
+	// muzzle flash (and its colour: toxin, EMP, laser).
+	virtual void addLightTraits(EffectLights::FXTraits &traits) const override
+	{
+		EffectLights::addParticleSystemName(traits, m_name.str());
+	}
+
 private:
 	AsciiString			m_name;
 	Int							m_count;
@@ -782,7 +812,8 @@ static const FieldParse TheFXListFieldParse[] =
 };
 
 //-------------------------------------------------------------------------------------------------
-FXList::FXList()
+FXList::FXList() :
+	m_lightProfileReady(FALSE)
 {
 }
 
@@ -800,6 +831,7 @@ void FXList::clear()
 		deleteInstance(*it);
 	}
 	m_nuggets.clear();
+	m_lightProfileReady = FALSE;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -814,6 +846,9 @@ void FXList::doFXPos(const Coord3D *primary, const Matrix3D* primaryMtx, const R
 	{
 		(*it)->doFXPos(primary, primaryMtx, primarySpeed, secondary, overrideRadius);
 	}
+
+	// GeneralsX @feature Claude 16/10/2026 Automatic light (client side only).
+	addEffectLight(primary, overrideRadius);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -830,6 +865,34 @@ void FXList::doFXObj(const Object* primary, const Object* secondary) const
 		// HERE THE PRIMARY IS THE GUY RECEIVING THE FX, AND SECONDARY MIGHT BE THE GUY DEALING IT
 		(*it)->doFXObj(primary, secondary);
 	}
+
+	// GeneralsX @feature Claude 16/10/2026 Automatic light at the object, sized by it (client side only).
+	if (primary)
+		addEffectLight(primary->getPosition(), primary->getGeometryInfo().getBoundingCircleRadius());
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 FXLists without a LightPulse get a light from what they do (see
+// EffectLights.h): explosions, muzzle flashes, flame bursts and superweapon blasts. The display decides whether
+// and how it is drawn (Options.ini DynamicLights). Reads data only; no logic state, random numbers or CRCs.
+void FXList::addEffectLight(const Coord3D *pos, Real objectRadius) const
+{
+	if (!pos || !TheDisplay)
+		return;
+
+	if (!m_lightProfileReady)
+	{
+		EffectLights::FXTraits traits;
+		for (FXNuggetList::const_iterator it = m_nuggets.begin(); it != m_nuggets.end(); ++it)
+		{
+			(*it)->addLightTraits(traits);
+		}
+		m_lightProfile = EffectLights::classifyFXList(m_name.str(), traits);
+		m_lightProfileReady = TRUE;
+	}
+
+	if (m_lightProfile.kind != EffectLights::KIND_NONE)
+		TheDisplay->addEffectLight(pos, m_lightProfile, objectRadius);
 }
 
 
@@ -871,6 +934,8 @@ const FXList *FXListStore::findFXList(const char* name) const
 	NameKeyType key = TheNameKeyGenerator->nameToKey(c);
 	FXList& fxl = TheFXListStore->m_fxmap[key];
 	fxl.clear();
+	// GeneralsX @feature Claude 16/10/2026 Keep the name for the effect light classification.
+	fxl.m_name = c;
 	ini->initFromINI(&fxl, TheFXListFieldParse);
 }
 

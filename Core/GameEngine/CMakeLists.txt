@@ -172,6 +172,7 @@ set(GAMEENGINE_SRC
 #    Include/GameClient/FontDesc.h
     Include/GameClient/FXList.h
     Include/GameClient/Gadget.h
+    Include/GameClient/EffectLights.h
     Include/GameClient/GadgetCheckBox.h
     Include/GameClient/GadgetComboBox.h
     Include/GameClient/GadgetListBox.h
@@ -723,6 +724,7 @@ set(GAMEENGINE_SRC
     Source/GameClient/Drawable/Update/BeaconClientUpdate.cpp
     Source/GameClient/Drawable/Update/SwayClientUpdate.cpp
     Source/GameClient/DrawGroupInfo.cpp
+    Source/GameClient/EffectLights.cpp
 #    Source/GameClient/Eva.cpp
     Source/GameClient/FXList.cpp
 #    Source/GameClient/GameClient.cpp
