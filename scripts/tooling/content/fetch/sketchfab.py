@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -41,15 +42,19 @@ def get(url, token=None, raw=False):
     req = urllib.request.Request(url, headers={"User-Agent": "GeneralsX-content"})
     if token:
         req.add_header("Authorization", f"Token {token}")
-    for attempt in range(4):
+    for attempt in range(6):
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 data = r.read()
             return data if raw else json.loads(data)
-        except Exception:
-            if attempt == 3:
+        except Exception as e:
+            if attempt == 5:
                 raise
-            time.sleep(2 ** attempt)
+            # Sketchfab rate-limits bursts of searches (429): wait as long as it asks, or back off longer.
+            if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                time.sleep(float(e.headers.get("Retry-After") or 30 * (attempt + 1)))
+            else:
+                time.sleep(2 ** attempt)
 
 
 def search(out):
