@@ -967,6 +967,11 @@ GlobalData::GlobalData()
 	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_16X;
 	// GeneralsX @feature Claude 15/10/2026 Default mip LOD bias for crisper textures.
 	m_textureLodBias = -0.5f;
+	// GeneralsX @feature Claude 16/10/2026 Terrain detail defaults, matching OptionPreferences.
+	m_terrainDetail = TRUE;
+	m_terrainDetailStrength = 0.7f;
+	m_terrainRelief = TRUE;
+	m_terrainSoftBlend = TRUE;
 
 //	m_languageFilterPref = false;
 	m_languageFilterPref = true;
@@ -1281,6 +1286,11 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_textureAnisotropyLevel = optionPref.getTextureAnisotropyLevel();
 	// GeneralsX @feature Claude 15/10/2026 Load the mip LOD bias from Options.ini.
 	TheWritableGlobalData->m_textureLodBias = optionPref.getTextureLodBias();
+	// GeneralsX @feature Claude 16/10/2026 Load the terrain detail options from Options.ini.
+	TheWritableGlobalData->m_terrainDetail = optionPref.getTerrainDetailEnabled();
+	TheWritableGlobalData->m_terrainDetailStrength = optionPref.getTerrainDetailStrength();
+	TheWritableGlobalData->m_terrainRelief = optionPref.getTerrainReliefEnabled();
+	TheWritableGlobalData->m_terrainSoftBlend = optionPref.getTerrainSoftBlendEnabled();
 
 	Int val=optionPref.getGammaValue();
 	//generate a value between 0.6 and 2.0.

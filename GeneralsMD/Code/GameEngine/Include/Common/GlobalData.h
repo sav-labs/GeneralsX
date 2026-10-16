@@ -443,6 +443,11 @@ public:
 	UnsignedInt m_textureAnisotropyLevel;     ///< value related to TextureFilterClass::AnisotropicFilterMode
 	// GeneralsX @feature Claude 15/10/2026 Mip LOD bias, applied only with anisotropic filtering.
 	Real m_textureLodBias;
+	// GeneralsX @feature Claude 16/10/2026 Close-up terrain detail options (Options.ini), see W3DTerrainDetail.
+	Bool m_terrainDetail;				///< TerrainDetail: tileable detail texture near the camera
+	Real m_terrainDetailStrength;		///< TerrainDetailStrength: 0..1
+	Bool m_terrainRelief;				///< TerrainRelief: sun-lit relief from the tile textures
+	Bool m_terrainSoftBlend;			///< TerrainSoftBlend: noise-shaped edges between terrain textures
 
 	Bool m_languageFilterPref;        ///< Bool if user wants to filter language
 	Bool m_loadScreenDemo;						///< Bool if true, run the loadscreen demo movie
