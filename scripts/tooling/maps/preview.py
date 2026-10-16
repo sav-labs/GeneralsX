@@ -36,7 +36,13 @@ CATEGORIES = [
     ("power", (250, 230, 90), 34, "Электростанции (захват)"),
     ("supply", (255, 215, 0), 34, "Склады снабжения"),
     ("tech", (90, 230, 120), 30, "Нефть, госпиталь, ремонт"),
+    ("city", (150, 140, 130), 30, "Городские здания (гарнизон)"),
 ]
+
+# Garrisonable civilian buildings the city layouts use.
+CITY_BUILDINGS = {"GermanTownHouse1", "GermanTownHouse2", "GermanPub02", "StanApartment01", "StanApartment02",
+                  "StanHotel01", "EuroHighrise", "CivilianHighrise01", "CivilianHighrise02", "AmericanHome01",
+                  "AmericanFastFood", "AsianOffice02", "SovietBuilding", "EuropeanParkingGarage", "GermanTownHall"}
 
 
 def category(template):
@@ -60,6 +66,8 @@ def category(template):
         return "supply"
     if template.startswith("Tech"):
         return "tech"
+    if template in CITY_BUILDINGS:
+        return "city"
     if template.startswith("Tree") or template.startswith("DesertShrub"):
         return "tree"
     if template.startswith("Rock"):
@@ -247,7 +255,7 @@ def perspective(t, objs, yaw_deg, pitch_deg=38, size=(1600, 1000), target=None, 
         if cat == "rock":
             continue
         colour, half = colours[cat]
-        height = {"bunker": 18, "artillery": 22, "dozer": 14, "airfield": 26, "super": 70}.get(cat, 40)
+        height = {"bunker": 18, "artillery": 22, "dozer": 14, "airfield": 26, "super": 70, "city": 55}.get(cat, 40)
         hw = half * 0.8
         box = [(-hw, -hw), (hw, -hw), (hw, hw), (-hw, hw)]
         top = np.array([[x + a, y + c, base + height] for a, c in box])
