@@ -92,6 +92,15 @@ def main():
         assert check_dds(hdpack.read_entry(entries["art/textures/avhouse.dds"]), 256, 256) == b"DXT5"
         assert (previews / "compare_001.jpg").is_file()
 
+        # Review mode ranks the cached results and writes sheets; the pack stays as it is.
+        before = out.stat().st_mtime_ns
+        review_dir = Path(tmp, "review")
+        subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(out),
+                        "--upscaler", "lanczos", "--review-dir", str(review_dir)], check=True, capture_output=True)
+        ranked = json.loads((review_dir / "review.json").read_text())
+        assert sorted(r["texture"] for r in ranked) == ["avhouse", "avtank"], ranked
+        assert (review_dir / "compare_001.jpg").is_file() and out.stat().st_mtime_ns == before
+
         # A rerun reuses the cache; a small part size splits the pack and removes the single file.
         rerun = subprocess.run([sys.executable, str(HERE / "hdpack.py"), "--game-dir", str(game), "--out", str(out),
                                 "--upscaler", "lanczos", "--part-size", "100000"],

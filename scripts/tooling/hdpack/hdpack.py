@@ -351,6 +351,64 @@ def comparison_sheets(cells, preview_dir):
         sheet.save(Path(preview_dir, f"compare_{page:03d}.jpg"), quality=90)
 
 
+def drift(before, after):
+    """How far the upscale moved away from the source, beyond what plain resampling does.
+
+    Both the pack result and a Lanczos upscale are box-filtered back to the source size and
+    compared with it in 8 px blocks (opaque pixels only). The score is the 99th-percentile
+    block error of the pack result minus that of Lanczos: high where the model repainted
+    shapes (letters, emblems, fine patterns) rather than just sharpening them.
+    """
+    import numpy as np
+    src = np.asarray(before.convert("RGB"), dtype=np.float32)
+    opaque = np.asarray(before.getchannel("A")) > 0
+
+    def p99(img):
+        back = np.asarray(img.convert("RGB").resize(before.size, Image.Resampling.BOX), dtype=np.float32)
+        err = np.where(opaque, np.abs(src - back).mean(axis=2), 0)
+        h, w = err.shape
+        b = 8 if min(h, w) >= 8 else 1
+        blocks = err[:h // b * b, :w // b * b].reshape(h // b, b, w // b, b).mean(axis=(1, 3))
+        return float(np.percentile(blocks, 99))
+
+    plain = before.convert("RGB").resize(after.size, Image.Resampling.LANCZOS)
+    return p99(after) - p99(plain)
+
+
+def review(sources, keys, cache_dir, settings, out_ext, review_dir, count):
+    """Rank cached results by drift and write comparison sheets of the worst ones."""
+    from PIL import ImageDraw
+    os.makedirs(review_dir, exist_ok=True)
+    scores = []
+    for stem in keys:
+        data = read_entry(sources[stem])
+        cache_file = cache_dir / f"{stem}-{hashlib.sha1(data + settings).hexdigest()[:16]}{out_ext}"
+        if not cache_file.is_file():
+            continue
+        try:
+            before = decode(data)
+            after = Image.open(cache_file)
+            after.load()
+            scores.append((drift(before, after), stem, before, after))
+        except Exception as e:
+            print(f"  skip {stem}: {e}", file=sys.stderr)
+        # Keep only the worst `count` images in memory.
+        if len(scores) > count * 2:
+            scores.sort(key=lambda t: -t[0])
+            del scores[count:]
+    scores.sort(key=lambda t: -t[0])
+    worst = scores[:count]
+    cells = []
+    for score, stem, before, after in worst:
+        plain, upscaled = comparison_cells(before, after)
+        ImageDraw.Draw(plain).text((4, 4), f"{stem} {score:.1f}", fill=(255, 255, 0))
+        cells.append((plain, upscaled))
+    comparison_sheets(cells, review_dir)
+    Path(review_dir, "review.json").write_text(json.dumps(
+        [{"texture": stem, "drift": round(score, 2)} for score, stem, _, _ in worst], indent=2))
+    print(f"reviewed {len(keys)} textures, worst {len(worst)} written to {review_dir}")
+
+
 # ---------------------------------------------------------------- main
 
 def decode(data):
@@ -399,6 +457,9 @@ def main():
     ap.add_argument("--max-size", type=int, default=MAX_OUTPUT_SIZE, help="Largest output side in px")
     ap.add_argument("--cache-dir", help="Keep upscaled .dds here and reuse them on the next run "
                     "(default: <out name>.cache next to the output)")
+    ap.add_argument("--review-dir", help="Only rank cached results by how much the model changed them "
+                    "and write comparison sheets of the worst ones here; no pack is written")
+    ap.add_argument("--review-count", type=int, default=200, help="Textures in the review sheets")
     ap.add_argument("--terrain", action="store_true",
                     help="Upscale Art/Terrain/ tiles to TGA for the HD terrain loader instead of model textures")
     ap.add_argument("--part-size", type=int, default=PART_LIMIT, help=argparse.SUPPRESS)
@@ -442,6 +503,10 @@ def main():
     if args.limit:
         keys = keys[:args.limit]
     print(f"{len(archives)} archive entries, {len(ui_textures)} UI textures skipped, {len(keys)} to upscale")
+
+    if args.review_dir:
+        review(sources, keys, cache_dir, settings, out_ext, args.review_dir, args.review_count)
+        return
 
     if args.preview_dir:
         os.makedirs(args.preview_dir, exist_ok=True)
