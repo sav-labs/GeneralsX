@@ -2216,8 +2216,13 @@ void GameLogic::loadMapINI( AsciiString mapName )
 	// rebuilt here so it always matches the files loaded for this game.
 	{
 		ArtRemap::reset();
+		// GeneralsX @bugfix Claude 17/10/2026 The content folder is optional: the content pack ships no INI
+		// files since the procedural USA art was dropped, and loadFileDirectory's default ExpectFileFound flag
+		// threw INI_CANT_OPEN_FILE on an empty folder, so every skirmish and campaign start crashed with
+		// "Uncaught Exception in GameEngine::update". Load what is there and accept none.
 		INI contentIni;
-		const UnsignedInt contentFiles = contentIni.loadFileDirectory( "Data\\INI\\GeneralsX", INI_LOAD_CREATE_OVERRIDES, nullptr );
+		const UnsignedInt contentFiles = contentIni.loadFileDirectory( "Data\\INI\\GeneralsX", INI_LOAD_CREATE_OVERRIDES, nullptr,
+			INI::LoadFlags_SearchSubDirs );
 		if (contentFiles > 0) {
 			fprintf(stderr, "[Content] Loaded %u GeneralsX content INI file(s)\n", contentFiles);
 			fflush(stderr);

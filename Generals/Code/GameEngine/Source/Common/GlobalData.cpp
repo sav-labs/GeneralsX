@@ -973,6 +973,8 @@ GlobalData::GlobalData()
 	m_terrainDetailStrength = 0.7f;
 	m_terrainRelief = TRUE;
 	m_terrainSoftBlend = TRUE;
+	m_modelNormalMaps = FALSE;	// GeneralsX @bugfix Claude 17/10/2026 off by default until verified on hardware
+	m_modelSpecular = 1.0f;
 
 //	m_languageFilterPref = false;
 	m_languageFilterPref = true;
@@ -1303,6 +1305,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_terrainDetailStrength = optionPref.getTerrainDetailStrength();
 	TheWritableGlobalData->m_terrainRelief = optionPref.getTerrainReliefEnabled();
 	TheWritableGlobalData->m_terrainSoftBlend = optionPref.getTerrainSoftBlendEnabled();
+	TheWritableGlobalData->m_modelNormalMaps = optionPref.getModelNormalMapsEnabled();
+	TheWritableGlobalData->m_modelSpecular = optionPref.getModelSpecular();
 
 	Int val=optionPref.getGammaValue();
 	//generate a value between 0.6 and 2.0.

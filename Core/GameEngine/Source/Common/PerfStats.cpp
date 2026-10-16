@@ -47,6 +47,7 @@ namespace
 		UnsignedInt64 skinMeshes;
 		UnsignedInt64 skinVertices;
 		UnsignedInt64 skinCacheHits;
+		UnsignedInt64 normalMapDraws;
 		UnsignedInt64 shadowRebuilds;
 		UnsignedInt64 shadowRebuildTriangles;
 		UnsignedInt64 skinnedShadowUpdates;
@@ -159,6 +160,7 @@ namespace
 		w.skinMeshes += s_frameCounters.skinMeshes;
 		w.skinVertices += s_frameCounters.skinVertices;
 		w.skinCacheHits += s_frameCounters.skinCacheHits;
+		w.normalMapDraws += s_frameCounters.normalMapDraws;
 		w.shadowRebuilds += s_frameShadowRebuilds;
 		w.shadowRebuildTriangles += s_frameShadowRebuildTriangles;
 		w.skinnedShadowUpdates += s_frameSkinnedShadowUpdates;
@@ -201,7 +203,7 @@ namespace
 			" | logic=%.2f client=%.2f (drawables=%.2f particles=%.2f draw=%.2f: targets=%.2f scene=%.2f"
 			" [meshes=%.2f shadows=%.2f particles=%.2f] present=%.2f water_refl=%.2f)"
 			" | draws=%.0f max=%u tris=%.0fk sorted=%.0fk"
-			" | skins=%.1f skinverts=%.1fk cachehits=%.1f"
+			" | skins=%.1f skinverts=%.1fk cachehits=%.1f normalmapped=%.1f"
 			" | shadowrebuilds=%.1f (%.1fk tris)"
 			" | skinshadows=%.1f updates=%.1f (%.1fk tris) skinshadow_ms=%.2f"
 			" | lights=%.1f max=%u retail=%.1f candidates=%.1f lights_ms=%.2f"
@@ -216,6 +218,7 @@ namespace
 			avg((double)w.drawCalls, n), w.drawCallsMax,
 			avg((double)w.triangles, n) / 1000.0, avg((double)w.sortedTriangles, n) / 1000.0,
 			avg((double)w.skinMeshes, n), avg((double)w.skinVertices, n) / 1000.0, avg((double)w.skinCacheHits, n),
+			avg((double)w.normalMapDraws, n),
 			avg((double)w.shadowRebuilds, n), avg((double)w.shadowRebuildTriangles, n) / 1000.0,
 			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
 			avg((double)w.skinnedShadowUpdateTriangles, n) / 1000.0, avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n),

@@ -102,6 +102,7 @@ static void drawFramerateBar();
 #include "WW3D2/part_emt.h"
 #include "WW3D2/part_ldr.h"
 #include "WW3D2/dx8caps.h"
+#include "WW3D2/modelnormalmap.h"
 #include "WW3D2/ww3dformat.h"
 #include "WW3D2/agg_def.h"
 #include "WW3D2/render2dsentence.h"
@@ -1207,6 +1208,13 @@ void W3DDisplay::init()
 		init2DScene();
 		init3DScene();
 		W3DShaderManager::init();
+		// GeneralsX @feature Claude 16/10/2026 Model normal and gloss maps (Options.ini ModelNormalMaps,
+		// ModelSpecular). Set before the first mesh is registered for rendering.
+		ModelNormalMapClass::Set_Enabled(TheGlobalData->m_modelNormalMaps != FALSE);
+		ModelNormalMapClass::Set_Specular(TheGlobalData->m_modelSpecular);
+		fprintf(stderr, "[NORMALMAP] model normal maps %s, specular %.2f\n",
+			TheGlobalData->m_modelNormalMaps ? "on" : "off", TheGlobalData->m_modelSpecular);
+		fflush(stderr);
 
 		// Create and initialize the debug display
 		m_nativeDebugDisplay = NEW W3DDebugDisplay();
@@ -2147,6 +2155,7 @@ void W3DDisplay::recordPerfCounters()
 	counters.skinMeshes = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Renders();
 	counters.skinVertices = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Vertices();
 	counters.skinCacheHits = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Cache_Hits();
+	counters.normalMapDraws = (UnsignedInt)Debug_Statistics::Get_DX8_Normal_Map_Draws();
 	counters.particles = TheParticleSystemManager ? TheParticleSystemManager->getParticleCount() : 0;
 	counters.particlesOnScreen = TheParticleSystemManager ? TheParticleSystemManager->getOnScreenParticleCount() : 0;
 	PerfStats::setFrameCounters(counters);

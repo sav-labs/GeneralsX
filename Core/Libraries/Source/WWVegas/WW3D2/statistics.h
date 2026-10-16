@@ -59,6 +59,9 @@ namespace Debug_Statistics
 	// GeneralsX @performance Claude 16/10/2026 Skinned meshes whose vertices came unchanged from the skin cache.
 	void Record_DX8_Skin_Cache_Hit();
 	int Get_DX8_Skin_Cache_Hits();
+	// GeneralsX @feature Claude 16/10/2026 Draws that used the model normal map shaders this frame.
+	void Record_DX8_Normal_Map_Draw();
+	int Get_DX8_Normal_Map_Draws();
 	int Get_Sorting_Polygons();
 	int Get_Sorting_Vertices();
 	int Get_Draw_Calls();
