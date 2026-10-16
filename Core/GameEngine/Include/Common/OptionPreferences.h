@@ -198,6 +198,12 @@ public:
 	Bool getPostEffectsEnabled() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK ambient occlusion (Options.ini AmbientOcclusion, default yes)
 	Bool getAmbientOcclusionEnabled() const;
+	// GeneralsX @feature Claude 16/10/2026 Close-up terrain detail (Options.ini TerrainDetail, TerrainDetailStrength,
+	// TerrainRelief and TerrainSoftBlend; all default on, strength 0.7).
+	Bool getTerrainDetailEnabled() const;
+	Real getTerrainDetailStrength() const;
+	Bool getTerrainReliefEnabled() const;
+	Bool getTerrainSoftBlendEnabled() const;
 	// GeneralsX @feature Claude 15/10/2026 Folder for bug report screenshots and videos (Options.ini CapturePath).
 	AsciiString getCapturePath() const;
 	// GeneralsX @performance Claude 16/10/2026 Frame profiler and big battle render options.

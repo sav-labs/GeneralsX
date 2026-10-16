@@ -46,6 +46,8 @@
 //         Includes
 //-----------------------------------------------------------------------------
 #include "W3DDevice/GameClient/HeightMap.h"
+// GeneralsX @feature Claude 16/10/2026 Detail terrain shader.
+#include "W3DDevice/GameClient/W3DTerrainDetail.h"
 
 #ifndef USE_FLAT_HEIGHT_MAP // Flat height map uses flattened textures. jba. [3/20/2003]
 
@@ -1541,6 +1543,14 @@ void HeightMapRenderObjClass::On_Frame_Update()
 void HeightMapRenderObjClass::staticLightingChanged()
 {
 	BaseHeightMapRenderObjClass::staticLightingChanged();
+	// GeneralsX @feature Claude 16/10/2026 The terrain relief in the atlas is lit by the global lights; bake it
+	// again when they moved (time of day change).
+	if (m_map && W3DTerrainDetail::reliefNeedsRebake()) {
+		TerrainTextureClass *atlas = static_cast<TerrainTextureClass *>(m_map->getTerrainTexture());
+		if (atlas) {
+			atlas->update(m_map);
+		}
+	}
 }
 
 #define CENTER_LIMIT 2
@@ -2355,6 +2365,19 @@ void HeightMapRenderObjClass::renderExtraBlendTiles()
 				DX8Wrapper::Draw_Triangles(	0,indexCount/3, 0,	vertexCount);	//draw a quad, 2 triangles, 4 verts
 				m_numVisibleExtraBlendTiles += indexCount/6;
 			}
+		}
+		else if (W3DShaderManager::isTerrainDetailActive())
+		{
+			// GeneralsX @feature Claude 16/10/2026 Draw the three-texture blend tiles with the detail terrain
+			// shader, so they get the same detail, relief and noise-shaped edge as the layers under them.
+			W3DShaderManager::setTerrainDetailExtraBlend(m_stageOneTexture,
+				useCloud() ? m_stageTwoTexture : nullptr,
+				TheGlobalData->m_useLightMap ? m_stageThreeTexture : nullptr);
+			if (Is_Hidden() == 0) {
+				DX8Wrapper::Draw_Triangles(	0,indexCount/3, 0,	vertexCount);	//draw a quad, 2 triangles, 4 verts
+				m_numVisibleExtraBlendTiles += indexCount/6;
+			}
+			W3DShaderManager::resetTerrainDetailExtraBlend();
 		}
 		else
 		{

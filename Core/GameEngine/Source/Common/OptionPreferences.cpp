@@ -1171,6 +1171,56 @@ Bool OptionPreferences::getPostEffectsEnabled() const
 	return stricmp(it->second.str(), "no") != 0;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainDetail adds a tileable detail texture to the
+// ground that fades in close to the camera. On unless set to "no".
+Bool OptionPreferences::getTerrainDetailEnabled() const
+{
+	OptionPreferences::const_iterator it = find("TerrainDetail");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainDetailStrength, 0..1 (default 0.7): how strongly the
+// terrain detail texture modulates the ground colour.
+Real OptionPreferences::getTerrainDetailStrength() const
+{
+	OptionPreferences::const_iterator it = find("TerrainDetailStrength");
+	if (it == end())
+		return 0.7f;
+
+	Real strength = (Real)atof(it->second.str());
+	if (strength < 0.0f)
+		strength = 0.0f;
+	if (strength > 1.0f)
+		strength = 1.0f;
+
+	return strength;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainRelief lights the bumps of the terrain tiles with the
+// map's sun. On unless set to "no".
+Bool OptionPreferences::getTerrainReliefEnabled() const
+{
+	OptionPreferences::const_iterator it = find("TerrainRelief");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini TerrainSoftBlend breaks up the straight edges between terrain
+// textures with noise. On unless set to "no".
+Bool OptionPreferences::getTerrainSoftBlendEnabled() const
+{
+	OptionPreferences::const_iterator it = find("TerrainSoftBlend");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
 // GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
 // on or off: soft darkening where units and buildings meet the ground and in creases. On unless set to "no".
 Bool OptionPreferences::getAmbientOcclusionEnabled() const
