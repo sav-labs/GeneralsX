@@ -378,7 +378,7 @@ class Kit:
 
 
 # --- baking ----------------------------------------------------------------------------------
-def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
+def _paint_material(name, finish, palette, image, damaged, pattern, burns=None, source=False):
     """Shader whose emission is the finished albedo: paint (camouflage or solid with mottling), ambient
     occlusion, worn edges, dust from below, vertical streaks and, for the damaged model, soot."""
     base, wear, dust, rough = FINISHES[finish]
@@ -471,14 +471,15 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
     else:
         col = srgb(base)
         col = mix(0.5, col, col)
-    # Mottling.
+    # Mottling (not over a source model's own painted texture, where it reads as camouflage).
     mott = math_node("ADD", math_node("MULTIPLY", noise(1.6, 6.0, coords, w=2.0), 0.3), 0.85)
     mott = math_node("MULTIPLY", mott, math_node("ADD", math_node("MULTIPLY", noise(0.05, 2.0, coords, w=8.0), 0.2), 0.9))
     gray = N("ShaderNodeCombineColor")
     for i in range(3):
         L(mott, gray.inputs[i])
-    col = multiply(col, gray.outputs[0])
-    if finish == "paint":
+    if not source:
+        col = multiply(col, gray.outputs[0])
+    if finish == "paint" and not source:
         col = mix(math_node("MULTIPLY", ramp(noise(0.12, 3.0, coords, w=21.0), 0.4, 0.75), 0.35), col,
                   multiply(col, (0.86, 0.92, 0.84, 1.0)))
 
@@ -526,7 +527,7 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
     wn = N("ShaderNodeTexWhiteNoise")
     wn.noise_dimensions = "1D"
     L(attr.outputs["Fac"], wn.inputs["W"])
-    tint = math_node("ADD", math_node("MULTIPLY", wn.outputs["Value"], 0.14), 0.93)
+    tint = math_node("ADD", math_node("MULTIPLY", wn.outputs["Value"], 0.0 if source else 0.14), 1.0 if source else 0.93)
     g3 = N("ShaderNodeCombineColor")
     for i in range(3):
         L(tint, g3.inputs[i])
@@ -559,7 +560,7 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
     amount = math_node("ADD", math_node("MULTIPLY", low, 0.75), math_node("MULTIPLY", math_node("MULTIPLY", up, cav), 1.4))
     amount = math_node("MULTIPLY", amount, ramp(noise(0.9, 5.0, coords, w=4.0), 0.3, 0.75))
     amount = math_node("MULTIPLY", amount, dust * 1.1, clamp=True)
-    col = mix(amount, col, srgb((160, 138, 100)))
+    col = mix(amount, col, srgb((128, 108, 78)))
     grime = math_node("MULTIPLY", math_node("MULTIPLY", cav, cav), 0.9 * min(1.0, dust), clamp=True)
     col = mix(grime, col, srgb((62, 52, 40)))
 
@@ -575,7 +576,7 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
     # Streaks running down vertical faces.
     vert = math_node("SUBTRACT", 1.0, ramp(math_node("ABSOLUTE", nz.outputs["Z"]), 0.2, 0.6))
     streak = ramp(noise(2.0, 2.0, coords, stretch=(1.0, 1.0, 0.06), w=6.0), 0.58, 0.72)
-    streak = math_node("MULTIPLY", math_node("MULTIPLY", streak, vert), 0.6 * min(1.0, dust))
+    streak = math_node("MULTIPLY", math_node("MULTIPLY", streak, vert), 0.85 * min(1.0, dust))
     col = mix(streak, col, srgb((70, 62, 50)))
 
     # Rust weeping from bolts and seams down vertical faces, oil and fuel stains on the engine deck.
@@ -589,17 +590,35 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
     if damaged:
         # The whole vehicle is smoke-stained; around each hit and fire (burns: [(centre, radius)]) the paint is
         # burnt from blistered tan through rust brown and grey ash to black. Heat reaches further upwards.
-        col = mix(0.35, col, multiply(col, (0.62, 0.6, 0.58, 1.0)))
+        col = mix(0.5, col, multiply(col, (0.6, 0.58, 0.55, 1.0)))
+        # Burns are ragged blobs, not rings: warp the position by a noise vector before measuring.
+        nv = N("ShaderNodeTexNoise")
+        nv.inputs["Scale"].default_value = 0.35
+        nv.inputs["Detail"].default_value = 4.0
+        L(coords, nv.inputs["Vector"])
+        cen = N("ShaderNodeVectorMath")
+        cen.operation = "SUBTRACT"
+        L(nv.outputs["Color"], cen.inputs[0])
+        cen.inputs[1].default_value = (0.5, 0.5, 0.5)
+        amp = N("ShaderNodeVectorMath")
+        amp.operation = "SCALE"
+        L(cen.outputs[0], amp.inputs[0])
+        amp.inputs["Scale"].default_value = 5.0
+        wp = N("ShaderNodeVectorMath")
+        wp.operation = "ADD"
+        L(coords, wp.inputs[0])
+        L(amp.outputs[0], wp.inputs[1])
+        warped = wp.outputs[0]
         heat = None
         for centre, radius in burns or ():
             off = N("ShaderNodeVectorMath")
             off.operation = "SUBTRACT"
-            L(coords, off.inputs[0])
+            L(warped, off.inputs[0])
             off.inputs[1].default_value = centre
             sq = N("ShaderNodeVectorMath")
             sq.operation = "MULTIPLY"
             L(off.outputs[0], sq.inputs[0])
-            sq.inputs[1].default_value = (1.0 / radius, 1.0 / radius, 0.65 / radius)
+            sq.inputs[1].default_value = (1.0 / radius, 1.0 / radius, 0.8 / radius)
             ln = N("ShaderNodeVectorMath")
             ln.operation = "LENGTH"
             L(sq.outputs[0], ln.inputs[0])
@@ -614,8 +633,8 @@ def _paint_material(name, finish, palette, image, damaged, pattern, burns=None):
         el = cr.color_ramp.elements
         el[0].position, el[0].color = 0.0, (0.5, 0.5, 0.5, 0.0)
         el[1].position, el[1].color = 0.82, srgb((12, 11, 10))
-        for pos, c in ((0.1, (120, 100, 70)), (0.22, (122, 66, 34)), (0.38, (78, 42, 24)), (0.55, (46, 42, 38)),
-                       (0.68, (22, 20, 19))):
+        for pos, c in ((0.06, (96, 82, 60)), (0.13, (112, 62, 32)), (0.2, (70, 40, 24)), (0.3, (40, 37, 34)),
+                       (0.45, (22, 20, 19))):
             e = el.new(pos)
             e.color = srgb(c)
         el[0].alpha = 0.0

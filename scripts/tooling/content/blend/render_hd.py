@@ -52,6 +52,7 @@ def main():
     p.add_argument("--size", default="960x540")
     p.add_argument("--samples", type=int, default=24)
     p.add_argument("--stills", action="store_true")
+    p.add_argument("--hero", action="store_true", help="with --stills: only the hero shot")
     p.add_argument("--cameo", action="store_true")
     p.add_argument("--stem", default="gxmbt2")
     a = p.parse_args(argv)
@@ -63,8 +64,14 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
 
     body, _ = material("body", os.path.join(a.tex_dir, f"{a.stem}_body{d}.png"), 0.62)
-    team, _ = material("team", os.path.join(a.tex_dir, f"{a.stem}_team{d}.png"), 0.55, team=(0.05, 0.16, 0.75, 1))
-    tread, tread_tex = material("tread", os.path.join(a.tex_dir, f"{a.stem}_tread.png"), 0.8)
+    team_png = os.path.join(a.tex_dir, f"{a.stem}_team{d}.png")
+    if not os.path.exists(team_png):  # models from source files carry no team atlas
+        team_png = os.path.join(a.tex_dir, f"{a.stem}_body{d}.png")
+    team, _ = material("team", team_png, 0.55, team=(0.05, 0.16, 0.75, 1))
+    tread_png = os.path.join(a.tex_dir, f"{a.stem}_tread.png")
+    if not os.path.exists(tread_png):
+        tread_png = os.path.join(a.tex_dir, f"{a.stem}_body{d}.png")
+    tread, tread_tex = material("tread", tread_png, 0.8)
     mapping = tread.node_tree.nodes.new("ShaderNodeMapping")
     uv = tread.node_tree.nodes.new("ShaderNodeTexCoord")
     tread.node_tree.links.new(uv.outputs["UV"], mapping.inputs["Vector"])
@@ -87,6 +94,9 @@ def main():
     own = {}
     for obj in list(scene.objects):
         if obj.type != "MESH":
+            continue
+        if obj.get("bone") is None:
+            obj.hide_render = True
             continue
         kind = obj.get("kind")
         if kind == "shadow":
@@ -113,7 +123,7 @@ def main():
             obj.data.normals_split_custom_set([tuple(v.vector) for v in nrm.data])
     bpy.context.view_layer.update()
     for obj in scene.objects:
-        if obj.type == "MESH":
+        if obj.type == "MESH" and obj.parent:
             obj.matrix_parent_inverse = obj.parent.matrix_world.inverted()
 
     # Ground, sun and sky.
@@ -122,11 +132,29 @@ def main():
     gm = bpy.data.materials.new("ground")
     gm.use_nodes = True
     g = gm.node_tree.nodes["Principled BSDF"]
-    g.inputs["Base Color"].default_value = (0.11, 0.09, 0.065, 1)
+    g.inputs["Base Color"].default_value = (0.13, 0.1, 0.07, 1)
     g.inputs["Roughness"].default_value = 1.0
+    # Desert ground like the game's terrain: sand with darker patches, pebbles and ripples in the relief.
+    gn, gl = gm.node_tree.nodes, gm.node_tree.links
+    big = gn.new("ShaderNodeTexNoise")
+    big.inputs["Scale"].default_value = 0.02
+    big.inputs["Detail"].default_value = 6.0
+    ramp = gn.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.16, 0.12, 0.075, 1)
+    ramp.color_ramp.elements[1].color = (0.3, 0.24, 0.16, 1)
+    gl.new(big.outputs["Fac"], ramp.inputs["Fac"])
+    gl.new(ramp.outputs["Color"], g.inputs["Base Color"])
+    fine = gn.new("ShaderNodeTexNoise")
+    fine.inputs["Scale"].default_value = 1.5
+    fine.inputs["Detail"].default_value = 10.0
+    bump = gn.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.6
+    gl.new(fine.outputs["Fac"], bump.inputs["Height"])
+    gl.new(bump.outputs["Normal"], g.inputs["Normal"])
     ground.data.materials.append(gm)
     sun = bpy.data.objects.new("sun", bpy.data.lights.new("sun", "SUN"))
-    sun.data.energy = 2.4
+    sun.data.energy = 3.2
+    sun.data.color = (1.0, 0.95, 0.86)
     sun.data.angle = math.radians(4)
     sun.rotation_euler = Euler((math.radians(48), 0, math.radians(-150)))
     scene.collection.objects.link(sun)
@@ -142,7 +170,7 @@ def main():
     sky.sun_rotation = math.radians(-150 + 90)
     bg = world.node_tree.nodes["Background"]
     world.node_tree.links.new(sky.outputs["Color"], bg.inputs["Color"])
-    bg.inputs["Strength"].default_value = 0.22
+    bg.inputs["Strength"].default_value = 0.14
     scene.world = world
 
     cam = bpy.data.objects.new("cam", bpy.data.cameras.new("cam"))
@@ -177,7 +205,7 @@ def main():
     scene.render.film_transparent = False
     scene.view_settings.view_transform = "AgX"
     scene.view_settings.look = "AgX - Medium High Contrast"
-    scene.view_settings.exposure = -0.7
+    scene.view_settings.exposure = float(os.environ.get("GX_EXPOSURE", "-1.2"))
 
     def key(name, frame, loc=None, rot=None):
         if name not in empties:
@@ -223,6 +251,8 @@ def main():
         scene.frame_set(1)
         scene.render.filepath = os.path.join(a.out_dir, "hero.png")
         bpy.ops.render.render(write_still=True)
+        if a.hero:
+            return
         cam.data.type = "ORTHO"
         cam.location = (dist * math.cos(pitch), 0, dist * math.sin(pitch))
         cam.rotation_euler = Euler((math.pi / 2 - pitch, 0, math.pi / 2))
