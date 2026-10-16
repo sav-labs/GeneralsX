@@ -171,7 +171,7 @@ def probe(listing, out):
         elif line:
             uids.append(line.split()[0])
     report = {}
-    for uid in list(dict.fromkeys(uids))[:16]:
+    for uid in list(dict.fromkeys(uids))[:40]:
         try:
             info = get(f"{API}/models/{uid}")
             links = get(f"{API}/models/{uid}/download", token=token)
