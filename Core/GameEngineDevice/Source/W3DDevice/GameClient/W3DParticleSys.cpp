@@ -37,6 +37,8 @@
 #include "WW3D2/camera.h"
 #include "WW3D2/sortingrenderer.h"
 
+#include <set>
+
 
 //------------------------------------------------------------------------------ Performance Timers
 //#include "Common/PerfMetrics.h"
@@ -337,6 +339,23 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		if (pointCount == startCount)
 		{
 			continue;	//this system has no particles to render
+		}
+
+		// GeneralsX @feature Claude 16/10/2026 Report each flipbook system once with its texture, so a capture
+		// log shows whether the atlases load and draw.
+		if (frameLog2 != 0 && sys->getTemplate())
+		{
+			static std::set<AsciiString> reported;
+			if (reported.insert(sys->getTemplate()->getName()).second)
+			{
+				TextureClass *tex = texture.Peek();
+				fprintf(stderr, "[FX] flipbook %s tex=%s init=%d missing=%d %dx%d grid=%u points=%u shader=%d\n",
+					sys->getTemplate()->getName().str(), sys->getParticleTypeName().str(),
+					tex ? (int)tex->Is_Initialized() : -1, tex ? (int)tex->Is_Missing_Texture() : -1,
+					tex ? tex->Get_Width() : 0, tex ? tex->Get_Height() : 0, 1u << frameLog2,
+					pointCount - startCount, (int)sys->getShaderType());
+				fflush(stderr);
+			}
 		}
 
 		const UnsignedInt volumeParticleDepth = sys->getVolumeParticleDepth();
