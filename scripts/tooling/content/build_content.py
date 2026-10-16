@@ -220,7 +220,7 @@ def fit(img, size, pad=3, top=1.0):
 CELLS_PER_SHEET = 10
 
 
-def build_cameos(stage, tex_dir, models, tex):
+def build_cameos(stage, tex_dir, models, tex, hd_cameos=None):
     """Sheets of command bar art (1024x1024, ten cells each: gxcameos.tga, gxcameos2.tga ...): per unit a
     button (120x96) and a selection portrait (216x178), plus the MappedImage INI that cuts them out
     (Name for the button, Name_L for the portrait)."""
@@ -240,8 +240,16 @@ def build_cameos(stage, tex_dir, models, tex):
         x, y = (cell % 2) * (CELL_W + 8), (cell // 2) * (CELL_H + 8)
         model = models[model_name]
         top = 0.5 if getattr(model, "stance", None) else 1.0
-        button = textures.cameo_frame(fit(render(model, tex, size=(480, 480), yaw=35, pitch=24, hide=DEFAULT_HIDDEN), (120, 96), top=top), (120, 96))
-        portrait = textures.cameo_frame(fit(render(model, tex, size=(640, 640), yaw=30, pitch=20, hide=DEFAULT_HIDDEN), (216, 178), top=top), (216, 178))
+        hd = hd_cameos and os.path.join(hd_cameos, f"{model_name}_button.png")
+        if hd and os.path.exists(hd):
+            # Detailed models come with their own Blender renders (blend/render_hd.py --cameo).
+            shots = [Image.open(hd).convert("RGBA"),
+                     Image.open(os.path.join(hd_cameos, f"{model_name}_portrait.png")).convert("RGBA")]
+        else:
+            shots = [render(model, tex, size=(480, 480), yaw=35, pitch=24, hide=DEFAULT_HIDDEN),
+                     render(model, tex, size=(640, 640), yaw=30, pitch=20, hide=DEFAULT_HIDDEN)]
+        button = textures.cameo_frame(fit(shots[0], (120, 96), top=top), (120, 96))
+        portrait = textures.cameo_frame(fit(shots[1], (216, 178), top=top), (216, 178))
         sheet.paste(button, (x, y))
         sheet.paste(portrait, (x + 128, y))
         for name in [cameo] + RETAIL_CAMEOS.get(cameo, []):
@@ -272,6 +280,8 @@ def main():
     parser.add_argument("repo")
     parser.add_argument("out")
     parser.add_argument("--preview")
+    parser.add_argument("--hd", help="output of blend/build_hd.py (w3d/, tex/, cameos/): detailed models that "
+                                     "replace the procedural ones of the same name")
     args = parser.parse_args()
 
     stage = os.path.join(args.out, "stage")
@@ -284,7 +294,14 @@ def main():
 
     tex = build_textures(tex_dir)
     models = build_models(w3d_dir, tex)
-    build_cameos(stage, tex_dir, models, tex)
+    hd_cameos = None
+    if args.hd:
+        for sub, dest, ext in (("w3d", w3d_dir, ".w3d"), ("tex", tex_dir, ".tga")):
+            for name in sorted(os.listdir(os.path.join(args.hd, sub))):
+                if name.endswith(ext):
+                    shutil.copy(os.path.join(args.hd, sub, name), os.path.join(dest, name))
+        hd_cameos = os.path.join(args.hd, "cameos")
+    build_cameos(stage, tex_dir, models, tex, hd_cameos)
 
     write_big(os.path.join(args.out, PACK_NAME), collect(stage))
 

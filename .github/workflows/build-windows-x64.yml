@@ -43,6 +43,52 @@ jobs:
   # GeneralsX @feature Claude 15/10/2026 Without DXVK_CAPTURE_VIDEO, the game starts and stops clips at run time through
   # DXVK_CAPTURE_VIDEO_CONTROL (patch 0012): F11 or Ctrl+Shift+R records a bug report video into Options.ini CapturePath
   # (default D:\GeneralsX\bugs), encoded to mp4 by a helper copy of GeneralsXZH.exe with the FFmpeg DLLs it ships.
+  # GeneralsX @feature Claude 16/10/2026 Detailed unit models: built and baked with Blender's Python module (bpy) from
+  # scripts/tooling/content/blend, cached on the hash of those scripts so a push that does not touch them reuses the
+  # last bake. The Windows job folds them into the content pack (build_content.py --hd).
+  hd-models:
+    name: Detailed models (Blender)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/tooling/content
+
+      - name: Cache baked models
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: hd-out
+          key: hd-models-${{ hashFiles('scripts/tooling/content/blend/**', 'scripts/tooling/content/w3d.py', 'scripts/tooling/content/textures.py') }}
+
+      - name: Set up Python
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build and bake
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6 libegl1
+          python -m pip install bpy==5.2.2 pillow==12.0.0 numpy==2.1.3
+          python scripts/tooling/content/blend/build_hd.py hd-out
+          rm -f hd-out/tex/*.blend
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: hd-models
+          path: |
+            hd-out/w3d
+            hd-out/tex/*.tga
+            hd-out/cameos
+          retention-days: 3
+
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -82,7 +128,7 @@ jobs:
 
   build-windows-x64:
     name: Zero Hour x64
-    needs: dxvk-fsr
+    needs: [dxvk-fsr, hd-models]
     runs-on: windows-2022
     timeout-minutes: 90
 
@@ -175,12 +221,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Download detailed models
+        uses: actions/download-artifact@v8
+        with:
+          name: hd-models
+          path: hd-models
+
       - name: Build content pack
         shell: pwsh
         run: |
           python -m pip install pillow==12.0.0 numpy==2.1.3
-          python scripts/tooling/content/test_content.py
-          python scripts/tooling/content/build_content.py . content-out
+          python scripts/tooling/content/test_content.py --hd hd-models
+          python scripts/tooling/content/build_content.py . content-out --hd hd-models
 
       - name: Collect runtime
         shell: pwsh

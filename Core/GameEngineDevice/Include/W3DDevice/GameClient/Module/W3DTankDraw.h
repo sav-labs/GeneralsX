@@ -99,4 +99,27 @@ protected:
 	void stopMoveDebris(); ///< Stop creating debris from the tank treads.
 	void updateTreadObjects(); ///< Update pointers to sub-objects like treads.
 	void updateTreadPositions(Real uvDelta); ///< Update uv coordinates on each tread.
+
+	// GeneralsX @feature Claude 16/10/2026 Moving parts of the detailed content models: road wheels,
+	// sprockets and idlers turn with the tracks, sensors scan and antennas sway. Found by bone name,
+	// so retail models, which have none of these bones, are left alone.
+	enum { MAX_GEAR_BONES = 32, MAX_SCAN_BONES = 2, MAX_ANTENNA_BONES = 2 };
+	struct GearBoneInfo
+	{
+		Int m_bone;		///< bone the wheel mesh hangs on
+		Int m_side;		///< 0 left track, 1 right track
+		Real m_radius;	///< rolling radius, from the wheel mesh's bounds
+	};
+	GearBoneInfo m_gear[MAX_GEAR_BONES];
+	Int m_gearCount;
+	Int m_scanBones[MAX_SCAN_BONES];
+	Int m_antennaBones[MAX_ANTENNA_BONES];
+	Real m_treadTravel[2];		///< distance each track has run, in world units
+	Real m_lastTreadU[2];		///< tread texture offset at the last draw
+	Real m_antennaAngle;		///< whip antenna lean, radians
+	Real m_antennaRate;
+	Real m_lastSpeed;
+
+	void findMovingParts(); ///< Look up the moving-part bones of the current model.
+	void updateMovingParts(Real speed); ///< Turn the running gear, scan sensors, sway antennas.
 };

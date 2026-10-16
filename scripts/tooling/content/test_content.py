@@ -115,7 +115,8 @@ def check_w3d(name, data):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run([sys.executable, os.path.join(HERE, "build_content.py"), REPO, tmp], check=True)
+        extra = sys.argv[1:]  # e.g. --hd <build_hd.py output>, as CI passes to build_content.py
+        subprocess.run([sys.executable, os.path.join(HERE, "build_content.py"), REPO, tmp] + extra, check=True)
         files = read_big(os.path.join(tmp, "GeneralsXContent.big"))
 
     models = [n for n in files if n.endswith(".w3d")]
