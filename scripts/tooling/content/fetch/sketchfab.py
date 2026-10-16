@@ -186,7 +186,10 @@ def probe(listing, out):
             report[uid] = {"name": info["name"], "author": info["user"]["username"],
                            "licence": info["license"]["slug"] if isinstance(info.get("license"), dict) else None,
                            "faces": info.get("faceCount"), "mb": len(data) // (1024 * 1024), "materials": mats,
-                           "maps": maps, "url": info.get("viewerUrl")}
+                           "maps": maps, "url": info.get("viewerUrl"),
+                           # Sizes of the other downloads: a much larger gltf or source archive means the
+                           # glb carries downscaled textures.
+                           "downloads": {k: (v.get("size") if isinstance(v, dict) else None) for k, v in links.items()}}
             print(uid, json.dumps(report[uid]), flush=True)
         except Exception as e:
             print(f"probe {uid} failed: {e}")
