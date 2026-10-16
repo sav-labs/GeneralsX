@@ -22,6 +22,8 @@
 // unjittered camera is passed to DXVK through the exported GeneralsX_UpscalerSubmitFrame, and render
 // state 252 tells DXVK to copy the scene colour and depth. Only the projection sent to the GPU changes;
 // game logic, culling and picking never see the jitter.
+// GeneralsX @feature Claude 16/10/2026 Render state 251 marks the end of the opaque scene, before particles and
+// other alpha-blended effects; DXVK builds FSR 2's reactive mask from that copy and the final scene (patch 0015).
 
 #pragma once
 
@@ -34,4 +36,8 @@ public:
 	static void beginScene(CameraClass *camera);
 	/// After the 3D scene, before the interface: removes the jitter and hands the frame to DXVK
 	static void endScene(CameraClass *camera);
+	// GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask, see W3DUpscaler.cpp
+	/// Before particles and other alpha-blended effects: render state 251 lets DXVK copy the opaque scene,
+	/// which FSR 2 compares with the final scene to find the pixels those effects changed
+	static void markOpaqueScene();
 };

@@ -1125,6 +1125,41 @@ AsciiString OptionPreferences::getUpscalerQualityName() const
 	return AsciiString("Quality");
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini UpscalerReactiveScale: how strongly FSR 2 favours the current
+// frame over its history where particles, smoke, explosions and other alpha-blended effects changed the scene.
+// 0 turns the reactive mask off. The default 0.9 is the highest reactivity AMD recommends for FSR 2; it is also
+// the binary value of AMD's FSR 2 sample. Missing or invalid keys give the default.
+Real OptionPreferences::getUpscalerReactiveScale() const
+{
+	OptionPreferences::const_iterator it = find("UpscalerReactiveScale");
+	if (it == end())
+		return 0.9f;
+
+	Real scale = (Real)atof(it->second.str());
+	if (!(scale >= 0.0f))
+		return 0.9f;
+
+	return clamp(0.0f, scale, 1.0f);
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini UpscalerSharpness: FSR 2's built-in RCAS pass, 0 to 1 (1 is
+// the sharpest, AMD's scale). With it, the FSR 1.0 RCAS pass of FSRSharpness only sharpens the interface, so
+// nothing is sharpened twice. 0 leaves the whole frame to FSRSharpness, as before FSR 2 had its own pass. The
+// default 0.5 is one stop below the RCAS maximum, milder than the FSR 1.0 default of 0.2 stops: FSR 2 already
+// rebuilds detail over several frames, and strong sharpening makes its sub-pixel jitter shimmer.
+Real OptionPreferences::getUpscalerSharpness() const
+{
+	OptionPreferences::const_iterator it = find("UpscalerSharpness");
+	if (it == end())
+		return 0.5f;
+
+	Real sharpness = (Real)atof(it->second.str());
+	if (!(sharpness >= 0.0f))
+		return 0.5f;
+
+	return clamp(0.0f, sharpness, 1.0f);
+}
+
 // GeneralsX @feature Claude 16/10/2026 Options.ini PostEffects turns the DXVK present pass effects on or off:
 // bloom with a light colour grade, and FXAA when anti-aliasing is off. On unless set to "no".
 Bool OptionPreferences::getPostEffectsEnabled() const

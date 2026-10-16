@@ -1,0 +1,874 @@
+GeneralsX: FSR 2 reactive mask for particles and other alpha-blended
+effects, which leave no depth or motion and smear in the temporal
+history. The game sets render state 251 when its opaque scene is drawn;
+the D3D9 device copies render target 0 there, and at present FSR 2's
+ffxFsr2ContextGenerateReactiveMask compares that copy with the scene
+colour of render state 252. DXVK_FSR2_REACTIVE_SCALE (default 0.9, 0 is
+off) and DXVK_FSR2_REACTIVE_THRESHOLD (default 0.05) tune the mask,
+DXVK_FSR2_SHARPNESS turns on FSR 2's own RCAS pass instead of the swap
+chain's, and DXVK_FSR2_DEBUG=reactive shows the mask. The SPIR-V
+reflection of the FSR 2 passes now leaves out resources a pass never
+reads, which the backend would otherwise bind empty.
+
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -2285,6 +2285,14 @@
+       return D3D_OK;
+     }
+ 
++    // GeneralsX: private end-of-opaque-scene marker for the FSR 2 reactive
++    // mask, never part of a state block.
++    if (unlikely(State == D3D9UpscalerOpaqueRenderState)) {
++      if (Value != 0u)
++        CaptureUpscalerOpaque();
++      return D3D_OK;
++    }
++
+     if (unlikely(ShouldRecord()))
+       return m_recorder->SetRenderState(State, Value);
+ 
+@@ -8353,6 +8361,9 @@
+   // the 3D scene, before the interface is drawn, together with the camera
+   // the game submitted. The swap chain hands them to FSR 2 at present.
+   void D3D9DeviceEx::CaptureUpscalerInputs() {
++    // GeneralsX: the opaque copy belongs to this scene only
++    const bool opaqueValid = std::exchange(m_upscalerOpaqueValid, false);
++
+     D3D9UpscalerFrame frame;
+ 
+     { std::lock_guard lock(g_upscalerFrameMutex);
+@@ -8544,10 +8555,133 @@
+     inputs.viewProj    = projection * view;
+     inputs.reset       = (frame.flags & D3D9UpscalerFrameReset) != 0u;
+ 
++    // GeneralsX: the opaque copy is only comparable with the scene colour
++    // when both come from the same render target. A view filter may have
++    // drawn the opaque scene into a texture instead.
++    if (opaqueValid) {
++      if (m_upscalerOpaqueSource == colorSrc
++       && m_upscalerOpaqueLayers.mipLevel == colorSrcLayers.mipLevel
++       && m_upscalerOpaqueLayers.baseArrayLayer == colorSrcLayers.baseArrayLayer
++       && m_upscalerOpaqueImage->info().extent == extent
++       && m_upscalerOpaqueImage->info().format == colorInfo.format) {
++        inputs.opaqueColor = m_upscalerOpaqueView;
++      } else if (!std::exchange(m_upscalerOpaqueLogged, true)) {
++        Logger::warn("[FSR2] reactive mask: opaque scene and final scene were drawn to different render targets, no mask for such frames");
++      }
++    }
++
++    m_upscalerOpaqueSource = nullptr;
+     m_upscalerInputs = std::move(inputs);
+   }
+ 
+ 
++  // GeneralsX: copies render target 0 when the game has drawn the opaque
++  // part of its 3D scene, before particles and other alpha-blended effects.
++  // FSR 2 generates its reactive mask from this copy and the scene colour
++  // of CaptureUpscalerInputs; the last copy before render state 252 wins.
++  void D3D9DeviceEx::CaptureUpscalerOpaque() {
++    m_upscalerOpaqueValid = false;
++    m_upscalerOpaqueSource = nullptr;
++
++    if (!DxvkFsr2::isTemporalActive() || !DxvkFsr2::isReactiveWanted())
++      return;
++
++    D3D9Surface* rt = m_state.renderTargets[0].ptr();
++
++    if (rt == nullptr)
++      return;
++
++    Rc<DxvkImage> colorSrc = rt->GetCommonTexture()->GetImage();
++
++    if (colorSrc == nullptr)
++      return;
++
++    const DxvkImageCreateInfo& colorInfo = colorSrc->info();
++    VkExtent3D colorExtent = colorSrc->mipLevelExtent(rt->GetMipLevel());
++    VkExtent3D extent = { colorExtent.width, colorExtent.height, 1u };
++
++    if (m_upscalerOpaqueImage == nullptr
++     || m_upscalerOpaqueImage->info().format != colorInfo.format
++     || m_upscalerOpaqueImage->info().colorSpace != colorInfo.colorSpace
++     || m_upscalerOpaqueImage->info().extent != extent) {
++      DxvkImageCreateInfo info = { };
++      info.type        = VK_IMAGE_TYPE_2D;
++      info.format      = colorInfo.format;
++      info.sampleCount = VK_SAMPLE_COUNT_1_BIT;
++      info.extent      = extent;
++      info.numLayers   = 1;
++      info.mipLevels   = 1;
++      info.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT
++                       | VK_IMAGE_USAGE_SAMPLED_BIT
++                       | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++      info.stages      = VK_PIPELINE_STAGE_TRANSFER_BIT
++                       | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
++                       | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
++                       | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
++      info.access      = VK_ACCESS_TRANSFER_WRITE_BIT
++                       | VK_ACCESS_SHADER_READ_BIT
++                       | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
++      info.tiling      = VK_IMAGE_TILING_OPTIMAL;
++      info.layout      = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++      info.colorSpace  = colorInfo.colorSpace;
++      info.debugName   = "FSR2 opaque scene colour";
++
++      m_upscalerOpaqueImage = m_dxvkDevice->createImage(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++      DxvkImageViewKey viewKey = { };
++      viewKey.viewType   = VK_IMAGE_VIEW_TYPE_2D;
++      viewKey.format     = colorInfo.format;
++      viewKey.usage      = VK_IMAGE_USAGE_SAMPLED_BIT;
++      viewKey.aspects    = VK_IMAGE_ASPECT_COLOR_BIT;
++      viewKey.mipIndex   = 0;
++      viewKey.mipCount   = 1;
++      viewKey.layerIndex = 0;
++      viewKey.layerCount = 1;
++
++      m_upscalerOpaqueView = m_upscalerOpaqueImage->createView(viewKey);
++
++      Logger::info(str::format("[FSR2] reactive mask: capturing the opaque scene at ",
++        extent.width, "x", extent.height, " (", colorInfo.sampleCount, " samples)"));
++    }
++
++    VkImageSubresourceLayers srcLayers = { };
++    srcLayers.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
++    srcLayers.mipLevel       = rt->GetMipLevel();
++    srcLayers.baseArrayLayer = rt->GetFace();
++    srcLayers.layerCount     = 1;
++
++    EmitCs([
++      cDst    = m_upscalerOpaqueImage,
++      cSrc    = colorSrc,
++      cLayers = srcLayers,
++      cExtent = extent
++    ] (DxvkContext* ctx) {
++      VkImageSubresourceLayers dstLayers = cLayers;
++      dstLayers.mipLevel       = 0;
++      dstLayers.baseArrayLayer = 0;
++
++      if (cSrc->info().sampleCount != VK_SAMPLE_COUNT_1_BIT) {
++        VkImageResolve region;
++        region.srcSubresource = cLayers;
++        region.srcOffset      = VkOffset3D { 0, 0, 0 };
++        region.dstSubresource = dstLayers;
++        region.dstOffset      = VkOffset3D { 0, 0, 0 };
++        region.extent         = cExtent;
++
++        ctx->resolveImage(cDst, cSrc, region, cSrc->info().format,
++          VK_RESOLVE_MODE_AVERAGE_BIT, VK_RESOLVE_MODE_AVERAGE_BIT);
++      } else {
++        ctx->copyImage(cDst, dstLayers, VkOffset3D { 0, 0, 0 },
++          cSrc, cLayers, VkOffset3D { 0, 0, 0 }, cExtent);
++      }
++    });
++
++    m_upscalerOpaqueSource = colorSrc;
++    m_upscalerOpaqueLayers = srcLayers;
++    m_upscalerOpaqueValid = true;
++  }
++
++
+   DxvkTemporalUpscaleInputs D3D9DeviceEx::TakeUpscalerInputs() {
+     return std::exchange(m_upscalerInputs, DxvkTemporalUpscaleInputs());
+   }
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -58,6 +58,13 @@
+   // D3D9 does not define render state 252.
+   constexpr D3DRENDERSTATETYPE D3D9UpscalerSceneRenderState = D3DRENDERSTATETYPE(252);
+ 
++  // GeneralsX: private render state that marks the end of the opaque part
++  // of the 3D scene, before particles and other alpha-blended effects. The
++  // device copies render target 0 here; FSR 2 compares the copy with the
++  // scene colour of render state 252 to build its reactive mask.
++  // D3D9 does not define render state 251.
++  constexpr D3DRENDERSTATETYPE D3D9UpscalerOpaqueRenderState = D3DRENDERSTATETYPE(251);
++
+   /**
+    * \brief GeneralsX: camera of the frame for the temporal upscaler
+    *
+@@ -1431,6 +1438,9 @@
+     // GeneralsX: FSR 2 scene capture, see D3D9UpscalerSceneRenderState
+     void CaptureUpscalerInputs();
+ 
++    // GeneralsX: FSR 2 opaque scene copy, see D3D9UpscalerOpaqueRenderState
++    void CaptureUpscalerOpaque();
++
+   public:
+ 
+     /**
+@@ -1675,6 +1685,16 @@
+     Rc<DxvkImageView>               m_upscalerDepthView;
+     DxvkTemporalUpscaleInputs       m_upscalerInputs;
+     bool                            m_upscalerLogged = false;
++
++    // GeneralsX: copy of render target 0 before the alpha-blended effects
++    // for the FSR 2 reactive mask, see CaptureUpscalerOpaque. Only used
++    // when render state 252 finds the same render target.
++    Rc<DxvkImage>                   m_upscalerOpaqueImage;
++    Rc<DxvkImageView>               m_upscalerOpaqueView;
++    Rc<DxvkImage>                   m_upscalerOpaqueSource;
++    VkImageSubresourceLayers        m_upscalerOpaqueLayers = { };
++    bool                            m_upscalerOpaqueValid = false;
++    bool                            m_upscalerOpaqueLogged = false;
+     
+     VkImageLayout                   m_hazardLayout = VK_IMAGE_LAYOUT_GENERAL;
+ 
+diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
+--- a/src/dxvk/dxvk_fsr2.cpp
++++ b/src/dxvk/dxvk_fsr2.cpp
+@@ -1,8 +1,13 @@
+ #include "dxvk_fsr2.h"
+ 
++#include <algorithm>
++#include <cctype>
+ #include <cmath>
++#include <cstdlib>
+ #include <cstring>
+ 
++#include "../util/util_env.h"
++
+ #include <dxvk_fsr2_prepare.h>
+ #include <dxvk_fsr2_composite.h>
+ 
+@@ -17,6 +22,67 @@
+   std::atomic<bool> DxvkFsr2::s_temporalActive = { false };
+ 
+ 
++  // GeneralsX: settings of the reactive mask and of FSR 2's own RCAS pass.
++  // The game sets them from Options.ini, see WinMain.cpp applyRenderScale.
++  //
++  // DXVK_FSR2_REACTIVE_SCALE  Reactivity of pixels that alpha-blended
++  //                           effects changed, 0 to 1. 0 turns the mask
++  //                           off. Default 0.9, the maximum AMD
++  //                           recommends for reactive values.
++  // DXVK_FSR2_REACTIVE_THRESHOLD
++  //                           Smallest change, after FSR 2's tonemap
++  //                           (which maps 0..1 to 0..0.5), that marks a
++  //                           pixel. Default 0.05.
++  // DXVK_FSR2_SHARPNESS       FSR 2 RCAS sharpness, 0 to 1. 0 leaves
++  //                           sharpening to the swap chain's FSR 1.0 RCAS.
++  // DXVK_FSR2_DEBUG=reactive  Shows the reactive mask in red over a
++  //                           grey copy of the frame.
++  const DxvkFsr2::Settings& DxvkFsr2::getSettings() {
++    static const Settings s_settings = [] {
++      Settings settings;
++
++      auto readFloat = [] (const char* name, float value, float lo, float hi) {
++        std::string text = env::getEnvVar(name);
++
++        if (!text.empty()) {
++          char* end = nullptr;
++          float parsed = std::strtof(text.c_str(), &end);
++
++          if (end != text.c_str() && std::isfinite(parsed))
++            value = std::clamp(parsed, lo, hi);
++          else
++            Logger::warn(str::format("[FSR2] ignoring ", name, "=", text, ", not a number"));
++        }
++
++        return value;
++      };
++
++      settings.reactiveScale     = readFloat("DXVK_FSR2_REACTIVE_SCALE", settings.reactiveScale, 0.0f, 1.0f);
++      settings.reactiveThreshold = readFloat("DXVK_FSR2_REACTIVE_THRESHOLD", settings.reactiveThreshold, 0.0f, 1.0f);
++      settings.sharpness         = readFloat("DXVK_FSR2_SHARPNESS", settings.sharpness, 0.0f, 1.0f);
++
++      std::string debug = env::getEnvVar("DXVK_FSR2_DEBUG");
++
++      for (auto& c : debug)
++        c = std::tolower(static_cast<unsigned char>(c));
++
++      settings.debugReactive = debug == "reactive";
++
++      if (!debug.empty() && !settings.debugReactive)
++        Logger::warn(str::format("[FSR2] unknown DXVK_FSR2_DEBUG value ", debug, ", expected reactive"));
++
++      return settings;
++    } ();
++
++    return s_settings;
++  }
++
++
++  bool DxvkFsr2::isReactiveWanted() {
++    return isAvailable() && getSettings().reactiveScale > 0.0f;
++  }
++
++
+   DxvkFsr2::DxvkFsr2(const Rc<DxvkDevice>& device)
+   : m_device(device) {
+     if (!isAvailable()) {
+@@ -24,6 +90,18 @@
+       return;
+     }
+ 
++    m_settings = getSettings();
++
++    Logger::info(str::format("[FSR2] reactive mask ",
++      m_settings.reactiveScale > 0.0f
++        ? str::format("on, value ", m_settings.reactiveScale, ", threshold ", m_settings.reactiveThreshold)
++        : std::string("off"),
++      ", FSR 2 sharpening ",
++      m_settings.sharpness > 0.0f
++        ? str::format(m_settings.sharpness)
++        : std::string("off (FSR 1.0 RCAS sharpens)"),
++      m_settings.debugReactive ? ", debug view of the reactive mask" : ""));
++
+     createPipelines();
+ 
+     DxvkSamplerKey samplerKey = { };
+@@ -111,10 +189,17 @@
+ 
+     preparePass(ctx, inputs);
+ 
+-    bool success = dispatchFsr2(ctx, inputs);
++    // GeneralsX: reactive mask from the scene before and after its
++    // alpha-blended effects
++    bool useReactive = m_settings.reactiveScale > 0.0f
++      && inputs.opaqueColor != nullptr
++      && inputs.opaqueColor->mipLevelExtent(0u) == colorExtent
++      && generateReactive(ctx, inputs);
++
++    bool success = dispatchFsr2(ctx, inputs, useReactive);
+ 
+     if (success)
+-      compositePass(ctx, inputs, finalView, finalRect, spatialView);
++      compositePass(ctx, inputs, finalView, finalRect, spatialView, useReactive);
+ 
+     // DXVK does not know about the compute reads above, so make sure that
+     // later writes to the back buffer and the scene copies wait for them.
+@@ -136,6 +221,11 @@
+     ctx.cmd->track(m_motionImage, DxvkAccess::Write);
+     ctx.cmd->track(m_outputImage, DxvkAccess::Write);
+     ctx.cmd->track(m_compositeImage, DxvkAccess::Write);
++
++    if (useReactive) {
++      ctx.cmd->track(inputs.opaqueColor->image(), DxvkAccess::Read);
++      ctx.cmd->track(m_reactiveImage, DxvkAccess::Write);
++    }
+     ctx.cmd->track(m_pointSampler);
+     ctx.cmd->track(m_linearSampler);
+ 
+@@ -151,7 +241,8 @@
+         renderExtent.width, "x", renderExtent.height, " to ", extent.width, "x", extent.height,
+         ", jitter ", inputs.jitter[0], " ", inputs.jitter[1],
+         ", near ", inputs.cameraNear, ", far ", inputs.cameraFar,
+-        ", frame time ", inputs.frameTimeMs, " ms"));
++        ", frame time ", inputs.frameTimeMs, " ms",
++        useReactive ? ", reactive mask" : (m_settings.reactiveScale > 0.0f ? ", no reactive mask (no opaque scene copy)" : "")));
+     }
+ 
+     return m_compositeView;
+@@ -249,13 +340,14 @@
+     }};
+ 
+     // Composite pass: FSR 2 output, EASU output, final and scene images,
+-    // composited output
+-    std::array<VkDescriptorSetLayoutBinding, 5> compositeBindings = {{
++    // composited output, and the reactive mask for its debug view
++    std::array<VkDescriptorSetLayoutBinding, 6> compositeBindings = {{
+       { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
+       { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
+       { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
+       { 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
+       { 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT },
++      { 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT },
+     }};
+ 
+     auto createLayouts = [&] (const VkDescriptorSetLayoutBinding* bindings, uint32_t count,
+@@ -380,6 +472,8 @@
+     m_motionImage    = createImage(renderExtent,  VK_FORMAT_R16G16_SFLOAT,       "FSR2 motion",      m_motionView);
+     m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 output",      m_outputView);
+     m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 composite",   m_compositeView);
++    // GeneralsX: FSR 2's reactive mask shader writes it as r32f
++    m_reactiveImage  = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR2 reactive",    m_reactiveView);
+   }
+ 
+ 
+@@ -480,10 +574,83 @@
+   }
+ 
+ 
+-  bool DxvkFsr2::dispatchFsr2(
++  bool DxvkFsr2::generateReactive(
+     const DxvkContextObjects&         ctx,
+     const DxvkTemporalUpscaleInputs&  inputs) {
+ #ifdef DXVK_GENERALSX_FSR2
++    // The mask is fully overwritten; FSR 2 of the previous frame and the
++    // debug view may still read it.
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_reactiveImage->handle();
++    barrier.subresourceRange = m_reactiveView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    FfxFsr2Context* context = reinterpret_cast<FfxFsr2Context*>(m_context.get());
++    VkCommandBuffer cmdBuffer = ctx.cmd->getExecCommandBuffer();
++
++    VkExtent3D colorExtent = inputs.color->mipLevelExtent(0u);
++
++    // AMD's helper compares the scene with and without its alpha-blended
++    // effects. With APPLY_THRESHOLD every pixel whose largest tonemapped
++    // channel changed by at least the threshold gets the binary value,
++    // all others 0, as in AMD's FSR 2 sample (threshold 0.2, value 0.9).
++    // The game draws LDR colour, which FSR 2's tonemap squeezes into
++    // 0..0.5, so the threshold here is lower to catch smoke and dust.
++    FfxFsr2GenerateReactiveDescription desc = { };
++    desc.commandList = ffxGetCommandListVK(cmdBuffer);
++    desc.colorOpaqueOnly = ffxGetTextureResourceVK(context, inputs.opaqueColor->image()->handle(), inputs.opaqueColor->handle(),
++      colorExtent.width, colorExtent.height, inputs.opaqueColor->info().format, L"FSR2 opaque color", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.colorPreUpscale = ffxGetTextureResourceVK(context, inputs.color->image()->handle(), inputs.color->handle(),
++      colorExtent.width, colorExtent.height, inputs.color->info().format, L"FSR2 color", FFX_RESOURCE_STATE_COMPUTE_READ);
++    desc.outReactive = ffxGetTextureResourceVK(context, m_reactiveImage->handle(), m_reactiveView->handle(),
++      m_renderExtent.width, m_renderExtent.height, VK_FORMAT_R32_SFLOAT, L"FSR2 reactive", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++    desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
++    desc.scale = 1.0f;
++    desc.cutoffThreshold = m_settings.reactiveThreshold;
++    desc.binaryValue = m_settings.reactiveScale;
++    desc.flags = FFX_FSR2_AUTOREACTIVEFLAGS_APPLY_TONEMAP
++               | FFX_FSR2_AUTOREACTIVEFLAGS_APPLY_THRESHOLD
++               | FFX_FSR2_AUTOREACTIVEFLAGS_USE_COMPONENTS_MAX;
++
++    FfxErrorCode error = ffxFsr2ContextGenerateReactiveMask(context, &desc);
++
++    if (error != FFX_OK) {
++      // The upscaler itself still works without the mask
++      if (!std::exchange(m_reactiveLogged, true))
++        Logger::err(str::format("[FSR2] reactive mask: ffxFsr2ContextGenerateReactiveMask failed: ", error, ", upscaling without it"));
++      return false;
++    }
++
++    if (!std::exchange(m_reactiveLogged, true)) {
++      Logger::info(str::format("[FSR2] reactive mask: first dispatch, ", m_renderExtent.width, "x", m_renderExtent.height,
++        ", value ", m_settings.reactiveScale, ", threshold ", m_settings.reactiveThreshold,
++        ", flags tonemap, threshold, max component"));
++    }
++
++    return true;
++#else
++    return false;
++#endif
++  }
++
++
++  bool DxvkFsr2::dispatchFsr2(
++    const DxvkContextObjects&         ctx,
++    const DxvkTemporalUpscaleInputs&  inputs,
++          bool                        useReactive) {
++#ifdef DXVK_GENERALSX_FSR2
+     // FSR 2 writes every output pixel; the composite pass of the previous
+     // frame may still read the image.
+     VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+@@ -518,15 +685,24 @@
+       m_renderExtent.width, m_renderExtent.height, VK_FORMAT_R16G16_SFLOAT, L"FSR2 motion", FFX_RESOURCE_STATE_COMPUTE_READ);
+     desc.output = ffxGetTextureResourceVK(context, m_outputImage->handle(), m_outputView->handle(),
+       m_displayExtent.width, m_displayExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT, L"FSR2 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++
++    // GeneralsX: generateReactive left the mask in GENERAL layout; FSR 2
++    // moves it to SHADER_READ_ONLY_OPTIMAL, where the debug view reads it.
++    if (useReactive) {
++      desc.reactive = ffxGetTextureResourceVK(context, m_reactiveImage->handle(), m_reactiveView->handle(),
++        m_renderExtent.width, m_renderExtent.height, VK_FORMAT_R32_SFLOAT, L"FSR2 reactive", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++    }
+     desc.jitterOffset.x = inputs.jitter[0];
+     desc.jitterOffset.y = inputs.jitter[1];
+     // The motion vectors are in UV units of the render size
+     desc.motionVectorScale.x = float(m_renderExtent.width);
+     desc.motionVectorScale.y = float(m_renderExtent.height);
+     desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
+-    // The swap chain blitter sharpens the composited image with RCAS
+-    desc.enableSharpening = false;
+-    desc.sharpness = 0.0f;
++    // GeneralsX: FSR 2's own RCAS pass with DXVK_FSR2_SHARPNESS. Without
++    // it, the swap chain blitter sharpens the composited image with the
++    // FSR 1.0 RCAS pass instead, never both.
++    desc.enableSharpening = m_settings.sharpness > 0.0f;
++    desc.sharpness = m_settings.sharpness;
+     desc.frameTimeDelta = std::clamp(inputs.frameTimeMs, 1.0f, 200.0f);
+     desc.preExposure = 1.0f;
+     desc.reset = inputs.reset || !m_havePrev;
+@@ -555,7 +731,8 @@
+     const DxvkTemporalUpscaleInputs&  inputs,
+     const Rc<DxvkImageView>&          finalView,
+           VkRect2D                    finalRect,
+-    const Rc<DxvkImageView>&          spatialView) {
++    const Rc<DxvkImageView>&          spatialView,
++          bool                        useReactive) {
+     // The last FSR 2 pass wrote the output image in GENERAL layout. The
+     // composite image is fully overwritten; the previous frame's final
+     // blit may still read it.
+@@ -612,12 +789,23 @@
+     outInfo.imageView = m_compositeView->handle();
+     outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+ 
+-    std::array<VkWriteDescriptorSet, 5> writes = {{
++    // GeneralsX: the reactive mask for the debug view. Without a mask this
++    // frame, the scene copy stands in and the shader does not read it.
++    VkDescriptorImageInfo reactiveInfo = sceneInfo;
++
++    if (useReactive) {
++      reactiveInfo.sampler = m_linearSampler->handle();
++      reactiveInfo.imageView = m_reactiveView->handle();
++      reactiveInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    }
++
++    std::array<VkWriteDescriptorSet, 6> writes = {{
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &fsr2Info },
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &spatialInfo },
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &finalInfo },
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 3, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &sceneInfo },
+       { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outInfo },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &reactiveInfo },
+     }};
+ 
+     ctx.cmd->updateDescriptorSets(writes.size(), writes.data());
+@@ -628,6 +816,13 @@
+     push.inputExtent[0] = finalRect.extent.width;
+     push.inputExtent[1] = finalRect.extent.height;
+     push.threshold = 1.5f / 255.0f;
++    // GeneralsX: while FSR 2 sharpens the scene, the swap chain does not
++    // sharpen the composited image, so the interface pixels taken from the
++    // EASU image get the FSR 1.0 RCAS pass here. Negative: no sharpening.
++    push.spatialSharpness = sharpensOutput() ? m_spatialSharpness : -1.0f;
++    // 0: normal, 1: reactive mask over a grey frame, 2: the debug view
++    // without a mask this frame
++    push.debugMode = m_settings.debugReactive ? (useReactive ? 1u : 2u) : 0u;
+ 
+     ctx.cmd->cmdBindPipeline(DxvkCmdBuffer::ExecBuffer,
+       VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipeline);
+diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
+--- a/src/dxvk/dxvk_fsr2.h
++++ b/src/dxvk/dxvk_fsr2.h
+@@ -25,6 +25,10 @@
+     /// Scene depth at render size, depth aspect view in the image's
+     /// default layout.
+     Rc<DxvkImageView> depth;
++    /// Scene colour before particles and other alpha-blended effects,
++    /// same size and layout as \ref color. Optional; with it FSR 2 gets
++    /// a reactive mask.
++    Rc<DxvkImageView> opaqueColor;
+     /// Sub-pixel jitter the game applied to its projection, in render
+     /// pixels, with y pointing down the image
+     float     jitter[2] = { 0.0f, 0.0f };
+@@ -82,6 +86,35 @@
+     }
+ 
+     /**
++     * \brief Whether the D3D9 device should copy the opaque scene
++     *
++     * True when DXVK_FSR2_REACTIVE_SCALE is above zero or the reactive
++     * mask debug view is on.
++     */
++    static bool isReactiveWanted();
++
++    /**
++     * \brief Whether FSR 2 sharpens its own output with RCAS
++     *
++     * The swap chain then leaves the composited image unsharpened, see
++     * DXVK_FSR2_SHARPNESS.
++     */
++    bool sharpensOutput() const {
++      return !m_failed && m_settings.sharpness > 0.0f;
++    }
++
++    /**
++     * \brief Sets the FSR 1.0 RCAS sharpness of the interface
++     *
++     * While FSR 2 sharpens the scene, the composite pass sharpens the
++     * EASU pixels it uses for the interface with this value instead.
++     * \param [in] stops RCAS sharpness in stops, 0 is the sharpest
++     */
++    void setSpatialSharpness(float stops) {
++      m_spatialSharpness = stops;
++    }
++
++    /**
+      * \brief Upscales one frame
+      *
+      * \param [in] ctx Context objects
+@@ -118,9 +151,26 @@
+       float     invOutputExtent[2];
+       uint32_t  inputExtent[2];
+       float     threshold;
+-      float     reserved[3];
++      float     spatialSharpness;
++      uint32_t  debugMode;
++      uint32_t  reserved;
++    };
++
++    /// GeneralsX: reactive mask and sharpening settings from the
++    /// environment, see DxvkFsr2::getSettings
++    struct Settings {
++      float     reactiveScale     = 0.9f;
++      float     reactiveThreshold = 0.05f;
++      float     sharpness         = 0.0f;
++      bool      debugReactive     = false;
+     };
+ 
++    static const Settings& getSettings();
++
++    Settings                m_settings;
++    float                   m_spatialSharpness = 0.2f;
++    bool                    m_reactiveLogged = false;
++
+     Rc<DxvkDevice>          m_device;
+ 
+     bool                    m_failed = false;
+@@ -150,6 +200,8 @@
+     Rc<DxvkImageView>       m_outputView;
+     Rc<DxvkImage>           m_compositeImage;
+     Rc<DxvkImageView>       m_compositeView;
++    Rc<DxvkImage>           m_reactiveImage;
++    Rc<DxvkImageView>       m_reactiveView;
+ 
+     Matrix4                 m_prevViewProj;
+     bool                    m_havePrev = false;
+@@ -180,16 +232,22 @@
+       const DxvkContextObjects&         ctx,
+       const DxvkTemporalUpscaleInputs&  inputs);
+ 
+-    bool dispatchFsr2(
++    bool generateReactive(
+       const DxvkContextObjects&         ctx,
+       const DxvkTemporalUpscaleInputs&  inputs);
+ 
++    bool dispatchFsr2(
++      const DxvkContextObjects&         ctx,
++      const DxvkTemporalUpscaleInputs&  inputs,
++            bool                        useReactive);
++
+     void compositePass(
+       const DxvkContextObjects&         ctx,
+       const DxvkTemporalUpscaleInputs&  inputs,
+       const Rc<DxvkImageView>&          finalView,
+             VkRect2D                    finalRect,
+-      const Rc<DxvkImageView>&          spatialView);
++      const Rc<DxvkImageView>&          spatialView,
++            bool                        useReactive);
+ 
+     void fail(const std::string& message);
+ 
+diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
+--- a/src/dxvk/dxvk_swapchain_blitter.cpp
++++ b/src/dxvk/dxvk_swapchain_blitter.cpp
+@@ -853,8 +853,10 @@
+     // GeneralsX: FSR 2 needs the scene inputs of this frame at the size of
+     // the back buffer. The game jitters its projection while FSR 2 is
+     // active, which it reads back through GeneralsX_UpscalerSubmitFrame.
+-    if (m_fsr2Enabled && useFsr && !m_fsr2)
++    if (m_fsr2Enabled && useFsr && !m_fsr2) {
+       m_fsr2 = std::make_unique<DxvkFsr2>(m_device);
++      m_fsr2->setSpatialSharpness(m_fsrSharpness);
++    }
+ 
+     bool fsr2Usable = m_fsr2Enabled && useFsr && m_fsr2 && !m_fsr2->failed();
+     DxvkFsr2::setTemporalActive(fsr2Usable);
+@@ -925,6 +927,9 @@
+       m_fsrResolveView = nullptr;
+     }
+ 
++    // GeneralsX: RCAS sharpness of the final pass of this frame
++    float presentSharpness = m_fsrSharpness;
++
+     if (useFsr) {
+       Rc<DxvkImageView> finalView = blitView;
+       VkRect2D finalRect = blitRect;
+@@ -940,16 +945,24 @@
+         Rc<DxvkImageView> temporalView = m_fsr2->render(ctx, m_fsr2Inputs,
+           finalView, finalRect, m_fsrView, dstRect.extent);
+ 
+-        if (temporalView != nullptr)
++        if (temporalView != nullptr) {
+           blitView = temporalView;
+-        else if (m_fsr2->failed())
++
++          // GeneralsX: FSR 2 sharpened the scene and the composite pass
++          // the interface, so the final RCAS pass must not sharpen again
++          if (m_fsr2->sharpensOutput())
++            presentSharpness = RcasNoSharpening;
++        } else if (m_fsr2->failed()) {
+           DxvkFsr2::setTemporalActive(false);
++        }
+       }
+     } else {
+       m_fsrImage = nullptr;
+       m_fsrView = nullptr;
+     }
+ 
++    m_presentSharpness = presentSharpness;
++
+     m_fsr2Inputs = DxvkTemporalUpscaleInputs();
+ 
+     // Post-processing runs in the RCAS pass, which reads its source 1:1,
+@@ -1310,7 +1323,7 @@
+     args.cursorOffset = m_cursorRect.offset;
+     args.cursorExtent = m_cursorRect.extent;
+     args.dstExtent = dstRect.extent;
+-    args.fsrSharpness = m_fsrSharpness;
++    args.fsrSharpness = m_presentSharpness;
+     args.bloomStrength = useBloom ? m_bloomStrength : 0.0f;
+     args.bloomThreshold = m_bloomThreshold;
+     args.saturation = m_postActive ? m_saturation : 1.0f;
+diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter.h
+--- a/src/dxvk/dxvk_swapchain_blitter.h
++++ b/src/dxvk/dxvk_swapchain_blitter.h
+@@ -306,6 +306,13 @@
+     DxvkTemporalUpscaleInputs  m_fsr2Inputs;
+     bool                       m_presentLogFsr2 = false;
+ 
++    // GeneralsX: RCAS sharpness of the final pass, in stops. Equal to
++    // m_fsrSharpness unless FSR 2 sharpened the frame itself. At 64 stops
++    // the RCAS lobe is 2^-64, so the pass leaves the image as it is while
++    // still applying the post-processing that runs in it.
++    static constexpr float     RcasNoSharpening = 64.0f;
++    float                      m_presentSharpness = 0.2f;
++
+     bool                  m_presentLogFsr = false;
+     VkSampleCountFlagBits m_presentLogSamples = VkSampleCountFlagBits(0);
+     VkExtent2D            m_presentLogSrc = { };
+diff --git a/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp b/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp
+--- a/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp
++++ b/src/dxvk/fsr2/dxvk_fsr2_shaders.cpp
+@@ -62,6 +62,11 @@
+   constexpr uint32_t SpvOpVariable      = 59;
+   constexpr uint32_t SpvOpDecorate      = 71;
+ 
++  // GeneralsX: instructions that name or declare an ID without using it
++  constexpr uint32_t SpvOpMemberName    = 6;
++  constexpr uint32_t SpvOpEntryPoint    = 15;
++  constexpr uint32_t SpvOpMemberDecorate = 72;
++
+   constexpr uint32_t SpvDecorationBinding       = 33;
+   constexpr uint32_t SpvDecorationDescriptorSet = 34;
+ 
+@@ -88,6 +93,12 @@
+     std::vector<int32_t>     imageSampled(bound, -1);
+     std::vector<bool>        isStruct(bound, false);
+     std::vector<uint32_t>    pointee(bound, 0u);
++    // GeneralsX: glslang keeps resources a pass declares but never reads,
++    // such as cbFSR2 in the reactive mask pass, whose job only fills its
++    // own constant buffer. Binding those would leave empty descriptors, so
++    // only resources that some instruction refers to are listed. Literal
++    // operands can only keep a resource that is not needed, never drop one.
++    std::vector<bool>        referenced(bound, false);
+ 
+     struct Variable {
+       uint32_t id;
+@@ -145,11 +156,19 @@
+           break;
+       }
+ 
++      if (opcode != SpvOpName && opcode != SpvOpMemberName && opcode != SpvOpDecorate
++       && opcode != SpvOpMemberDecorate && opcode != SpvOpEntryPoint && opcode != SpvOpVariable) {
++        for (uint32_t w = 1u; w < length; w++) {
++          if (ins[w] < bound)
++            referenced[ins[w]] = true;
++        }
++      }
++
+       i += length;
+     }
+ 
+     for (const auto& var : variables) {
+-      if (sets[var.id] != 1 || bindings[var.id] < 0 || var.type >= bound)
++      if (sets[var.id] != 1 || bindings[var.id] < 0 || var.type >= bound || !referenced[var.id])
+         continue;
+ 
+       uint32_t type = pointee[var.type];
+diff --git a/src/dxvk/shaders/dxvk_fsr2_composite.comp b/src/dxvk/shaders/dxvk_fsr2_composite.comp
+--- a/src/dxvk/shaders/dxvk_fsr2_composite.comp
++++ b/src/dxvk/shaders/dxvk_fsr2_composite.comp
+@@ -1,5 +1,7 @@
+ #version 450
+ 
++#extension GL_GOOGLE_include_directive : enable
++
+ // GeneralsX: composites the FSR 2 output of the 3D scene with the final
+ // image. Pixels where the final image differs from the scene copy taken
+ // before the interface was drawn belong to the interface; they come from
+@@ -13,14 +15,36 @@
+ layout(set = 0, binding = 2) uniform sampler2D s_final;
+ layout(set = 0, binding = 3) uniform sampler2D s_scene;
+ layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D o_color;
++layout(set = 0, binding = 5) uniform sampler2D s_reactive;
+ 
+ layout(push_constant)
+ uniform push_t {
+   vec2  inv_output_extent;
+   uvec2 input_extent;
+   float threshold;
++  // FSR 1.0 RCAS sharpness in stops for the EASU pixels, negative for
++  // none. Set while FSR 2 sharpens the scene and the swap chain does not
++  // sharpen the composited image.
++  float spatial_sharpness;
++  // 0: normal, 1: reactive mask debug view, 2: debug view without a mask
++  uint  debug_mode;
+ };
+ 
++// GeneralsX: FSR 1.0 RCAS on the EASU image, which is at output size
++#define A_GPU 1
++#define A_GLSL 1
++#include "ffx_a.h"
++
++#define FSR_RCAS_F 1
++AF4 FsrRcasLoadF(ASU2 p) {
++  ivec2 hi = textureSize(s_spatial, 0) - 1;
++  return texelFetch(s_spatial, clamp(ivec2(p), ivec2(0), hi), 0);
++}
++
++void FsrRcasInputF(inout AF1 r, inout AF1 g, inout AF1 b) { }
++
++#include "ffx_fsr1.h"
++
+ float interfaceWeight(ivec2 coord) {
+   coord = clamp(coord, ivec2(0), ivec2(input_extent) - 1);
+ 
+@@ -53,7 +77,32 @@
+   float ui = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
+ 
+   vec4 temporal = textureLod(s_fsr2, uv, 0.0f);
+-  vec4 spatial = textureLod(s_spatial, uv, 0.0f);
++  vec3 spatial = textureLod(s_spatial, uv, 0.0f).rgb;
++
++  if (spatial_sharpness >= 0.0f && ui > 0.0f) {
++    AU4 con;
++    FsrRcasCon(con, AF1(spatial_sharpness));
++    FsrRcasF(spatial.r, spatial.g, spatial.b, AU2(coord), con);
++  }
++
++  vec3 scene = temporal.rgb;
++
++  // GeneralsX: DXVK_FSR2_DEBUG=reactive, the reactive mask in red over a
++  // darkened grey copy of the scene. Blue tint: no mask this frame. The
++  // interface stays as it is.
++  if (debug_mode != 0u) {
++    float luma = dot(scene, vec3(0.2126f, 0.7152f, 0.0722f));
++    vec3 grey = vec3(0.35f * luma);
++
++    if (debug_mode == 1u) {
++      float reactive = textureLod(s_reactive, uv, 0.0f).r;
++      scene = mix(grey, vec3(1.0f, 0.15f, 0.05f), clamp(reactive, 0.0f, 1.0f));
++    } else {
++      scene = grey * vec3(0.6f, 0.8f, 1.4f);
++    }
++  }
++
++  vec3 color = mix(scene, spatial, ui);
+ 
+-  imageStore(o_color, coord, vec4(mix(temporal.rgb, spatial.rgb, ui), 1.0f));
++  imageStore(o_color, coord, vec4(color, 1.0f));
+ }

@@ -51,6 +51,10 @@ jobs:
   # 3D scene with AMD FidelityFX FSR 2 (MIT), fetched below at a pinned tag and compiled into d3d9.dll. The game sets it
   # only for Options.ini Upscaler = FSR2 or -upscaler fsr2, jitters its 3D camera, and passes the camera to DXVK through
   # the exported GeneralsX_UpscalerSubmitFrame and render state 252, where DXVK copies the scene colour and depth.
+  # GeneralsX @feature Claude 16/10/2026 FSR 2 reactive mask (patch 0015): render state 251 marks the opaque scene before
+  # particles and other alpha-blended effects; FSR 2's ffxFsr2ContextGenerateReactiveMask compares that copy with the
+  # final scene so effects stop smearing. Options.ini UpscalerReactiveScale / UpscalerSharpness reach DXVK as
+  # DXVK_FSR2_REACTIVE_SCALE / DXVK_FSR2_SHARPNESS; DXVK_FSR2_DEBUG=reactive shows the mask.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -258,8 +262,17 @@ jobs:
           FSR 2 (experimental, off by default): add Upscaler = FSR2 to Options.ini, or start the game with
           -upscaler fsr2 (-upscaler fsr1 or -upscaler off override Options.ini the same way). UpscalerQuality =
           Quality, Balanced, Performance or UltraPerformance picks the render scale (67%, 59%, 50%, 33%) unless
-          RenderScale or -renderscale is set. FSR 2 adds detail over several frames; FSRSharpness still sets the
-          final sharpening. The console and d3d9.log show [FSR2] / FSR2: lines with the active upscaler.
+          RenderScale or -renderscale is set. FSR 2 adds detail over several frames. The console and d3d9.log
+          show [FSR2] / FSR2: lines with the active upscaler.
+          FSR 2 smoke, explosions and particles: UpscalerReactiveScale (0 to 1, default 0.9, 0 = off) tells FSR 2
+          to trust the current frame where such effects are drawn, so they do not smear or leave trails.
+          FSR 2 sharpening: UpscalerSharpness (0 to 1, default 0.5) is FSR 2's own sharpening of the 3D scene;
+          FSRSharpness then only sharpens the interface. UpscalerSharpness = 0 leaves the whole frame to
+          FSRSharpness. Nothing is sharpened twice.
+          FSR 2 reactive mask check: set DXVK_FSR2_DEBUG=reactive before starting the game (for example
+          set DXVK_FSR2_DEBUG=reactive in a .cmd file next to GeneralsXZH.exe). The scene turns grey and every
+          pixel FSR 2 treats as an effect shows in red; a blue tint means no mask that frame. Remove the line to
+          play normally. DXVK_FSR2_REACTIVE_THRESHOLD (default 0.05) is the smallest change that counts.
           FidelityFX-FSR2-LICENSE.txt is the MIT license of AMD FidelityFX FSR 2, built into d3d9.dll.
           "@ | Set-Content artifacts/INSTALL.txt
           # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
