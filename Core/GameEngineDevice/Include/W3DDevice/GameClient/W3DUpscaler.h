@@ -24,6 +24,8 @@
 // game logic, culling and picking never see the jitter.
 // GeneralsX @feature Claude 16/10/2026 Render state 251 marks the end of the opaque scene, before particles and
 // other alpha-blended effects; DXVK builds FSR 2's reactive mask from that copy and the final scene (patch 0015).
+// GeneralsX @feature Claude 16/10/2026 FSR 3 (Upscaler = FSR3, patches 0016 and 0017) uses the same jitter, camera
+// hand-off and render states; log lines then start with [FSR3]. Frame generation happens entirely in DXVK.
 
 #pragma once
 

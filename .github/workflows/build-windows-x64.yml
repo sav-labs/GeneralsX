@@ -55,6 +55,12 @@ jobs:
   # particles and other alpha-blended effects; FSR 2's ffxFsr2ContextGenerateReactiveMask compares that copy with the
   # final scene so effects stop smearing. Options.ini UpscalerReactiveScale / UpscalerSharpness reach DXVK as
   # DXVK_FSR2_REACTIVE_SCALE / DXVK_FSR2_SHARPNESS; DXVK_FSR2_DEBUG=reactive shows the mask.
+  # GeneralsX @feature Claude 16/10/2026 FSR 3 (patches 0016 and 0017): DXVK_UPSCALER=fsr3 upscales the 3D scene with the
+  # FSR 3.1 upscaler of the AMD FidelityFX SDK v1.1.4 (MIT), fetched below at a pinned tag (GLSL shaders + Vulkan backend
+  # only) and compiled into d3d9.dll; without the SDK, DXVK still builds and FSR 3 falls back to FSR 2. DXVK_FSR3_FRAMEGEN=1
+  # adds frame generation with the SDK's optical flow and frame interpolation: the swap chain presents a generated frame,
+  # then the real one, and the interface always comes from the real frame. The game sets both from Options.ini
+  # Upscaler = FSR3 / FrameGeneration = yes or -upscaler fsr3 / -framegen on.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -78,18 +84,26 @@ jobs:
         run: |
           git clone --depth 1 --branch v2.6 --recurse-submodules --shallow-submodules https://github.com/doitsujin/dxvk.git dxvk
           git clone --depth 1 --branch v2.2.1 https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git fsr2
+          # FidelityFX SDK v1.1.4 (FSR 3.1.4): only the SDK headers and sources are needed
+          git clone --depth 1 --branch v1.1.4 --filter=blob:none --sparse https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git ffx-sdk
+          git -C ffx-sdk sparse-checkout set sdk/include sdk/src
           cd dxvk
           for patch in ../cmake/dxvk-patches/*.patch; do git apply "$patch"; done
           # FSR 2 core and Vulkan backend; patch 0013 builds them with its own shader table
           cp -r ../fsr2/src/ffx-fsr2-api src/dxvk/fsr2/ffx-fsr2-api
           cp ../fsr2/LICENSE.txt ../fsr2-LICENSE.txt
+          # FSR 3 upscaler, frame interpolation and optical flow; patch 0016 builds them with its own shader table
+          mkdir -p src/dxvk/fsr3/ffx-sdk
+          cp -r ../ffx-sdk/sdk/include ../ffx-sdk/sdk/src ../ffx-sdk/LICENSE.txt src/dxvk/fsr3/ffx-sdk/
           ~/.local/bin/meson setup --cross-file build-win64.txt --buildtype release \
             -Denable_d3d10=false -Denable_d3d11=false -Denable_dxgi=false build
           ninja -C build src/d3d8/d3d8.dll src/d3d9/d3d9.dll
           x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_UpscalerSubmitFrame
+          test -f build/src/dxvk/libdxvk_fsr3.a
           mkdir -p ../dxvk-out
           cp build/src/d3d8/d3d8.dll build/src/d3d9/d3d9.dll ../dxvk-out/
           cp ../fsr2-LICENSE.txt ../dxvk-out/FidelityFX-FSR2-LICENSE.txt
+          cp ../ffx-sdk/LICENSE.txt ../dxvk-out/FidelityFX-SDK-LICENSE.txt
 
       - name: Upload DXVK
         uses: actions/upload-artifact@v7
@@ -222,7 +236,7 @@ jobs:
             Get-ChildItem -Path (Join-Path $vcReleaseDir.FullName "*.dll") | ForEach-Object { Copy-Item $_.FullName artifacts/ }
           }
           # GeneralsX @build Claude 12/10/2026 Ship DXVK so the x64 build renders through Vulkan like Linux/macOS.
-          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll, dxvk-fsr/FidelityFX-FSR2-LICENSE.txt artifacts/
+          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll, dxvk-fsr/FidelityFX-FSR2-LICENSE.txt, dxvk-fsr/FidelityFX-SDK-LICENSE.txt artifacts/
           @"
           @echo off
           rem Borderless window at display size; the game renders at its own resolution and FSR 1.0 upscales it.
@@ -287,6 +301,19 @@ jobs:
           pixel FSR 2 treats as an effect shows in red; a blue tint means no mask that frame. Remove the line to
           play normally. DXVK_FSR2_REACTIVE_THRESHOLD (default 0.05) is the smallest change that counts.
           FidelityFX-FSR2-LICENSE.txt is the MIT license of AMD FidelityFX FSR 2, built into d3d9.dll.
+          FSR 3 (experimental, off by default): add Upscaler = FSR3 to Options.ini, or start the game with
+          -upscaler fsr3. It takes the same UpscalerQuality, UpscalerReactiveScale and UpscalerSharpness settings
+          as FSR 2 and shows [FSR3] lines in the console and d3d9.log. If FSR 3 cannot start, FSR 2 takes over.
+          FSR 3 frame generation (experimental, off by default, FSR 3 only): add FrameGeneration = yes to
+          Options.ini, or start the game with -framegen on (-framegen off overrides Options.ini). Every frame is
+          then shown twice: first a frame generated between the previous and the current one, then the real
+          frame. The interface is always taken from the real frame. Frame generation adds about one frame of
+          latency and works best at 60 fps or more before it is turned on. With vsync, use a display refresh rate
+          of at least twice the game frame rate. Debug settings (set them in a .cmd file before the game starts):
+          DXVK_FSR3_FRAMEGEN=1 turns frame generation on without Options.ini, DXVK_FSR3_FRAMEGEN_PACING=0 shows
+          the real frame right after the generated one instead of half a frame later, and DXVK_FSR3_DEBUG=tearlines,
+          view or resets shows the FidelityFX debug overlays (tear lines, the interpolation inputs, camera resets).
+          FidelityFX-SDK-LICENSE.txt is the MIT license of the AMD FidelityFX SDK (FSR 3), built into d3d9.dll.
           Performance measurement (big battles): Perf.cmd starts the game with the frame profiler. Every 5 seconds
           perf-log.txt gets a [PERF] line: fps, frame time (avg/max), game logic, client update, draw, 3D scene,
           meshes (includes CPU skinning), shadows, particles and present in ms per frame, draw calls, triangles,
