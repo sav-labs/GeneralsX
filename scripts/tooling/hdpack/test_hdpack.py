@@ -142,6 +142,7 @@ def main():
         assert list(hdpack.read_big(content_out)) == ["art/textures/avtank.dds"], list(hdpack.read_big(content_out))
         report = json.loads(Path(tmp, "!HDContent.report.json").read_text())
         assert report["content_pack_textures_excluded"] == ["avjeep", "gxtank"], report
+        assert report["written_files"] == ["Art\\Textures\\AVTank.dds"], report["written_files"]
 
         model = check_onnx_tiling(tmp)
         onnx_out = Path(tmp, "!HDTexturesOnnx.big")

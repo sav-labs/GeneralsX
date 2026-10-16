@@ -528,6 +528,7 @@ def main():
         "ui_textures_excluded": len(ui_textures),
         "tree_textures_excluded": len(excluded - ui_textures - content_textures) if args.terrain else 0,
         "content_pack_textures_excluded": sorted(content_textures),
+        "written_files": sorted(name for name, _ in output),  # names only, for exclude lists
         "parts": {str(p): p.stat().st_size for p in paths},
         "total_bytes": sum(p.stat().st_size for p in paths),
         "seconds": round(time.monotonic() - started, 1),
