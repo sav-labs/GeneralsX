@@ -1,0 +1,886 @@
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index f0d0e43..01c3157 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -73,6 +73,27 @@ namespace dxvk {
+     // GeneralsX: soft particles are on unless DXVK_SOFT_PARTICLES=0.
+     m_softParticleEnabled = env::getEnvVar("DXVK_SOFT_PARTICLES") != "0";
+ 
++    // GeneralsX: ambient occlusion with DXVK_SSAO=1. DXVK_SSAO_STRENGTH
++    // scales the darkening (default 0.6), DXVK_SSAO_RADIUS is the reach in
++    // world units (default 12).
++    m_ssaoEnabled = env::getEnvVar("DXVK_SSAO") == "1";
++
++    std::string ssaoStrength = env::getEnvVar("DXVK_SSAO_STRENGTH");
++    std::string ssaoRadius = env::getEnvVar("DXVK_SSAO_RADIUS");
++
++    if (!ssaoStrength.empty())
++      m_ssaoStrength = std::clamp(std::strtof(ssaoStrength.c_str(), nullptr), 0.0f, 2.0f);
++
++    if (!ssaoRadius.empty())
++      m_ssaoRadius = std::clamp(std::strtof(ssaoRadius.c_str(), nullptr), 0.5f, 200.0f);
++
++    if (m_ssaoEnabled && m_ssaoStrength > 0.0f) {
++      Logger::info(str::format("SSAO: enabled, strength ", m_ssaoStrength,
++        ", radius ", m_ssaoRadius));
++    } else {
++      m_ssaoEnabled = false;
++    }
++
+     if (m_dxvkDevice->debugFlags().test(DxvkDebugFlag::Markers))
+       m_annotation = new D3D9UserDefinedAnnotation(this);
+ 
+@@ -2250,6 +2271,13 @@ namespace dxvk {
+       return D3D_OK;
+     }
+ 
++    // GeneralsX: private ambient occlusion trigger, never part of a state block.
++    if (unlikely(State == D3D9AmbientOcclusionRenderState)) {
++      if (Value != 0u)
++        ApplyAmbientOcclusion();
++      return D3D_OK;
++    }
++
+     if (unlikely(ShouldRecord()))
+       return m_recorder->SetRenderState(State, Value);
+ 
+@@ -8211,6 +8239,74 @@ namespace dxvk {
+   }
+ 
+ 
++  // GeneralsX: darkens creases and contact areas of the opaque scene drawn
++  // so far. The depth is copied like for soft particles, then two raw
++  // Vulkan passes compute the occlusion and multiply it into render
++  // target 0. The game sends this between its opaque and its translucent
++  // geometry, so particles, water and the interface stay untouched.
++  void D3D9DeviceEx::ApplyAmbientOcclusion() {
++    if (!m_ssaoEnabled)
++      return;
++
++    D3D9Surface* rt = m_state.renderTargets[0].ptr();
++    D3D9Surface* ds = m_state.depthStencil.ptr();
++
++    if (rt == nullptr || ds == nullptr)
++      return;
++
++    Rc<DxvkImageView> colorView = rt->GetRenderTargetView(false);
++
++    if (colorView == nullptr)
++      return;
++
++    VkExtent3D rtExtent = colorView->mipLevelExtent(0u);
++    VkExtent3D dsExtent = ds->GetCommonTexture()->GetImage()->mipLevelExtent(ds->GetMipLevel());
++
++    if (rtExtent.width != dsExtent.width || rtExtent.height != dsExtent.height)
++      return;
++
++    const Matrix4& proj = m_state.transforms[GetTransformIndex(D3DTS_PROJECTION)];
++
++    // Positions are rebuilt with the clip w as depth, w = _43 / (depth - _33 / _34),
++    // which works for both handedness conventions.
++    if (proj[2][3] == 0.0f || proj[0][0] == 0.0f || proj[1][1] == 0.0f)
++      return;
++
++    CopySoftParticleDepth();
++
++    if (m_softDepthView == nullptr)
++      return;
++
++    if (m_ssao == nullptr)
++      m_ssao = std::make_shared<D3D9Ssao>(m_dxvkDevice);
++
++    D3D9SsaoParams params = { };
++    params.proj[0]   = std::abs(proj[0][0]);
++    params.proj[1]   = std::abs(proj[1][1]);
++    params.proj[2]   = proj[2][2] / proj[2][3];
++    params.proj[3]   = proj[3][2];
++    params.radius    = m_ssaoRadius;
++    params.strength  = m_ssaoStrength;
++    params.bias      = 0.1f;
++    params.maxPixels = std::max(16.0f, float(rtExtent.height) / 24.0f);
++    params.extent[0] = float(rtExtent.width);
++    params.extent[1] = float(rtExtent.height);
++
++    EmitCs([
++      cSsao      = m_ssao,
++      cColorView = std::move(colorView),
++      cDepthView = m_softDepthView,
++      cParams    = params
++    ] (DxvkContext* ctx) {
++      DxvkContextObjects objects = ctx->beginExternalRendering();
++      cSsao->Render(objects, cColorView, cDepthView, cParams);
++    });
++
++    // The depth copy is reused by soft particles, which bind it again.
++    m_softParticleBound = false;
++  }
++
++
+   void D3D9DeviceEx::BindSoftParticleDepth() {
+     uint32_t slot = computeResourceSlotId(DxsoProgramType::PixelShader,
+       DxsoBindingType::Image, 7u);
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+index 02b74f7..76d92e7 100644
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -32,6 +32,7 @@
+ #include <cstdint>
+ #include <unordered_set>
+ #include "d3d9_bridge.h"
++#include "d3d9_ssao.h"
+ 
+ #include <vector>
+ #include <type_traits>
+@@ -46,6 +47,10 @@ namespace dxvk {
+   // D3D9 does not define render state 254.
+   constexpr D3DRENDERSTATETYPE D3D9SoftParticleRenderState = D3DRENDERSTATETYPE(254);
+ 
++  // GeneralsX: private render state that applies ambient occlusion to the
++  // current render target. D3D9 does not define render state 253.
++  constexpr D3DRENDERSTATETYPE D3D9AmbientOcclusionRenderState = D3DRENDERSTATETYPE(253);
++
+   class D3D9InterfaceEx;
+   class D3D9SwapChainEx;
+   class D3D9CommonTexture;
+@@ -1380,6 +1385,9 @@ namespace dxvk {
+ 
+     void BindSoftParticleDepth();
+ 
++    // GeneralsX: screen space ambient occlusion
++    void ApplyAmbientOcclusion();
++
+     void ApplyPrimitiveType(
+       DxvkContext*      pContext,
+       D3DPRIMITIVETYPE  PrimType);
+@@ -1590,6 +1598,13 @@ namespace dxvk {
+     bool                            m_softParticleBound   = false;
+     Rc<DxvkImage>                   m_softDepthImage;
+     Rc<DxvkImageView>               m_softDepthView;
++
++    // GeneralsX: ambient occlusion. The game sets render state 253 after
++    // its opaque geometry; see ApplyAmbientOcclusion.
++    bool                            m_ssaoEnabled  = false;
++    float                           m_ssaoStrength = 0.6f;
++    float                           m_ssaoRadius   = 12.0f;
++    std::shared_ptr<D3D9Ssao>       m_ssao;
+     
+     VkImageLayout                   m_hazardLayout = VK_IMAGE_LAYOUT_GENERAL;
+ 
+diff --git a/src/d3d9/d3d9_ssao.cpp b/src/d3d9/d3d9_ssao.cpp
+new file mode 100644
+index 0000000..0f0f237
+--- /dev/null
++++ b/src/d3d9/d3d9_ssao.cpp
+@@ -0,0 +1,410 @@
++#include "d3d9_ssao.h"
++
++#include <d3d9_ssao_vert.h>
++#include <d3d9_ssao_frag.h>
++#include <d3d9_ssao_apply_frag.h>
++
++namespace dxvk {
++
++  D3D9Ssao::D3D9Ssao(const Rc<DxvkDevice>& device)
++  : m_device(device) {
++    auto vk = m_device->vkd();
++
++    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {{
++      { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT },
++      { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT },
++    }};
++
++    VkDescriptorSetLayoutCreateInfo setInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
++    setInfo.bindingCount = bindings.size();
++    setInfo.pBindings = bindings.data();
++
++    VkResult vr = vk->vkCreateDescriptorSetLayout(vk->device(), &setInfo, nullptr, &m_setLayout);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("SSAO: failed to create descriptor set layout: ", vr));
++
++    VkPushConstantRange pushConst = { };
++    pushConst.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
++    pushConst.size = sizeof(D3D9SsaoParams);
++
++    VkPipelineLayoutCreateInfo layoutInfo = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
++    layoutInfo.setLayoutCount = 1;
++    layoutInfo.pSetLayouts = &m_setLayout;
++    layoutInfo.pushConstantRangeCount = 1;
++    layoutInfo.pPushConstantRanges = &pushConst;
++
++    vr = vk->vkCreatePipelineLayout(vk->device(), &layoutInfo, nullptr, &m_pipelineLayout);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("SSAO: failed to create pipeline layout: ", vr));
++
++    m_vs      = CreateShaderModule(sizeof(d3d9_ssao_vert), d3d9_ssao_vert);
++    m_fsAo    = CreateShaderModule(sizeof(d3d9_ssao_frag), d3d9_ssao_frag);
++    m_fsApply = CreateShaderModule(sizeof(d3d9_ssao_apply_frag), d3d9_ssao_apply_frag);
++
++    m_aoPipeline = CreatePipeline(m_fsAo, VK_FORMAT_R8_UNORM, VK_SAMPLE_COUNT_1_BIT, false);
++
++    DxvkSamplerKey samplerKey = { };
++    samplerKey.setFilter(VK_FILTER_NEAREST, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST);
++    samplerKey.setAddressModes(
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
++      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
++
++    m_sampler = m_device->createSampler(samplerKey);
++  }
++
++
++  D3D9Ssao::~D3D9Ssao() {
++    auto vk = m_device->vkd();
++
++    for (const auto& p : m_applyPipelines)
++      vk->vkDestroyPipeline(vk->device(), p.second, nullptr);
++
++    vk->vkDestroyPipeline(vk->device(), m_aoPipeline, nullptr);
++
++    vk->vkDestroyShaderModule(vk->device(), m_vs, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_fsAo, nullptr);
++    vk->vkDestroyShaderModule(vk->device(), m_fsApply, nullptr);
++
++    vk->vkDestroyPipelineLayout(vk->device(), m_pipelineLayout, nullptr);
++    vk->vkDestroyDescriptorSetLayout(vk->device(), m_setLayout, nullptr);
++  }
++
++
++  void D3D9Ssao::Render(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          colorView,
++    const Rc<DxvkImageView>&          depthView,
++    const D3D9SsaoParams&             params) {
++    VkExtent3D extent = depthView->mipLevelExtent(0u);
++
++    if (!m_aoImage || m_aoImage->info().extent != extent)
++      CreateAoImage(extent);
++
++    // Pass 1: occlusion of every pixel into the R8 image.
++    BeginPass(ctx, m_aoView, VK_IMAGE_LAYOUT_UNDEFINED,
++      m_aoPipeline, depthView, nullptr, params);
++
++    ctx.cmd->cmdDraw(3, 1, 0, 0);
++    ctx.cmd->cmdEndRendering();
++
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++    barrier.oldLayout = m_aoImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.newLayout = m_aoImage->info().layout;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = m_aoImage->handle();
++    barrier.subresourceRange = m_aoView->imageSubresources();
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    // Pass 2: blur the occlusion and multiply it into the scene colour.
++    const Rc<DxvkImage>& colorImage = colorView->image();
++
++    BeginPass(ctx, colorView, colorImage->info().layout,
++      GetApplyPipeline(colorView->info().format, colorImage->info().sampleCount),
++      depthView, m_aoView, params);
++
++    ctx.cmd->cmdDraw(3, 1, 0, 0);
++    ctx.cmd->cmdEndRendering();
++
++    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
++                          | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
++    barrier.dstStageMask = colorImage->info().stages;
++    barrier.dstAccessMask = colorImage->info().access;
++    barrier.oldLayout = colorImage->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++    barrier.newLayout = colorImage->info().layout;
++    barrier.image = colorImage->handle();
++    barrier.subresourceRange = colorView->imageSubresources();
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    ctx.cmd->track(m_aoImage, DxvkAccess::Write);
++    ctx.cmd->track(colorImage, DxvkAccess::Write);
++    ctx.cmd->track(depthView->image(), DxvkAccess::Read);
++    ctx.cmd->track(m_sampler);
++  }
++
++
++  void D3D9Ssao::BeginPass(
++    const DxvkContextObjects&         ctx,
++    const Rc<DxvkImageView>&          view,
++          VkImageLayout               oldLayout,
++          VkPipeline                  pipeline,
++    const Rc<DxvkImageView>&          depthView,
++    const Rc<DxvkImageView>&          aoView,
++    const D3D9SsaoParams&             params) {
++    const Rc<DxvkImage>& image = view->image();
++    VkImageLayout layout = image->pickLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++
++    // The AO image is fully overwritten. The colour target keeps its
++    // contents and waits for the scene draws that wrote it.
++    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
++    barrier.srcStageMask = oldLayout == VK_IMAGE_LAYOUT_UNDEFINED
++      ? VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
++      : VkPipelineStageFlags2(image->info().stages);
++    barrier.srcAccessMask = oldLayout == VK_IMAGE_LAYOUT_UNDEFINED
++      ? VkAccessFlags2(0)
++      : VkAccessFlags2(image->info().access);
++    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
++    barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
++                          | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
++    barrier.oldLayout = oldLayout;
++    barrier.newLayout = layout;
++    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    barrier.image = image->handle();
++    barrier.subresourceRange = view->imageSubresources();
++
++    // The depth copy was written by a transfer or resolve just before.
++    VkMemoryBarrier2 memBarrier = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
++    memBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT
++                            | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
++                            | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
++    memBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT
++                             | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
++                             | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
++    memBarrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++    memBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
++
++    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
++    depInfo.memoryBarrierCount = 1;
++    depInfo.pMemoryBarriers = &memBarrier;
++    depInfo.imageMemoryBarrierCount = 1;
++    depInfo.pImageMemoryBarriers = &barrier;
++
++    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
++
++    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED)
++      image->trackInitialization(barrier.subresourceRange);
++
++    VkExtent3D extent = view->mipLevelExtent(0u);
++
++    VkRenderingAttachmentInfo attachmentInfo = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
++    attachmentInfo.imageView = view->handle();
++    attachmentInfo.imageLayout = layout;
++    attachmentInfo.loadOp = oldLayout == VK_IMAGE_LAYOUT_UNDEFINED
++      ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
++      : VK_ATTACHMENT_LOAD_OP_LOAD;
++    attachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
++
++    VkRenderingInfo renderInfo = { VK_STRUCTURE_TYPE_RENDERING_INFO };
++    renderInfo.renderArea.offset = { 0, 0 };
++    renderInfo.renderArea.extent = { extent.width, extent.height };
++    renderInfo.layerCount = 1u;
++    renderInfo.colorAttachmentCount = 1;
++    renderInfo.pColorAttachments = &attachmentInfo;
++
++    ctx.cmd->cmdBeginRendering(&renderInfo);
++
++    VkViewport viewport = { };
++    viewport.width = float(extent.width);
++    viewport.height = float(extent.height);
++    viewport.maxDepth = 1.0f;
++
++    ctx.cmd->cmdSetViewport(1, &viewport);
++    ctx.cmd->cmdSetScissor(1, &renderInfo.renderArea);
++
++    ctx.cmd->cmdBindPipeline(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
++
++    VkDescriptorSet set = ctx.descriptorPool->alloc(m_setLayout);
++
++    VkDescriptorImageInfo depthDescriptor = { };
++    depthDescriptor.sampler = m_sampler->handle();
++    depthDescriptor.imageView = depthView->handle();
++    depthDescriptor.imageLayout = depthView->image()->info().layout;
++
++    // The occlusion pass does not read the AO image, bind the depth again.
++    VkDescriptorImageInfo aoDescriptor = depthDescriptor;
++
++    if (aoView != nullptr) {
++      aoDescriptor.imageView = aoView->handle();
++      aoDescriptor.imageLayout = aoView->image()->info().layout;
++    }
++
++    std::array<VkWriteDescriptorSet, 2> descriptorWrites = {{
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
++        set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthDescriptor },
++      { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
++        set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &aoDescriptor },
++    }};
++
++    ctx.cmd->updateDescriptorSets(descriptorWrites.size(), descriptorWrites.data());
++
++    ctx.cmd->cmdBindDescriptorSet(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, set, 0, nullptr);
++
++    ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer, m_pipelineLayout,
++      VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
++  }
++
++
++  VkShaderModule D3D9Ssao::CreateShaderModule(size_t size, const uint32_t* code) {
++    auto vk = m_device->vkd();
++
++    VkShaderModuleCreateInfo info = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
++    info.codeSize = size;
++    info.pCode = code;
++
++    VkShaderModule module = VK_NULL_HANDLE;
++    VkResult vr = vk->vkCreateShaderModule(vk->device(), &info, nullptr, &module);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("SSAO: failed to create shader module: ", vr));
++
++    return module;
++  }
++
++
++  VkPipeline D3D9Ssao::CreatePipeline(
++          VkShaderModule              fs,
++          VkFormat                    format,
++          VkSampleCountFlagBits       samples,
++          bool                        multiply) {
++    auto vk = m_device->vkd();
++
++    std::array<VkPipelineShaderStageCreateInfo, 2> stages = {{
++      { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
++        VK_SHADER_STAGE_VERTEX_BIT, m_vs, "main" },
++      { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
++        VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" },
++    }};
++
++    VkPipelineRenderingCreateInfo rtInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
++    rtInfo.colorAttachmentCount = 1;
++    rtInfo.pColorAttachmentFormats = &format;
++
++    VkPipelineVertexInputStateCreateInfo viState = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
++
++    VkPipelineInputAssemblyStateCreateInfo iaState = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
++    iaState.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
++
++    VkPipelineViewportStateCreateInfo vpState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
++
++    VkPipelineRasterizationStateCreateInfo rsState = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
++    rsState.cullMode = VK_CULL_MODE_NONE;
++    rsState.polygonMode = VK_POLYGON_MODE_FILL;
++    rsState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
++    rsState.lineWidth = 1.0f;
++
++    uint32_t sampleMask = (1u << uint32_t(samples)) - 1u;
++
++    VkPipelineMultisampleStateCreateInfo msState = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
++    msState.rasterizationSamples = samples;
++    msState.pSampleMask = &sampleMask;
++
++    // Multiply: dst.rgb *= src.rgb, alpha is left alone.
++    VkPipelineColorBlendAttachmentState cbAttachment = { };
++    cbAttachment.blendEnable = multiply ? VK_TRUE : VK_FALSE;
++    cbAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
++    cbAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
++    cbAttachment.colorBlendOp = VK_BLEND_OP_ADD;
++    cbAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
++    cbAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
++    cbAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
++    cbAttachment.colorWriteMask = multiply
++      ? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT
++      : VK_COLOR_COMPONENT_R_BIT;
++
++    VkPipelineColorBlendStateCreateInfo cbState = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
++    cbState.attachmentCount = 1;
++    cbState.pAttachments = &cbAttachment;
++
++    static const std::array<VkDynamicState, 2> dynStates = {
++      VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
++      VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
++    };
++
++    VkPipelineDynamicStateCreateInfo dynState = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
++    dynState.dynamicStateCount = dynStates.size();
++    dynState.pDynamicStates = dynStates.data();
++
++    VkGraphicsPipelineCreateInfo info = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, &rtInfo };
++    info.stageCount = stages.size();
++    info.pStages = stages.data();
++    info.pVertexInputState = &viState;
++    info.pInputAssemblyState = &iaState;
++    info.pViewportState = &vpState;
++    info.pRasterizationState = &rsState;
++    info.pMultisampleState = &msState;
++    info.pColorBlendState = &cbState;
++    info.pDynamicState = &dynState;
++    info.layout = m_pipelineLayout;
++    info.basePipelineIndex = -1;
++
++    VkPipeline pipeline = VK_NULL_HANDLE;
++    VkResult vr = vk->vkCreateGraphicsPipelines(vk->device(), VK_NULL_HANDLE,
++      1, &info, nullptr, &pipeline);
++
++    if (vr != VK_SUCCESS)
++      throw DxvkError(str::format("SSAO: failed to create pipeline: ", vr));
++
++    return pipeline;
++  }
++
++
++  VkPipeline D3D9Ssao::GetApplyPipeline(
++          VkFormat                    format,
++          VkSampleCountFlagBits       samples) {
++    uint64_t key = (uint64_t(format) << 32) | uint64_t(samples);
++    auto entry = m_applyPipelines.find(key);
++
++    if (entry != m_applyPipelines.end())
++      return entry->second;
++
++    VkPipeline pipeline = CreatePipeline(m_fsApply, format, samples, true);
++    m_applyPipelines.insert({ key, pipeline });
++    return pipeline;
++  }
++
++
++  void D3D9Ssao::CreateAoImage(VkExtent3D extent) {
++    DxvkImageCreateInfo imageInfo = { };
++    imageInfo.type          = VK_IMAGE_TYPE_2D;
++    imageInfo.format        = VK_FORMAT_R8_UNORM;
++    imageInfo.sampleCount   = VK_SAMPLE_COUNT_1_BIT;
++    imageInfo.extent        = extent;
++    imageInfo.mipLevels     = 1;
++    imageInfo.numLayers     = 1;
++    imageInfo.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    imageInfo.stages        = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
++                            | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++    imageInfo.access        = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
++                            | VK_ACCESS_SHADER_READ_BIT;
++    imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
++    imageInfo.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    imageInfo.debugName     = "SSAO";
++
++    m_aoImage = m_device->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++    DxvkImageViewKey viewInfo = { };
++    viewInfo.viewType       = VK_IMAGE_VIEW_TYPE_2D;
++    viewInfo.usage          = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
++                            | VK_IMAGE_USAGE_SAMPLED_BIT;
++    viewInfo.format         = imageInfo.format;
++    viewInfo.aspects        = VK_IMAGE_ASPECT_COLOR_BIT;
++    viewInfo.mipIndex       = 0u;
++    viewInfo.mipCount       = 1u;
++    viewInfo.layerIndex     = 0u;
++    viewInfo.layerCount     = 1u;
++
++    m_aoView = m_aoImage->createView(viewInfo);
++
++    Logger::info(str::format("SSAO: occlusion image ", extent.width, "x", extent.height));
++  }
++
++}
+diff --git a/src/d3d9/d3d9_ssao.h b/src/d3d9/d3d9_ssao.h
+new file mode 100644
+index 0000000..503d827
+--- /dev/null
++++ b/src/d3d9/d3d9_ssao.h
+@@ -0,0 +1,89 @@
++#pragma once
++
++#include <unordered_map>
++
++#include "../dxvk/dxvk_device.h"
++#include "../dxvk/dxvk_context.h"
++
++namespace dxvk {
++
++  /**
++   * \brief Ambient occlusion pass parameters
++   *
++   * Layout of the push constant block of the shaders.
++   */
++  struct D3D9SsaoParams {
++    float proj[4];      // projection _11, _22, _33, _43
++    float radius;       // view space radius
++    float strength;
++    float bias;         // normal bias, 0..1
++    float maxPixels;    // largest screen radius
++    float extent[2];
++  };
++
++  /**
++   * \brief GeneralsX: screen space ambient occlusion
++   *
++   * Computes occlusion from a single-sampled copy of the scene depth
++   * and multiplies it into the colour render target, with raw Vulkan
++   * commands between two D3D9 draws.
++   */
++  class D3D9Ssao {
++
++  public:
++
++    D3D9Ssao(const Rc<DxvkDevice>& device);
++
++    ~D3D9Ssao();
++
++    void Render(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          colorView,
++      const Rc<DxvkImageView>&          depthView,
++      const D3D9SsaoParams&             params);
++
++  private:
++
++    Rc<DxvkDevice>          m_device;
++
++    VkDescriptorSetLayout   m_setLayout       = VK_NULL_HANDLE;
++    VkPipelineLayout        m_pipelineLayout  = VK_NULL_HANDLE;
++
++    VkShaderModule          m_vs              = VK_NULL_HANDLE;
++    VkShaderModule          m_fsAo            = VK_NULL_HANDLE;
++    VkShaderModule          m_fsApply         = VK_NULL_HANDLE;
++
++    VkPipeline              m_aoPipeline      = VK_NULL_HANDLE;
++    std::unordered_map<uint64_t, VkPipeline> m_applyPipelines;
++
++    Rc<DxvkSampler>         m_sampler;
++
++    Rc<DxvkImage>           m_aoImage;
++    Rc<DxvkImageView>       m_aoView;
++
++    VkShaderModule CreateShaderModule(size_t size, const uint32_t* code);
++
++    VkPipeline CreatePipeline(
++            VkShaderModule              fs,
++            VkFormat                    format,
++            VkSampleCountFlagBits       samples,
++            bool                        multiply);
++
++    VkPipeline GetApplyPipeline(
++            VkFormat                    format,
++            VkSampleCountFlagBits       samples);
++
++    void CreateAoImage(VkExtent3D extent);
++
++    void BeginPass(
++      const DxvkContextObjects&         ctx,
++      const Rc<DxvkImageView>&          view,
++            VkImageLayout               oldLayout,
++            VkPipeline                  pipeline,
++      const Rc<DxvkImageView>&          depthView,
++      const Rc<DxvkImageView>&          aoView,
++      const D3D9SsaoParams&             params);
++
++  };
++
++}
+diff --git a/src/d3d9/meson.build b/src/d3d9/meson.build
+index 2f45946..75288ea 100644
+--- a/src/d3d9/meson.build
++++ b/src/d3d9/meson.build
+@@ -7,7 +7,10 @@ d3d9_shaders = files([
+   'shaders/d3d9_convert_a2w10v10u10.comp',
+   'shaders/d3d9_convert_w11v11u10.comp',
+   'shaders/d3d9_convert_nv12.comp',
+-  'shaders/d3d9_convert_yv12.comp'
++  'shaders/d3d9_convert_yv12.comp',
++  'shaders/d3d9_ssao_vert.vert',
++  'shaders/d3d9_ssao_frag.frag',
++  'shaders/d3d9_ssao_apply_frag.frag',
+ ])
+ 
+ d3d9_src = [
+@@ -39,6 +42,7 @@ d3d9_src = [
+   'd3d9_fixed_function.cpp',
+   'd3d9_names.cpp',
+   'd3d9_swvp_emu.cpp',
++  'd3d9_ssao.cpp',
+   'd3d9_format_helpers.cpp',
+   'd3d9_hud.cpp',
+   'd3d9_annotation.cpp',
+diff --git a/src/d3d9/shaders/d3d9_ssao_apply_frag.frag b/src/d3d9/shaders/d3d9_ssao_apply_frag.frag
+new file mode 100644
+index 0000000..2de18f5
+--- /dev/null
++++ b/src/d3d9/shaders/d3d9_ssao_apply_frag.frag
+@@ -0,0 +1,40 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "d3d9_ssao_common.glsl"
++
++// GeneralsX: blurs the occlusion over the 4x4 rotation pattern, skipping
++// pixels at a different depth, and outputs it for a multiply blend into
++// the scene colour.
++
++layout(location = 0) out vec4 o_color;
++
++void main() {
++  ivec2 pixel = ivec2(gl_FragCoord.xy);
++  float depth = fetch_depth(pixel);
++
++  if (depth >= 1.0f) {
++    o_color = vec4(1.0f);
++    return;
++  }
++
++  float z = view_z(depth);
++  ivec2 size = ivec2(pc.extent);
++
++  float sum = 0.0f;
++  float weights = 0.0f;
++
++  for (int y = -2; y < 2; y++) {
++    for (int x = -2; x < 2; x++) {
++      ivec2 p = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
++      float sz = view_z(texelFetch(s_depth, p, 0).r);
++      float w = max(1.0f - abs(sz - z) / (0.1f * z + 1.0f), 0.0f);
++      sum += texelFetch(s_ao, p, 0).r * w;
++      weights += w;
++    }
++  }
++
++  float visibility = weights > 0.0f ? sum / weights : 1.0f;
++  o_color = vec4(vec3(visibility), 1.0f);
++}
+diff --git a/src/d3d9/shaders/d3d9_ssao_common.glsl b/src/d3d9/shaders/d3d9_ssao_common.glsl
+new file mode 100644
+index 0000000..8b8b5f4
+--- /dev/null
++++ b/src/d3d9/shaders/d3d9_ssao_common.glsl
+@@ -0,0 +1,29 @@
++// GeneralsX: shared declarations of the ambient occlusion passes.
++
++layout(set = 0, binding = 0) uniform sampler2D s_depth;
++layout(set = 0, binding = 1) uniform sampler2D s_ao;
++
++layout(push_constant) uniform push_t {
++  // Projection _11, _22, _33, _43 of the D3D9 projection matrix.
++  vec4 proj;
++  // Radius in view units, strength, normal bias, largest radius in pixels.
++  vec4 params;
++  // Depth image size in pixels.
++  vec2 extent;
++} pc;
++
++float view_z(float depth) {
++  return pc.proj.w / (depth - pc.proj.z);
++}
++
++vec3 view_pos(ivec2 pixel, float depth) {
++  float z = view_z(depth);
++  vec2 ndc = (vec2(pixel) + 0.5f) / pc.extent * 2.0f - 1.0f;
++  ndc.y = -ndc.y;
++  return vec3(ndc.x * z / pc.proj.x, ndc.y * z / pc.proj.y, z);
++}
++
++float fetch_depth(ivec2 pixel) {
++  ivec2 size = ivec2(pc.extent);
++  return texelFetch(s_depth, clamp(pixel, ivec2(0), size - 1), 0).r;
++}
+diff --git a/src/d3d9/shaders/d3d9_ssao_frag.frag b/src/d3d9/shaders/d3d9_ssao_frag.frag
+new file mode 100644
+index 0000000..801d7d7
+--- /dev/null
++++ b/src/d3d9/shaders/d3d9_ssao_frag.frag
+@@ -0,0 +1,83 @@
++#version 450
++
++#extension GL_GOOGLE_include_directive : enable
++
++#include "d3d9_ssao_common.glsl"
++
++// GeneralsX: screen space ambient occlusion from the scene depth. Writes the
++// visibility (1 = open, 0 = fully occluded) of every pixel.
++
++layout(location = 0) out float o_visibility;
++
++const int   SAMPLE_COUNT = 12;
++const float GOLDEN_ANGLE = 2.39996323f;
++
++vec3 pick_tangent(vec3 p, vec3 a, vec3 b) {
++  // Use the neighbour closer in depth so silhouettes do not bend the normal.
++  return abs(a.z - p.z) < abs(b.z - p.z) ? a - p : p - b;
++}
++
++void main() {
++  ivec2 pixel = ivec2(gl_FragCoord.xy);
++  float depth = fetch_depth(pixel);
++
++  if (depth >= 1.0f) {
++    o_visibility = 1.0f;
++    return;
++  }
++
++  vec3 p = view_pos(pixel, depth);
++
++  ivec2 dx = ivec2(1, 0);
++  ivec2 dy = ivec2(0, 1);
++
++  vec3 px = pick_tangent(p,
++    view_pos(pixel + dx, fetch_depth(pixel + dx)),
++    view_pos(pixel - dx, fetch_depth(pixel - dx)));
++  vec3 py = pick_tangent(p,
++    view_pos(pixel + dy, fetch_depth(pixel + dy)),
++    view_pos(pixel - dy, fetch_depth(pixel - dy)));
++
++  vec3 n = normalize(cross(py, px));
++
++  if (dot(n, p) > 0.0f)
++    n = -n;
++
++  float radius = pc.params.x;
++  float radius2 = radius * radius;
++
++  // Radius on screen, from the projection scale at this depth.
++  float pixelRadius = min(radius * pc.proj.x * 0.5f * pc.extent.x / p.z, pc.params.w);
++
++  if (pixelRadius < 1.0f) {
++    o_visibility = 1.0f;
++    return;
++  }
++
++  // 4x4 interleaved rotation, removed again by the blur in the apply pass.
++  float rotation = float((pixel.x & 3) * 4 + (pixel.y & 3)) * (6.2831853f / 16.0f);
++
++  float occlusion = 0.0f;
++
++  for (int i = 0; i < SAMPLE_COUNT; i++) {
++    float t = (float(i) + 0.5f) / float(SAMPLE_COUNT);
++    float angle = float(i) * GOLDEN_ANGLE + rotation;
++    vec2 offset = vec2(cos(angle), sin(angle)) * (t * pixelRadius);
++
++    ivec2 samplePixel = pixel + ivec2(round(offset));
++    float sampleDepth = fetch_depth(samplePixel);
++
++    if (sampleDepth >= 1.0f)
++      continue;
++
++    vec3 v = view_pos(samplePixel, sampleDepth) - p;
++    float vv = dot(v, v);
++    float vn = dot(v, n);
++
++    float falloff = max(1.0f - vv / radius2, 0.0f);
++    occlusion += falloff * max(vn * inversesqrt(vv + 0.0001f) - pc.params.z, 0.0f);
++  }
++
++  occlusion /= float(SAMPLE_COUNT);
++  o_visibility = clamp(1.0f - pc.params.y * 2.0f * occlusion, 0.0f, 1.0f);
++}
+diff --git a/src/d3d9/shaders/d3d9_ssao_vert.vert b/src/d3d9/shaders/d3d9_ssao_vert.vert
+new file mode 100644
+index 0000000..df333b1
+--- /dev/null
++++ b/src/d3d9/shaders/d3d9_ssao_vert.vert
+@@ -0,0 +1,7 @@
++#version 450
++
++// GeneralsX: full screen triangle for the ambient occlusion passes.
++void main() {
++  vec2 coord = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
++  gl_Position = vec4(coord * 2.0f - 1.0f, 0.0f, 1.0f);
++}

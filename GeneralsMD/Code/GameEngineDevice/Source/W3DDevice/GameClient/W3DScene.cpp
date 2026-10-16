@@ -82,6 +82,10 @@ extern void DoParticles(RenderInfoClass & rinfo);
 	ShaderClass::DETAILCOLOR_DISABLE, ShaderClass::DETAILALPHA_DISABLE) )
 static ShaderClass PlayerColorShader(SC_PLAYER_COLOR);
 
+// GeneralsX @feature Claude 16/10/2026 Private D3D render state that asks DXVK to apply ambient occlusion
+// (cmake/dxvk-patches/0009-d3d9-ssao.patch). D3D does not define render state 253.
+static const unsigned AMBIENT_OCCLUSION_RENDER_STATE = 253;
+
 //=============================================================================
 // RTS3DScene::RTS3DScene
 //=============================================================================
@@ -864,6 +868,15 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	// (gth) CNC3 Flush the shader meshes
 	SHD_FLUSH;
+
+	// GeneralsX @feature Claude 16/10/2026 Ambient occlusion over the opaque scene, before trees, shadows,
+	// water and translucent objects. DXVK computes it from the depth buffer when render state 253 is set
+	// (DXVK_SSAO=1, Options.ini AmbientOcclusion); other drivers ignore the unknown state.
+	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	{
+		DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)AMBIENT_OCCLUSION_RENDER_STATE, 1);
+		DX8Wrapper::Set_DX8_Render_State((D3DRENDERSTATETYPE)AMBIENT_OCCLUSION_RENDER_STATE, 0);
+	}
 
 	// Draw the trees last so they alpha blend onto everything correctly.
 	DoTrees(rinfo);
