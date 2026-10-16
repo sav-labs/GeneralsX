@@ -1409,3 +1409,52 @@ Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, In
 	return TRUE;
 }
 
+// GeneralsX @feature Claude 16/10/2026 Options.ini WaterReflections: Off keeps the retail water, Sky reflects the
+// sky only, Full (the default) also reflects the terrain, buildings, units and trees. Numbers 0 to 2 work too.
+Int OptionPreferences::getWaterReflections() const
+{
+	OptionPreferences::const_iterator it = find("WaterReflections");
+	if (it == end())
+		return 2;
+
+	const char *value = it->second.str();
+	if (stricmp(value, "off") == 0 || stricmp(value, "no") == 0 || stricmp(value, "0") == 0)
+		return 0;
+	if (stricmp(value, "sky") == 0 || stricmp(value, "1") == 0)
+		return 1;
+	return 2;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini WaterReflectionScale: size of the water reflection texture as
+// a fraction of the 3D view, 0.25 to 1, default 0.5.
+Real OptionPreferences::getWaterReflectionScale() const
+{
+	OptionPreferences::const_iterator it = find("WaterReflectionScale");
+	if (it == end())
+		return 0.5f;
+
+	const Real value = (Real)atof(it->second.str());
+	return value > 0.0f ? clamp(0.25f, value, 1.0f) : 0.5f;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini ShoreFoam: foam band and soft shoreline from the water depth.
+// On unless set to "no".
+Bool OptionPreferences::getShoreFoamEnabled() const
+{
+	OptionPreferences::const_iterator it = find("ShoreFoam");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini WaterWaves: animated wave distortion of the water reflection
+// and foam. On unless set to "no".
+Bool OptionPreferences::getWaterWavesEnabled() const
+{
+	OptionPreferences::const_iterator it = find("WaterWaves");
+	if (it == end())
+		return TRUE;
+
+	return stricmp(it->second.str(), "no") != 0;
+}

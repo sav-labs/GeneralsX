@@ -220,4 +220,9 @@ public:
 	Real getSkinnedShadowDistance() const;		///< Options.ini SkinnedShadowDistance in world units, default 1500, 0 = no limit
 	Bool getSkinnedShadowKeepDecal() const;		///< Options.ini SkinnedShadowKeepDecal, default no
 	Int getSkinnedShadowMinTriangles() const;	///< Options.ini SkinnedShadowMinTriangles, default 2000
+	// GeneralsX @feature Claude 16/10/2026 Water effects of standing water and rivers (W3DWaterEffects.cpp).
+	Int getWaterReflections() const;			///< Options.ini WaterReflections = Off | Sky | Full (0, 1, 2), default Full
+	Real getWaterReflectionScale() const;		///< Options.ini WaterReflectionScale, 0.25 to 1, default 0.5
+	Bool getShoreFoamEnabled() const;			///< Options.ini ShoreFoam, default yes
+	Bool getWaterWavesEnabled() const;			///< Options.ini WaterWaves, default yes
 };

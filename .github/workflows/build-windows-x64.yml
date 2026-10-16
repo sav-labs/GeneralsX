@@ -314,6 +314,16 @@ jobs:
           SkinnedShadowMinTriangles = 2000: units the game gives a round shadow switch to the new shadow only
           from this many triangles, so infantry keep theirs. They follow the 3D Shadows option (2D Shadows
           for units that had a round shadow). stderr gets [SHADOW] lines (settings, each model, every 600 frames).
+          Water (lakes, ponds and rivers; Options.ini, read when the game starts, render only):
+          WaterReflections = Full (default) mirrors the sky, terrain, buildings, units and trees in the water,
+          stronger towards the horizon; Sky mirrors only the clouds (cheaper); Off keeps the original water.
+          WaterReflectionScale = 0.5 (0.25 to 1): size of the reflection image relative to the 3D view; lower is
+          faster and softer. The [PERF] line shows its cost as water_refl (ms per frame).
+          ShoreFoam = yes: drifting foam along the shoreline and water that fades in over the first few units of
+          depth instead of ending in a hard line. ShoreFoam = no turns both off.
+          WaterWaves = yes: small moving waves ripple the reflection and the foam. WaterWaves = no keeps them still.
+          WaterReflections = Off, ShoreFoam = no and WaterWaves = no give the original water. stderr gets [WATER]
+          lines with the active settings.
           "@ | Set-Content artifacts/INSTALL.txt
           # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
           @"
