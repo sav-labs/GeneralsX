@@ -660,6 +660,7 @@ GlobalData::GlobalData()
 	m_renderScale = 0;
 	m_renderScaleDisplayWidth = 0;
 	m_renderScaleDisplayHeight = 0;
+	m_upscaler = 0;
 	m_xResolution = DEFAULT_DISPLAY_WIDTH;
 	m_yResolution = DEFAULT_DISPLAY_HEIGHT;
 	m_maxShellScreens = 0;

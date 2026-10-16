@@ -97,7 +97,9 @@ CameraClass::CameraClass() :
 	ZFar(1000.0f),										// far clip plane distance
 	ZBufferMin(0.0f),									// smallest value we'll write into the z-buffer
 	ZBufferMax(1.0f),									// largest value we'll write into the z-buffer
-	FrustumValid(false)
+	FrustumValid(false),
+	JitterX(0.0f),
+	JitterY(0.0f)
 {
 	Set_Transform(Matrix3D(true));
 	Set_View_Plane(DEG_TO_RADF(50.0f));
@@ -131,7 +133,9 @@ CameraClass::CameraClass(const CameraClass & src) :
 	CameraInvTransform(src.CameraInvTransform),
 	AspectRatio(src.AspectRatio),
 	ZBufferMin(src.ZBufferMin),
-	ZBufferMax(src.ZBufferMax)
+	ZBufferMax(src.ZBufferMax),
+	JitterX(0.0f),
+	JitterY(0.0f)
 {
 	// just being paraniod in case any parent class doesn't completely copy the entire state...
 	FrustumValid = false;
@@ -749,6 +753,15 @@ void CameraClass::Apply()
 
 	Matrix4x4 d3dprojection;
 	Get_D3D_Projection_Matrix(&d3dprojection);
+
+	// GeneralsX @feature Claude 16/10/2026 FSR 2 jitter: shift clip space x and y by a multiple of w, which
+	// moves the image by a constant offset in normalized device coordinates.
+	if (JitterX != 0.0f || JitterY != 0.0f)
+	{
+		d3dprojection[0] += d3dprojection[3] * JitterX;
+		d3dprojection[1] += d3dprojection[3] * JitterY;
+	}
+
 	DX8Wrapper::Set_Transform(D3DTS_PROJECTION,d3dprojection);
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,CameraInvTransform);
 }

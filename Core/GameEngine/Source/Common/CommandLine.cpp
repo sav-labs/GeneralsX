@@ -152,6 +152,25 @@ Int parseRenderScale(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 16/10/2026 -upscaler fsr2|fsr1|off overrides Options.ini Upscaler, so the upscalers
+// can be compared on the same machine without editing Options.ini. dlss is accepted and falls back to FSR 2.
+Int parseUpscaler(char *args[], int num)
+{
+	if (num > 1)
+	{
+		OptionPreferences::UpscalerType upscaler = OptionPreferences::parseUpscaler(args[1]);
+		if (upscaler != OptionPreferences::UPSCALER_DEFAULT)
+			TheWritableGlobalData->m_upscaler = upscaler;
+		else
+		{
+			fprintf(stderr, "[FSR2] unknown -upscaler value '%s', expected fsr2, fsr1 or off\n", args[1]);
+			fflush(stderr);
+		}
+		return 2;
+	}
+	return 1;
+}
+
 //=============================================================================
 //=============================================================================
 Int parseNoMusic(char *args[], int)
@@ -1313,6 +1332,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-win", parseWin },
 	{ "-upscale", parseUpscale },
 	{ "-renderscale", parseRenderScale },
+	{ "-upscaler", parseUpscaler },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025

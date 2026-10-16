@@ -1051,6 +1051,80 @@ Real OptionPreferences::getFSRSharpness() const
 	return clamp(0.0f, sharpness, 2.0f);
 }
 
+// GeneralsX @feature Claude 16/10/2026 True when Options.ini has a RenderScale entry. An explicit RenderScale
+// wins over the render scale of UpscalerQuality.
+Bool OptionPreferences::hasRenderScale() const
+{
+	OptionPreferences::const_iterator it = find("RenderScale");
+	return it != end() && atoi(it->second.str()) > 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Upscaler names, case insensitive. Unknown names give UPSCALER_DEFAULT.
+OptionPreferences::UpscalerType OptionPreferences::parseUpscaler(const char *name)
+{
+	if (name == nullptr)
+		return UPSCALER_DEFAULT;
+	if (stricmp(name, "FSR2") == 0)
+		return UPSCALER_FSR2;
+	if (stricmp(name, "FSR1") == 0 || stricmp(name, "FSR") == 0)
+		return UPSCALER_FSR1;
+	if (stricmp(name, "OFF") == 0 || stricmp(name, "no") == 0 || stricmp(name, "none") == 0)
+		return UPSCALER_OFF;
+	if (stricmp(name, "DLSS") == 0)
+		return UPSCALER_DLSS;
+	return UPSCALER_DEFAULT;
+}
+
+const char *OptionPreferences::getUpscalerName(UpscalerType upscaler)
+{
+	switch (upscaler)
+	{
+		case UPSCALER_OFF: return "OFF";
+		case UPSCALER_FSR1: return "FSR1";
+		case UPSCALER_FSR2: return "FSR2";
+		case UPSCALER_DLSS: return "DLSS";
+		default: return "default";
+	}
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini Upscaler. FSR 2 is opt-in until it has been compared against
+// native resolution on real hardware, so a missing entry keeps the FSR 1.0 behaviour of RenderScale.
+OptionPreferences::UpscalerType OptionPreferences::getUpscaler() const
+{
+	OptionPreferences::const_iterator it = find("Upscaler");
+	if (it == end())
+		return UPSCALER_DEFAULT;
+
+	return parseUpscaler(it->second.str());
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini UpscalerQuality picks the render scale when FSR 1.0 or FSR 2
+// is chosen with Upscaler and RenderScale is not set. Missing or unknown values give Quality.
+Int OptionPreferences::getUpscalerQualityScale() const
+{
+	AsciiString quality = getUpscalerQualityName();
+
+	if (quality.compareNoCase("Balanced") == 0)
+		return UPSCALER_BALANCED_SCALE;
+	if (quality.compareNoCase("Performance") == 0)
+		return UPSCALER_PERFORMANCE_SCALE;
+	if (quality.compareNoCase("UltraPerformance") == 0)
+		return UPSCALER_ULTRA_PERFORMANCE_SCALE;
+	return UPSCALER_QUALITY_SCALE;
+}
+
+AsciiString OptionPreferences::getUpscalerQualityName() const
+{
+	OptionPreferences::const_iterator it = find("UpscalerQuality");
+	if (it == end())
+		return AsciiString("Quality");
+
+	const char *name = it->second.str();
+	if (stricmp(name, "Balanced") == 0 || stricmp(name, "Performance") == 0 || stricmp(name, "UltraPerformance") == 0)
+		return it->second;
+	return AsciiString("Quality");
+}
+
 // GeneralsX @feature Claude 16/10/2026 Options.ini PostEffects turns the DXVK present pass effects on or off:
 // bloom with a light colour grade, and FXAA when anti-aliasing is off. On unless set to "no".
 Bool OptionPreferences::getPostEffectsEnabled() const

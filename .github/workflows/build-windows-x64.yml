@@ -47,6 +47,10 @@ jobs:
   # GeneralsX @feature Claude 15/10/2026 Without DXVK_CAPTURE_VIDEO, the game starts and stops clips at run time through
   # DXVK_CAPTURE_VIDEO_CONTROL (patch 0012): F11 or Ctrl+Shift+R records a bug report video into Options.ini CapturePath
   # (default D:\GeneralsX\bugs), encoded to mp4 by a helper copy of GeneralsXZH.exe with the FFmpeg DLLs it ships.
+  # GeneralsX @feature Claude 16/10/2026 FSR 2 temporal upscaling (patches 0013 and 0014): DXVK_UPSCALER=fsr2 upscales the
+  # 3D scene with AMD FidelityFX FSR 2 (MIT), fetched below at a pinned tag and compiled into d3d9.dll. The game sets it
+  # only for Options.ini Upscaler = FSR2 or -upscaler fsr2, jitters its 3D camera, and passes the camera to DXVK through
+  # the exported GeneralsX_UpscalerSubmitFrame and render state 252, where DXVK copies the scene colour and depth.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -69,13 +73,19 @@ jobs:
       - name: Build DXVK
         run: |
           git clone --depth 1 --branch v2.6 --recurse-submodules --shallow-submodules https://github.com/doitsujin/dxvk.git dxvk
+          git clone --depth 1 --branch v2.2.1 https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git fsr2
           cd dxvk
           for patch in ../cmake/dxvk-patches/*.patch; do git apply "$patch"; done
+          # FSR 2 core and Vulkan backend; patch 0013 builds them with its own shader table
+          cp -r ../fsr2/src/ffx-fsr2-api src/dxvk/fsr2/ffx-fsr2-api
+          cp ../fsr2/LICENSE.txt ../fsr2-LICENSE.txt
           ~/.local/bin/meson setup --cross-file build-win64.txt --buildtype release \
             -Denable_d3d10=false -Denable_d3d11=false -Denable_dxgi=false build
           ninja -C build src/d3d8/d3d8.dll src/d3d9/d3d9.dll
+          x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_UpscalerSubmitFrame
           mkdir -p ../dxvk-out
           cp build/src/d3d8/d3d8.dll build/src/d3d9/d3d9.dll ../dxvk-out/
+          cp ../fsr2-LICENSE.txt ../dxvk-out/FidelityFX-FSR2-LICENSE.txt
 
       - name: Upload DXVK
         uses: actions/upload-artifact@v7
@@ -207,7 +217,7 @@ jobs:
             Get-ChildItem -Path (Join-Path $vcReleaseDir.FullName "*.dll") | ForEach-Object { Copy-Item $_.FullName artifacts/ }
           }
           # GeneralsX @build Claude 12/10/2026 Ship DXVK so the x64 build renders through Vulkan like Linux/macOS.
-          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll artifacts/
+          Copy-Item dxvk-fsr/d3d8.dll, dxvk-fsr/d3d9.dll, dxvk-fsr/FidelityFX-FSR2-LICENSE.txt artifacts/
           @"
           @echo off
           rem Borderless window at display size; the game renders at its own resolution and FSR 1.0 upscales it.
@@ -245,6 +255,12 @@ jobs:
           delete it to play with the original look. Unit stats and gameplay are unchanged either way.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
+          FSR 2 (experimental, off by default): add Upscaler = FSR2 to Options.ini, or start the game with
+          -upscaler fsr2 (-upscaler fsr1 or -upscaler off override Options.ini the same way). UpscalerQuality =
+          Quality, Balanced, Performance or UltraPerformance picks the render scale (67%, 59%, 50%, 33%) unless
+          RenderScale or -renderscale is set. FSR 2 adds detail over several frames; FSRSharpness still sets the
+          final sharpening. The console and d3d9.log show [FSR2] / FSR2: lines with the active upscaler.
+          FidelityFX-FSR2-LICENSE.txt is the MIT license of AMD FidelityFX FSR 2, built into d3d9.dll.
           "@ | Set-Content artifacts/INSTALL.txt
           # GeneralsX @build Claude 16/10/2026 version.txt names the commit and run the package was built from.
           @"

@@ -73,6 +73,7 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DTerrainVisual.h
     Include/W3DDevice/GameClient/W3DTreeBuffer.h
     Include/W3DDevice/GameClient/W3DVideoBuffer.h
+    Include/W3DDevice/GameClient/W3DUpscaler.h
     Include/W3DDevice/GameClient/W3DView.h
     Include/W3DDevice/GameClient/W3DScreenshot.h
     Include/W3DDevice/GameClient/W3DCapture.h
@@ -175,6 +176,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DTerrainVisual.cpp
     Source/W3DDevice/GameClient/W3DTreeBuffer.cpp
     Source/W3DDevice/GameClient/W3DVideoBuffer.cpp
+    Source/W3DDevice/GameClient/W3DUpscaler.cpp
     Source/W3DDevice/GameClient/W3DView.cpp
     Source/W3DDevice/GameClient/W3DScreenshot.cpp
     Source/W3DDevice/GameClient/W3DCapture.cpp
