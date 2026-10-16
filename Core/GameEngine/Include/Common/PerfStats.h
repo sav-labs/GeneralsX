@@ -49,6 +49,8 @@ namespace PerfStats
 		// GeneralsX @feature Claude 16/10/2026 Effect lights (light selection before the scene and the terrain light
 		// pass); overlaps render_targets and scene.
 		SECTION_EFFECT_LIGHTS,    ///< W3DEffectLights update and terrain light splats
+		// GeneralsX @feature Claude 16/10/2026 Reflection pass of the water effects; overlaps render_targets.
+		SECTION_WATER_REFLECTION, ///< WaterRenderObjClass::renderWaterReflection
 		SECTION_COUNT
 	};
 

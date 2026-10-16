@@ -122,6 +122,7 @@ namespace
 		"present_ms",
 		"skinned_shadows_ms",
 		"lights_ms",
+		"water_reflection_ms",
 	};
 
 	void accumulate(Window &w, double frameMs)
@@ -172,7 +173,7 @@ namespace
 		fprintf(stderr,
 			"[PERF] %.1fs frames=%u fps=%.1f frame_ms avg=%.2f max=%.2f"
 			" | logic=%.2f client=%.2f (drawables=%.2f particles=%.2f draw=%.2f: targets=%.2f scene=%.2f"
-			" [meshes=%.2f shadows=%.2f particles=%.2f] present=%.2f)"
+			" [meshes=%.2f shadows=%.2f particles=%.2f] present=%.2f water_refl=%.2f)"
 			" | draws=%.0f max=%u tris=%.0fk sorted=%.0fk"
 			" | skins=%.1f skinverts=%.1fk cachehits=%.1f"
 			" | shadowrebuilds=%.1f (%.1fk tris)"
@@ -185,7 +186,7 @@ namespace
 			avg(w.sectionMs[SECTION_DRAW], n), avg(w.sectionMs[SECTION_RENDER_TARGETS], n),
 			avg(w.sectionMs[SECTION_SCENE], n), avg(w.sectionMs[SECTION_MESH_FLUSH], n),
 			avg(w.sectionMs[SECTION_SHADOWS], n), avg(w.sectionMs[SECTION_PARTICLE_RENDER], n),
-			avg(w.sectionMs[SECTION_PRESENT], n),
+			avg(w.sectionMs[SECTION_PRESENT], n), avg(w.sectionMs[SECTION_WATER_REFLECTION], n),
 			avg((double)w.drawCalls, n), w.drawCallsMax,
 			avg((double)w.triangles, n) / 1000.0, avg((double)w.sortedTriangles, n) / 1000.0,
 			avg((double)w.skinMeshes, n), avg((double)w.skinVertices, n) / 1000.0, avg((double)w.skinCacheHits, n),
