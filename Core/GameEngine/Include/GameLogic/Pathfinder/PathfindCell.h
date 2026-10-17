@@ -92,13 +92,17 @@ public:
 #if RETAIL_COMPATIBLE_PATHFINDING
 	// Forward insertion sort that is 100% retail compatible
 	void forwardInsertionSortRetailCompatible(PathfindCellList& list);
-#endif
 
 	// Forward insertion sort, in ascending cost order
 	void forwardInsertionSort(PathfindCellList& list);
 
 	// Reverse insertion sort, in ascending cost order
 	void reverseInsertionSort(PathfindCellList& list);
+#else
+	// GeneralsX @performance Claude 17/10/2026 Insertion after the last cell of the same or the next lower cost,
+	// found through the list's cost index instead of a walk along the list.
+	void indexedInsertionSort(PathfindCellList& list);
+#endif
 
 	/// put self on "open" list in ascending cost order
 	void putOnSortedOpenList( PathfindCellList &list );

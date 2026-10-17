@@ -188,8 +188,6 @@ namespace PerfStats
 	/// One queued pathfind request took this long and examined this many cells; counted per frame, the slowest
 	/// is named in the hitch logic line.
 	void addPathfind(double ms, Int cells, const char *thing);
-	// GeneralsX @performance Claude 17/10/2026 Open list cells a pathfinder insertion walked past, for the hitch ai line.
-	void addOpenListSteps(UnsignedInt steps);
 
 	/// Called once per main loop iteration.
 	void endFrame(Bool inMatch, UnsignedInt logicFrame);
