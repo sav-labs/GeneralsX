@@ -74,6 +74,9 @@ namespace PerfStats
 
 	/// Running totals of synchronous texture loads, read once per frame from the renderer.
 	typedef void (*LoadTotalsSource)(UnsignedInt &textureLoads, double &textureLoadMs);
+	// GeneralsX @performance Claude 17/10/2026 Running totals of the pipelines DXVK created for draws (of those, the
+	// ones compiled without pipeline libraries), the fixed function shaders it generated and the pipeline time.
+	typedef void (*PipelineTotalsSource)(UnsignedInt &pipelines, UnsignedInt &fullCompiles, UnsignedInt &ffShaders, double &pipelineMs);
 
 	extern Bool s_enabled;
 
@@ -106,6 +109,11 @@ namespace PerfStats
 	// GeneralsX @performance Claude 16/10/2026 Hitch counters: what was loaded or created during a frame.
 	/// The renderer's synchronous texture load totals; endFrame turns them into per frame counts.
 	void setLoadTotalsSource(LoadTotalsSource source);
+	// GeneralsX @performance Claude 17/10/2026 The renderer's pipeline creation totals (DXVK d3d9.dll only).
+	void setPipelineTotalsSource(PipelineTotalsSource source);
+	// GeneralsX @performance Claude 17/10/2026 The current main loop iteration loads a map behind the load screen:
+	// endFrame prints it as one [PERF] load line instead of a hitch and leaves it out of the summaries.
+	void markLoadFrame();
 	/// A .w3d file was read from disk and took this long.
 	void addModelLoad(double ms);
 	/// A Direct3D vertex or pixel shader was created.
