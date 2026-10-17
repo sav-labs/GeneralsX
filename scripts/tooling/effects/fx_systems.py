@@ -547,6 +547,36 @@ SYSTEMS.update({
 })
 
 
+# Inferno Cannon shell in flight (Object InfernoTankShell / ...Upgraded, ParticleSysBone InfernoTrail).
+# Retail sprayed five growing additive puffs a frame, a column of flat orange-pink blobs across the
+# sky. Now a thin dark smoke trail with a small burning core on the shell.
+def _inferno_trail(slave):
+    return system(
+        Priority="AREA_EFFECT", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        SlaveSystem=slave,
+        Lifetime=(30, 40), Size=(1.2, 1.8), SizeRate=(0.18, 0.25), SizeRateDamping=(0.95, 0.96),
+        Alpha=[(0.0, 0.0, 0), (0.4, 0.4, 3), (0.18, 0.18, 20), (0.0, 0.0, 40)],
+        Color=[((95, 86, 78), 0), ((150, 145, 140), 15)],
+        BurstDelay=(1, 1), BurstCount=(1, 1), SystemLifetime=360,
+        DriftVelocity=(0.0, 0.0, 0.03))
+
+
+def _inferno_core():
+    return system(
+        Priority="AREA_EFFECT", ParticleName="gxfx_flame.tga", FlipbookGrid=8, AngleZ=(-0.2, 0.2),
+        Lifetime=(5, 6), Size=(2.0, 2.6), SizeRate=(-0.1, -0.1),
+        Alpha=[(0.9, 0.9, 0), (0.0, 0.0, 6)],
+        Color=[((255, 190, 140), 0)],
+        BurstDelay=(1, 1), BurstCount=(1, 1), SystemLifetime=360)
+
+
+SYSTEMS.update({
+    "InfernoTrail": _inferno_trail("GXInfernoTrailCore"),
+    "InfernoTrailUpgraded": _inferno_trail("GXInfernoTrailCore"),
+    "GXInfernoTrailCore": _inferno_core(),
+})
+
+
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {
     "FX_GenericTankDeathExplosion": {
