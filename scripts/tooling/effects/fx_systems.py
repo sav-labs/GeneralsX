@@ -115,9 +115,11 @@ SYSTEMS = {
     # flipbook instead, alpha blended like GXWreckFire.
     "TankFire": system(
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8, AngleZ=(-0.1, 0.1),
-        Lifetime=(26, 34), Size=(7, 10), SizeRate=(0.05, 0.1), SizeRateDamping=(0.97, 0.97),
-        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 4), (1.0, 1.0, 22), (0.0, 0.0, 34)],
-        BurstDelay=(3, 5), BurstCount=(1, 1), SystemLifetime=200,
+        # Few large, slow tongues tinted deep orange: small fast yellow ones read as candles.
+        Lifetime=(38, 46), Size=(12, 16), SizeRate=(0.08, 0.12), SizeRateDamping=(0.97, 0.97),
+        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 6), (0.8, 0.8, 28), (0.0, 0.0, 46)],
+        Color=[((255, 190, 140), 0), ((200, 120, 80), 30)],
+        BurstDelay=(5, 8), BurstCount=(1, 1), SystemLifetime=200,
         DriftVelocity=(0.0, 0.0, 0.25),
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
     "GXTankBlastFlash": system(
@@ -405,9 +407,9 @@ def _struck_sparks(size):
     # A whole spark shower in one sprite (gxfx_sparks): flash, sparks arcing out, cooling, falling.
     return system(
         Priority="UNIT_DAMAGE_FX", Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8,
-        AngleZ=(-0.3, 0.3), Lifetime=(14, 18), Size=size,
-        # Warm and dim: at full white every gattling hit left a white-turquoise speckle over the hull.
-        Color=[((215, 160, 105), 0), ((160, 85, 30), 7), ((0, 0, 0), 18)],
+        AngleZ=(-0.3, 0.3), Lifetime=(9, 11), Size=size,
+        # Warm, dim and short: gattling hits overlap on one hull, and long white showers read as noise.
+        Color=[((170, 110, 60), 0), ((110, 50, 15), 4), ((0, 0, 0), 11)],
         BurstCount=(1, 1), SystemLifetime=1)
 
 
@@ -429,8 +431,8 @@ def _struck_smoke(count, size, lifetime, alpha):
 SYSTEMS.update({
     "GattlingCannonLenzflare": _gun_flash((5.0, 7.0)),
     "GattlingCannonLenzflareIntense": _gun_flash((8.0, 10.0)),
-    "TankStruckSparks": _struck_sparks((7.0, 9.0)),
-    "SmallTankStruckSparks": _struck_sparks((5.0, 7.0)),
+    "TankStruckSparks": _struck_sparks((5.0, 6.0)),
+    "SmallTankStruckSparks": _struck_sparks((3.0, 4.0)),
     "TankStruckLenzflare": _gun_flash((6.0, 8.0), lifetime=4),
     "TankStruckSmoke": _struck_smoke((3, 3), (3.0, 4.5), (70, 90), 0.6),
     "TankStruckSmallArmsSmoke": _struck_smoke((1, 1), (1.5, 2.5), (25, 35), 0.45),
