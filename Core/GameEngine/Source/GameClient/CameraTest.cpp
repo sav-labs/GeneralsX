@@ -890,6 +890,14 @@ void applyCameraTestBattlePose(Real flightSeconds)
 void applyCameraTestNight()
 {
 	const TimeOfDay previous = TheGlobalData->m_timeOfDay;
+	// GeneralsX @tweak Claude 17/10/2026 The map now loads at night (W3DTerrainLogic::loadMap). Switching again
+	// mid-match would rebuild the lighting of every drawable and the terrain, which cost a 1.2 s frame.
+	if (previous == TIME_OF_DAY_NIGHT)
+	{
+		fprintf(stderr, "[CAMTEST] night: map loaded at night\n");
+		fflush(stderr);
+		return;
+	}
 	if (!TheWritableGlobalData->setTimeOfDay(TIME_OF_DAY_NIGHT))
 		return;
 
