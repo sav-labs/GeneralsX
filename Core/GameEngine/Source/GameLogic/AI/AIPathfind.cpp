@@ -72,6 +72,7 @@
 
 //------------------------------------------------------------------------------ Performance Timers
 #include "Common/PerfMetrics.h"
+#include "Common/PerfStats.h"
 
 #include <vector>
 
@@ -6066,9 +6067,12 @@ void Pathfinder::processPathfindQueue()
 #endif
 
 	if (m_zoneManager.needToCalculateZones()) {
+		// GeneralsX @performance Claude 17/10/2026 Zone and path time for the [PERF] hitch ai line.
+		PERF_STATS_LOGIC(LOGIC_AI_ZONES);
 		m_zoneManager.calculateZones(m_map, m_layers, m_extent);
 		return;
 	}
+	PERF_STATS_LOGIC(LOGIC_AI_PATHS);
 
 	// Get the current logical extent.
 	Region3D terrainExtent;
@@ -6091,8 +6095,13 @@ void Pathfinder::processPathfindQueue()
 		if (obj) {
 			AIUpdateInterface *ai = obj->getAIUpdateInterface();
 			if (ai) {
+				const double perfStart = PerfStats::isEnabled() ? PerfStats::nowMs() : 0.0;
+				const Int perfCells = m_cumulativeCellsAllocated;
 				ai->doPathfind(this);
 				pathsFound++;
+				if (PerfStats::isEnabled())
+					PerfStats::addPathfind(PerfStats::nowMs() - perfStart, m_cumulativeCellsAllocated - perfCells,
+						obj->getTemplate()->getName().str());
 			}
 		}
 		m_queuePRHead = m_queuePRHead+1;
