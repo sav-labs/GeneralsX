@@ -88,7 +88,20 @@ public:
 	Coord3DList m_supplyPositions;
 	Coord3DList m_techPositions;
 	AsciiString m_fileName;
+	// GeneralsX @feature Claude 17/10/2026 Units and structures the map author placed for a player side (not neutral,
+	// not civilian), -1 when not counted yet. Maps with many of them start with ready armies and attack scripts.
+	Int m_presetArmyObjects = -1;
 };
+
+// GeneralsX @feature Claude 17/10/2026 Unofficial maps with at least this many preset army objects are scenario maps
+// (ready armies and attack waves instead of the standard base and dozer start) and stay out of the map lists.
+enum { PRESET_ARMY_HIDE_THRESHOLD = 5 };
+
+/// True when an unofficial map starts players with armies its author placed (see m_presetArmyObjects).
+inline Bool isScenarioMap(const MapMetaData &md)
+{
+	return !md.m_isOfficial && md.m_presetArmyObjects >= PRESET_ARMY_HIDE_THRESHOLD;
+}
 
 // TheSuperHackers @performance xezon 02/11/2025 Simplifies and improves the implementation of MapCache
 // to prevent expensive reoccurring redundant map cache reads.

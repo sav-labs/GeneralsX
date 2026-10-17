@@ -114,6 +114,7 @@ static Dict worldDict = 0;
 static WaypointMap *m_waypoints = nullptr;
 static Coord3DList	m_supplyPositions;
 static Coord3DList	m_techPositions;
+static Int m_presetArmyObjects = 0;
 
 static Int m_mapDX = 0;
 static Int m_mapDY = 0;
@@ -186,6 +187,18 @@ static Bool ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *info, void
 	else if (pThisOne->getThingTemplate() && pThisOne->getThingTemplate()->isKindOf(KINDOF_SUPPLY_SOURCE_ON_PREVIEW))
 	{
 		m_supplyPositions.push_back(loc);
+	}
+
+	// GeneralsX @feature Claude 17/10/2026 Count units and structures placed for a player side. Standard multiplayer
+	// maps place only neutral ("team") and civilian objects; players get their base and dozer at game start.
+	const ThingTemplate *tmpl = pThisOne->getThingTemplate();
+	if (tmpl && !pThisOne->isWaypoint() && (tmpl->isKindOf(KINDOF_INFANTRY) || tmpl->isKindOf(KINDOF_VEHICLE)
+		|| tmpl->isKindOf(KINDOF_AIRCRAFT) || tmpl->isKindOf(KINDOF_STRUCTURE)))
+	{
+		AsciiString owner = pThisOne->getProperties()->getAsciiString(TheKey_originalOwner);
+		owner.toLower();
+		if (!owner.isEmpty() && owner != "team" && strstr(owner.str(), "civilian") == nullptr)
+			++m_presetArmyObjects;
 	}
 
 	deleteInstance(pThisOne);
@@ -290,6 +303,7 @@ static void resetMap()
 
 	m_techPositions.clear();
 	m_supplyPositions.clear();
+	m_presetArmyObjects = 0;
 }
 
 static void getExtent( Region3D *extent )
@@ -400,6 +414,7 @@ void MapCache::writeCacheINI( const AsciiString &mapDir )
 
 			fprintf(fp, "  isMultiplayer = %s\n", (md.m_isMultiplayer)?"yes":"no");
 			fprintf(fp, "  numPlayers = %d\n", md.m_numPlayers);
+			fprintf(fp, "  presetArmyObjects = %d\n", md.m_presetArmyObjects);
 
 			fprintf(fp, "  extentMin = X:%2.2f Y:%2.2f Z:%2.2f\n", md.m_extent.lo.x, md.m_extent.lo.y, md.m_extent.lo.z);
 			fprintf(fp, "  extentMax = X:%2.2f Y:%2.2f Z:%2.2f\n", md.m_extent.hi.x, md.m_extent.hi.y, md.m_extent.hi.z);
@@ -707,7 +722,8 @@ Bool MapCache::addMap(
 		// Found the map in our cache. Check to see if it has changed.
 		const MapMetaData& md = it->second;
 
-		if (md.m_filesize == fileInfo.sizeLow && md.m_CRC != 0)
+		// GeneralsX @feature Claude 17/10/2026 Unofficial maps cached before preset armies were counted are read again once.
+		if (md.m_filesize == fileInfo.sizeLow && md.m_CRC != 0 && (md.m_isOfficial || md.m_presetArmyObjects >= 0))
 		{
 			// Force a lookup so that we don't display the English localization in all builds.
 			if (md.m_nameLookupTag.isEmpty())
@@ -767,6 +783,7 @@ Bool MapCache::addMap(
 	md.m_timestamp.m_lowTimeStamp = fileInfo.timestampLow;
 	md.m_supplyPositions = m_supplyPositions;
 	md.m_techPositions = m_techPositions;
+	md.m_presetArmyObjects = m_presetArmyObjects;
 	md.m_CRC = calcCRC(fname);
 
 	Bool exists = false;
@@ -915,7 +932,9 @@ static Bool addMapToMapListbox(
 	const AsciiString& mapName,
 	const MapMetaData& mapMetaData)
 {
-	const Bool mapOk = mapName.startsWithNoCase(mapDir.str()) && lbData.isMultiplayer == mapMetaData.m_isMultiplayer && !mapMetaData.m_displayName.isEmpty();
+	// GeneralsX @feature Claude 17/10/2026 Scenario fan maps with ready armies are left out (isScenarioMap).
+	const Bool mapOk = mapName.startsWithNoCase(mapDir.str()) && lbData.isMultiplayer == mapMetaData.m_isMultiplayer && !mapMetaData.m_displayName.isEmpty()
+		&& !isScenarioMap(mapMetaData);
 
 	if (mapOk)
 	{
