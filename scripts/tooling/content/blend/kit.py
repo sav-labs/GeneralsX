@@ -803,8 +803,31 @@ def finalize(kit, damaged=False):
     return out
 
 
-def unwrap(objs, margin=0.004):
-    """One shared atlas for all objects: angle-based islands packed together at even texel density."""
+def _shrink_small_islands(objs, area, scale):
+    from bpy_extras import bmesh_utils
+    for obj in objs:
+        if not obj.data.uv_layers:
+            continue
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        layer = bm.loops.layers.uv.active
+        for island in bmesh_utils.bmesh_linked_uv_islands(bm, layer):
+            if sum(f.calc_area() for f in island) >= area:
+                continue
+            loops = [l for f in island for l in f.loops]
+            cu = sum(l[layer].uv[0] for l in loops) / len(loops)
+            cv = sum(l[layer].uv[1] for l in loops) / len(loops)
+            for l in loops:
+                u, v = l[layer].uv
+                l[layer].uv = (cu + (u - cu) * scale, cv + (v - cv) * scale)
+        bm.to_mesh(obj.data)
+        bm.free()
+
+
+def unwrap(objs, margin=0.004, angle=50.0, small=None):
+    """One shared atlas for all objects: angle-based islands packed together at even texel density.
+    small=(area, scale): islands under that surface area (fittings, bolts, cut-up curved faces) get that
+    fraction of the density, so the big plates the camera sees get the texels."""
     bpy.ops.object.select_all(action="DESELECT")
     for obj in objs:
         obj.select_set(True)
@@ -813,10 +836,12 @@ def unwrap(objs, margin=0.004):
     bpy.context.view_layer.objects.active = objs[0]
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(50), island_margin=margin, area_weight=0.0,
+    bpy.ops.uv.smart_project(angle_limit=math.radians(angle), island_margin=margin, area_weight=0.0,
                              correct_aspect=True, scale_to_bounds=False)
     bpy.ops.uv.average_islands_scale()
     bpy.ops.object.mode_set(mode="OBJECT")
+    if small:
+        _shrink_small_islands(objs, *small)
     # Shrink the islands of each part by its density weight, about the part's own UV centre.
     for obj in objs:
         me = obj.data

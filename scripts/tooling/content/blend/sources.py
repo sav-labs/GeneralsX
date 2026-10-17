@@ -54,13 +54,20 @@ UNITS = {
     # by CI yet: "crusader" stays the approved M1A1 until this one passes.
     "crusader_m1a2": {
         "model": "AVGXMBT", "stem": "gxmbt3", "length": 45.0, "yaw": 90.0, "tris": 28000, "split": "abram", "weld": 0.002,
-        # Large forms first: islands under 0.12 units go (their look is baked), coplanar faces within 4
+        # Large forms first: islands under 0.25 units go (their look is baked), coplanar faces within 4
         # degrees merge without moving a vertex, and only then is the rest collapsed to the budget.
-        "cull": 0.12, "planar": 4.0,
+        "cull": 0.25, "planar": 4.0, "plates": 2.0,
         # Its 1K texture is too coarse for the game's close camera: the paint is procedural and the
         # surface detail (plate edges, bolts, welds, hatches) comes from normals and occlusion baked off
-        # the full-resolution mesh, with rays reaching 0.25 units either side of the decimated surface.
-        "procedural": True, "highpoly": 0.25,
+        # the full-resolution mesh, with rays reaching 0.6 units out (collapsed plates drift off the source).
+        "procedural": True, "highpoly": 0.6,
+        # The engine lights the baked normal map (_n.dds), so only a trace of that relief goes into the colour.
+        "relief": 0.3,
+        # Hard edges above 35 degrees: plates shade flat, rounded castings (mantlet, wheels) stay smooth.
+        "hard": 35.0,
+        # Thousands of small islands (fittings, cut-up castings) took half the atlas: fewer, larger islands,
+        # and anything under 1.5 square units at a third of the density.
+        "uv_angle": 66.0, "uv_small": (1.5, 0.35),
         # CARC Tan 686A as on US Army vehicles today, lightly used: a fleet tank, not a wreck.
         "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "parents": {"BARREL": "TURRET"},

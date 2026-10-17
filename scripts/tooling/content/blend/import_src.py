@@ -257,19 +257,41 @@ def cull_small(objs, size):
         bm.free()
 
 
-def planar(objs, angle):
+def planar(objs, angle, plates=None):
     """Merge coplanar faces (within `angle` degrees) without moving any vertex: flat armour plates become
-    a few large polygons and the silhouette stays exact, so the later collapse has less to crush."""
+    a few large polygons and the silhouette stays exact, so the later collapse has less to crush.
+    plates: the corners of merged faces larger than this area go into a "plates" vertex group, which the
+    collapse keeps; without it, collapsed skirt and hull plates fold into shallow fans that light unevenly."""
     for o in objs:
         mod = o.modifiers.new("planar", "DECIMATE")
         mod.decimate_type = "DISSOLVE"
         mod.angle_limit = math.radians(angle)
         mod.delimit = {"MATERIAL", "SEAM"}
-        tri = o.modifiers.new("tri", "TRIANGULATE")
-        tri.quad_method = "BEAUTY"
         bpy.context.view_layer.objects.active = o
         bpy.ops.object.modifier_apply(modifier=mod.name)
+        if plates:
+            keep = sorted({v for p in o.data.polygons if len(p.vertices) > 3 and p.area >= plates for v in p.vertices})
+            if keep:
+                o.vertex_groups.new(name="plates").add(keep, 1.0, "REPLACE")
+        tri = o.modifiers.new("tri", "TRIANGULATE")
+        tri.quad_method = "BEAUTY"
         bpy.ops.object.modifier_apply(modifier=tri.name)
+
+
+def harden(objs, angle):
+    """Smooth shading with hard edges where faces meet at more than angle degrees. A source smoothed all
+    over keeps that once collapsed, and the game then shades flat armour plates in light and dark streaks
+    across their long triangles; the tangent-space normal map is baked against these same normals."""
+    for o in objs:
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        limit = math.radians(angle)
+        for f in bm.faces:
+            f.smooth = True
+        for e in bm.edges:
+            e.smooth = not (len(e.link_faces) == 2 and e.calc_face_angle(0.0) > limit)
+        bm.to_mesh(o.data)
+        bm.free()
 
 
 def decimate(objs, budget, weights=None):
@@ -292,6 +314,10 @@ def decimate(objs, budget, weights=None):
         mod = o.modifiers.new("dec", "DECIMATE")
         mod.ratio = wi * lo
         mod.use_collapse_triangulate = True
+        if "plates" in o.vertex_groups:
+            mod.vertex_group = "plates"
+            mod.invert_vertex_group = True
+            mod.vertex_group_factor = 10.0
         bpy.context.view_layer.objects.active = o
         bpy.ops.object.modifier_apply(modifier=mod.name)
 
@@ -555,6 +581,13 @@ def bake_highpoly(low, high, size, extrusion, spec):
     out = {}
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
+    # Occlusion comes from the source alone: the decimated meshes sit a little inside and outside its
+    # surface, and rays hitting them darkened whole triangles of flat plates.
+    rays = ("visible_diffuse", "visible_glossy", "visible_shadow", "visible_transmission", "visible_volume_scatter")
+    hidden = {o: [getattr(o, r) for r in rays] for o in scene.objects if o != source}
+    for o in hidden:
+        for r in rays:
+            setattr(o, r, False)
     for kind, samples in (("normal", 1), ("ao", 64), ("tangent", 1), ("gloss", 1)):
         img = bpy.data.images.new(f"hp_{kind}", size, size, alpha=False, float_buffer=True)
         img.colorspace_settings.name = "Non-Color"
@@ -602,6 +635,9 @@ def bake_highpoly(low, high, size, extrusion, spec):
                                 use_selected_to_active=True, cage_extrusion=extrusion,
                                 max_ray_distance=extrusion * 2.5, margin=6, use_clear=True, **kwargs)
         out[kind] = img
+    for o, was in hidden.items():
+        for r, v in zip(rays, was):
+            setattr(o, r, v)
     for o in (target, source, *high):
         bpy.data.objects.remove(o)
     return out
@@ -984,11 +1020,13 @@ def build(path, spec, name, size, damaged=False):
     if spec.get("cull"):
         cull_small(body_objs, spec["cull"])
     if spec.get("planar"):
-        planar(body_objs, spec["planar"])
+        planar(body_objs, spec["planar"], spec.get("plates"))
         step(f"planar {sum(len(o.data.polygons) for o in body_objs)} triangles")
     decimate(list(joined.values()), spec.get("tris", 12000),
              {o.name: 3.0 for (b, g, kd), o in joined.items() if re.match(r"WHEEL|TIRE|SPROCKET|IDLER|BARREL", b)})
     step("decimated")
+    if spec.get("hard"):
+        harden([o for (b, g, kd), o in joined.items() if kd == "body"], spec["hard"])
     for obj in joined.values():
         mark_rims(obj, spec.get("rims", {}))
     if strips:
@@ -1040,7 +1078,7 @@ def build(path, spec, name, size, damaged=False):
         o.data.uv_layers.new(name="Atlas")
         o.data.uv_layers.active = o.data.uv_layers["Atlas"]
     step("shadows")
-    kit.unwrap(visible)
+    kit.unwrap(visible, angle=spec.get("uv_angle", 50.0), small=spec.get("uv_small"))
     step("unwrapped")
     spec.pop("_highpoly", None)
     if high:
