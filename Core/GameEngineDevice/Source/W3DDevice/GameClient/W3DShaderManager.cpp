@@ -2237,6 +2237,11 @@ Int TerrainShaderDetail::shutdown()
 /// Cloud and light map texture matrices for camera space positions, as the retail terrain shaders use them.
 static void getTerrainNoiseMatrices(D3DXMATRIX &viewInverse, D3DXMATRIX &cloudMatrix, D3DXMATRIX &lightMapMatrix)
 {
+	// GeneralsX @bugfix Claude 17/10/2026 Send the pending camera view to the device before reading it back, as the
+	// retail terrain shaders do. Without this the matrices came from whatever view the device still held (the last
+	// frame's camera, or the identity view of a 2D or particle pass), so cloud shadows, the light map and the detail
+	// texture jumped between frames while the camera stood still (black flicker) and lagged behind it while it moved.
+	DX8Wrapper::Apply_Render_State_Changes();
 	Matrix4x4 curView;
 	DX8Wrapper::_Get_DX8_Transform(D3DTS_VIEW, curView);
 	float det;
