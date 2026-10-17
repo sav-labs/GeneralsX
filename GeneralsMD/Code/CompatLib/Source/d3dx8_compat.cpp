@@ -108,12 +108,12 @@ D3DXLoadSurfaceFromSurface(
 		// size of one row of 4x4 blocks, so Pitch * Height read four times the surface and crashed at the end of
 		// its memory (house colour remaps of HD pack textures, W3DAssetManager::Remap_Palette). The two surfaces can
 		// also have different pitches.
-		const Bool compressed = descSrc.Format == D3DFMT_DXT1 || descSrc.Format == D3DFMT_DXT2
+		const bool compressed = descSrc.Format == D3DFMT_DXT1 || descSrc.Format == D3DFMT_DXT2
 			|| descSrc.Format == D3DFMT_DXT3 || descSrc.Format == D3DFMT_DXT4 || descSrc.Format == D3DFMT_DXT5;
 		const UINT rows = compressed ? (descSrc.Height + 3) / 4 : descSrc.Height;
 		const UINT rowBytes = (UINT)(srcRect.Pitch < destRect.Pitch ? srcRect.Pitch : destRect.Pitch);
-		const BYTE *src = (const BYTE *)srcRect.pBits;
-		BYTE *dst = (BYTE *)destRect.pBits;
+		const unsigned char *src = (const unsigned char *)srcRect.pBits;
+		unsigned char *dst = (unsigned char *)destRect.pBits;
 		for (UINT row = 0; row < rows; ++row)
 			memcpy(dst + row * destRect.Pitch, src + row * srcRect.Pitch, rowBytes);
 		pDestSurface->UnlockRect();
