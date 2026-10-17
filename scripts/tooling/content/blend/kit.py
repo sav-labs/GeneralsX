@@ -871,6 +871,39 @@ def unwrap(objs, margin=0.004, angle=50.0, small=None):
     bpy.ops.uv.select_all(action="SELECT")
     bpy.ops.uv.pack_islands(rotate=True, margin_method="FRACTION", margin=margin * 0.6, shape_method="CONCAVE")
     bpy.ops.object.mode_set(mode="OBJECT")
+    _unmirror_uv_islands(objs)
+
+
+def _unmirror_uv_islands(objs):
+    """Flip any UV island whose winding is mirrored relative to its faces. The engine builds the normal
+    map's tangent from UV0; a mirrored island is left-handed, so the per-pixel normal points into the
+    surface and the whole plate renders solid black. We bake the colour from these same UVs afterwards,
+    so flipping an island back to right-handed changes nothing in the texture, only the tangent sign."""
+    from bpy_extras import bmesh_utils
+    for obj in objs:
+        if not obj.data.uv_layers:
+            continue
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        layer = bm.loops.layers.uv.active
+        changed = False
+        for island in bmesh_utils.bmesh_linked_uv_islands(bm, layer):
+            area = 0.0
+            for f in island:
+                uvs = [l[layer].uv for l in f.loops]
+                for i in range(1, len(uvs) - 1):
+                    a, b, c = uvs[0], uvs[i], uvs[i + 1]
+                    area += (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)
+            if area < 0:
+                umax = max(l[layer].uv.x for f in island for l in f.loops)
+                umin = min(l[layer].uv.x for f in island for l in f.loops)
+                for f in island:
+                    for l in f.loops:
+                        l[layer].uv.x = umax + umin - l[layer].uv.x
+                changed = True
+        if changed:
+            bm.to_mesh(obj.data)
+        bm.free()
 
 
 def bake(objs, palette, size, damaged, pattern, name, burns=None):

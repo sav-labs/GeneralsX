@@ -285,6 +285,10 @@ def harden(objs, angle):
     for o in objs:
         bm = bmesh.new()
         bm.from_mesh(o.data)
+        # The engine's per-pixel normal map rebuilds the surface normal from the vertex normal. A source
+        # with inconsistent face winding leaves large plates with normals pointing into the hull, so the
+        # game lights them from the wrong side and they go solid black (Cycles hid this, being two-sided).
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         limit = math.radians(angle)
         for f in bm.faces:
             f.smooth = True
