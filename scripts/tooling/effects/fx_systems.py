@@ -59,17 +59,17 @@ SYSTEMS = {
     # about 200 units for 5 s, blowing out half the screen. A brief warm flash instead.
     "NukeCannonFlare": system(
         Priority="CRITICAL", Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
-        Lifetime=(36, 36), Size=(30, 30), SizeRate=(4, 4), SizeRateDamping=(0.85, 0.85),
-        Color=[((215, 160, 95), 0), ((150, 70, 20), 8), ((0, 0, 0), 36)],
+        Lifetime=(24, 24), Size=(16, 16), SizeRate=(2, 2), SizeRateDamping=(0.85, 0.85),
+        Color=[((180, 125, 70), 0), ((110, 50, 14), 6), ((0, 0, 0), 24)],
         BurstCount=(1, 1), AngleZ=(0, 6.28)),
     # Retail Nuke Cannon mushroom: 50 additive puffs growing 10 units a frame (and a ring of 150 more)
     # stacked into an orange blow-out over a quarter of the screen. Rebuilt from the baked fireball and
     # smoke flipbooks: a rising fireball column that rolls over into a grey-brown cloud.
     "NukeCannonMushroomExplosion": system(
-        Priority="CRITICAL", ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
-        Lifetime=(80, 92), Size=(46, 58), SizeRate=(0.5, 0.7), SizeRateDamping=(0.985, 0.985),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 30), (0.45, 0.45, 46), (0.0, 0.0, 66)],
-        BurstDelay=(4, 4), BurstCount=(1, 2), SystemLifetime=24,
+        Priority="CRITICAL", ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.5, 0.5),
+        Lifetime=(80, 92), Size=(36, 62), SizeRate=(0.4, 0.8), SizeRateDamping=(0.985, 0.985),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 20), (0.35, 0.35, 32), (0.0, 0.0, 46)],
+        BurstDelay=(6, 9), BurstCount=(1, 1), SystemLifetime=16,
         DriftVelocity=(0.0, 0.0, 0.45), VelocityDamping=(0.9, 0.9),
         VelocityType="SPHERICAL", VelSpherical=(0.3, 0.8),
         VolumeType="SPHERE", VolSphereRadius=10.0),
@@ -84,10 +84,42 @@ SYSTEMS = {
         VolumeType="SPHERE", VolSphereRadius=14.0, IsHollow="Yes"),
     "NukeCannonBlastWave": system(
         Priority="CRITICAL", ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
-        Lifetime=(24, 24), Size=(20, 20), SizeRate=(16, 16), SizeRateDamping=(0.85, 0.85),
-        Alpha=[(0.6, 0.6, 0), (0.35, 0.35, 10), (0.0, 0.0, 24)],
+        Lifetime=(22, 22), Size=(12, 12), SizeRate=(8, 8), SizeRateDamping=(0.84, 0.84),
+        Alpha=[(0.35, 0.35, 0), (0.2, 0.2, 9), (0.0, 0.0, 22)],
         Color=[((215, 196, 160), 0)],
         BurstCount=(1, 1)),
+    # The rest of the retail Nuke Cannon blast: the pink-orange stem smear, the orange haze ring and the
+    # flat additive fire ring on the ground. Smoke column, low brown dust and a brief ground glow instead.
+    "NukeCannonMushroomStem": system(
+        Priority="CRITICAL", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(110, 130), Size=(14, 20), SizeRate=(0.25, 0.35), SizeRateDamping=(0.99, 0.99),
+        Alpha=[(0.0, 0.0, 0), (0.75, 0.75, 14), (0.5, 0.5, 70), (0.0, 0.0, 130)],
+        Color=[((120, 108, 96), 0), ((175, 168, 160), 100)],
+        BurstDelay=(4, 4), BurstCount=(1, 1), SystemLifetime=40,
+        DriftVelocity=(0.05, 0.02, 0.8), VolumeType="SPHERE", VolSphereRadius=5.0),
+    "NukeCannonShockwaveInverted": system(
+        Priority="CRITICAL", ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(90, 110), Size=(18, 24), SizeRate=(0.3, 0.45), SizeRateDamping=(0.98, 0.98),
+        Alpha=[(0.0, 0.0, 0), (0.6, 0.6, 8), (0.0, 0.0, 110)],
+        Color=[((190, 172, 148), 0)],
+        BurstCount=(10, 10), VelocityDamping=(0.92, 0.94),
+        VelocityType="OUTWARD", VelOutward=(2.0, 3.2), VelOutwardOther=(0.0, 0.3),
+        VolumeType="CYLINDER", VolCylinderRadius=8.0, VolCylinderLength=1.0, IsHollow="Yes"),
+    "NukeCannonRing": system(
+        Priority="CRITICAL", Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
+        Lifetime=(20, 20), Size=(36, 36), SizeRate=(0.5, 0.5),
+        Color=[((130, 66, 22), 0), ((60, 22, 6), 8), ((0, 0, 0), 20)],
+        BurstCount=(1, 1)),
+    # Retail TankFire (a burning, damaged vehicle) was a 20-unit additive puff twice every few frames: flat
+    # yellow tongues like candles, and a light source that washed the whole hull out white. Baked flame
+    # flipbook instead, alpha blended like GXWreckFire.
+    "TankFire": system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8, AngleZ=(-0.1, 0.1),
+        Lifetime=(26, 34), Size=(7, 10), SizeRate=(0.05, 0.1), SizeRateDamping=(0.97, 0.97),
+        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 4), (1.0, 1.0, 22), (0.0, 0.0, 34)],
+        BurstDelay=(3, 5), BurstCount=(1, 1), SystemLifetime=200,
+        DriftVelocity=(0.0, 0.0, 0.25),
+        VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
         Lifetime=(6, 6), Size=(24, 24), SizeRate=(2, 2), SizeRateDamping=(0.7, 0.7),
@@ -96,8 +128,8 @@ SYSTEMS = {
     # Orange light pool on the ground under the blast.
     "GXTankBlastGroundGlow": system(
         Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
-        Lifetime=(22, 22), Size=(44, 44), SizeRate=(0.6, 0.6), SizeRateDamping=(0.9, 0.9),
-        Color=[((150, 76, 24), 0), ((80, 28, 8), 10), ((0, 0, 0), 22)],
+        Lifetime=(20, 20), Size=(30, 30), SizeRate=(0.4, 0.4), SizeRateDamping=(0.9, 0.9),
+        Color=[((105, 52, 16), 0), ((55, 20, 6), 9), ((0, 0, 0), 20)],
         BurstCount=(1, 1)),
     # Main fireball: a cluster of billowing flipbook puffs that rise and cool into smoke.
     "GXTankBlastFireball": system(
@@ -148,9 +180,9 @@ SYSTEMS = {
     # Hot metal sparks streaking outwards and arcing down.
     "GXTankBlastSparks": system(
         Shader="ADDITIVE", ParticleName="gxfx_streak.tga", IsParticleUpTowardsEmitter="Yes",
-        Lifetime=(12, 26), Size=(3.0, 5.0), SizeRate=(-0.1, -0.1),
-        Color=[((255, 240, 200), 0), ((255, 140, 40), 10), ((0, 0, 0), 26)],
-        BurstCount=(36, 36), Gravity=-0.18, VelocityDamping=(0.93, 0.95),
+        Lifetime=(12, 26), Size=(1.6, 2.8), SizeRate=(-0.05, -0.05),
+        Color=[((255, 225, 170), 0), ((240, 120, 35), 10), ((0, 0, 0), 26)],
+        BurstCount=(28, 28), Gravity=-0.18, VelocityDamping=(0.93, 0.95),
         VelocityType="OUTWARD", VelOutward=(3.0, 7.0), VelOutwardOther=(1.5, 5.0),
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=3.0),
     # A whole baked spark shower over the hull, for the dense glow the single streaks lack.
@@ -188,7 +220,7 @@ SYSTEMS = {
         BurstDelay=(5, 8), BurstCount=(1, 1), SystemLifetime=200, InitialDelay=(20, 20),
         DriftVelocity=(0.14, 0.06, 0.5),
         VolumeType="CYLINDER", VolCylinderRadius=4.0, VolCylinderLength=2.0),
-    "GXWreckEmbers": system(
+    "GXWreckSparks": system(
         Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_spark.tga",
         Lifetime=(30, 50), Size=(0.7, 1.4),
         Color=[((255, 200, 120), 0), ((255, 90, 20), 24), ((0, 0, 0), 50)],
@@ -522,7 +554,7 @@ FXLISTS = {
             ("GXTankBlastSmoke", (0, 0, 12)),
             ("GXWreckFire", (0, 0, 6)),
             ("GXWreckSmoke", (0, 0, 12)),
-            ("GXWreckEmbers", (0, 0, 6)),
+            ("GXWreckSparks", (0, 0, 6)),
             ("GXWreckHeatGlow", (0, 0, 1)),
         ],
         # Retail nuggets kept, apart from the LightPulse: the engine already lights a STRONG-shake blast
