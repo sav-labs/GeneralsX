@@ -42,9 +42,12 @@ class Kit:
         self.body = Mesh("BODY", Material("GXBuilding", wall_texture, specular=(40, 40, 40), shininess=8.0))
         self.glass = Mesh("WINDOWS", Material("GXGlass", glass_texture, specular=(200, 200, 200), shininess=40.0))
         self.team = Mesh("HOUSECOLOR01", Material("GXTeam", team_texture))
+        # Unlit interior seen through open doors.
+        self.dark = Mesh("BAY", Material("GXBay", wall_texture, diffuse=(34, 34, 38), ambient=(34, 34, 38)))
         self.b = Builder(self.body, shade)
         self.g = Builder(self.glass, ShadeFn(ground=0.0, height=height, floor=0.9))
         self.t = Builder(self.team, ShadeFn(ground=0.0, height=height, floor=0.85))
+        self.d = Builder(self.dark, ShadeFn(ground=0.0, height=height, floor=0.6))
         self.fx_spots = []
 
     # --- shapes -------------------------------------------------------------------------------
@@ -135,11 +138,20 @@ class Kit:
         s = 1 if x > 0 else -1
         self.b.box((min(x, x + s * depth), y0, 0.0), (max(x, x + s * depth), y1, z1), METAL)
 
+    def bay(self, x, y0, y1, z1, slats):
+        """Opening on a +X wall whose roller door is a separate model (roller_door): the dark interior
+        flush with the wall and the door drum housing above it, deep enough to hide the slats."""
+        self.d.polygon([(x + 0.08, y0, 0.0), (x + 0.08, y1, 0.0), (x + 0.08, y1, z1), (x + 0.08, y0, z1)], METAL,
+                       outward_from=(x - 1.0, (y0 + y1) / 2, z1 / 2))
+        self.b.box((x, y0 - 0.6, z1), (x + 1.0, y1 + 0.6, z1 + z1 / slats + 0.4), METAL)
+        for y in (y0 - 0.6, y1):
+            self.b.box((x, y, 0.0), (x + 0.6, y + 0.6, z1), METAL)
+
     # --- finishing ----------------------------------------------------------------------------
     def finish(self, variant, steam=None, sparks=None, height=20.0):
         if variant == "E":
             debris = []
-            for mesh in (self.body, self.glass, self.team):
+            for mesh in (self.body, self.glass, self.team, self.dark):
                 slump(mesh, height)
             for k, (x0, y0, x1, y1, _z) in enumerate(self.fx_spots[:6]):
                 for j in range(5):
@@ -153,7 +165,7 @@ class Kit:
             steam = steam and (steam[0], steam[1], 1.5 + (steam[2] - 1.5) * 0.3)
             sparks = sparks and [(x, y, 1.5 + (z - 1.5) * 0.3) for x, y, z in sparks]
         add_fx_bones(self.model, self.fx_spots, steam=steam, sparks=sparks)
-        for mesh in (self.body, self.glass, self.team):
+        for mesh in (self.body, self.glass, self.team, self.dark):
             if mesh.triangles:
                 self.model.attach("ROOTTRANSFORM", mesh)
         return self.model
@@ -191,6 +203,45 @@ def add_fx_bones(model, spots, steam=None, sparks=None):
             v = 0.5 + 0.38 * math.cos(i * 1.711)
             pos = (x0 + (x1 - x0) * u, y0 + (y1 - y0) * v, z + 0.5)
         model.add_bone(name, "ROOTTRANSFORM", pos)
+
+
+# Vehicle doors drawn by their own models, as the retail door Draw modules expect: (y0, y1, height, slats).
+WARFACT_DOOR = (-40.0, -14.0, 17.0, 8)
+CMDHQ_DOOR = (-8.0, 8.0, 9.0, 5)
+
+
+def roller_door(name, wall, x, y0, y1, z1, slats):
+    """Roller door for a bay() opening. Its animation opens it: the curtain rises, and each slat that
+    reaches the drum steps back into the wall, so the open door leaves a clear opening. Frame 0 is closed;
+    the retail door Draw modules play it forwards to open and backwards to close."""
+    model = Model(name)
+    h = z1 / slats
+    mesh_material = Material("GXBuilding", wall, specular=(40, 40, 40), shininess=8.0)
+    for k in range(slats):
+        bone = f"SLAT{k + 1:02d}"
+        model.add_bone(bone, "ROOTTRANSFORM", (x, (y0 + y1) / 2, k * h))
+        slat = Mesh(bone, mesh_material)
+        b = Builder(slat, ShadeFn(ground=0.0, height=z1 * 2, floor=0.7))
+        b.box((x + 0.1, y0, k * h + 0.04), (x + 0.4, y1, (k + 1) * h - 0.04), WALL)
+        b.box((x + 0.4, y0 + 0.2, k * h + h * 0.45), (x + 0.5, y1 - 0.2, k * h + h * 0.55), METAL)
+        model.attach(bone, slat)
+    frames = 36
+    speed = z1 / (frames - 4)
+
+    def motion(k):
+        reach = (z1 - k * h) / speed  # frame at which this slat's bottom enters the drum
+        return lambda f: (-1.2 * min(1.0, max(0.0, f - reach)), 0.0, min(speed * f, z1 - k * h))
+    for k in range(slats):
+        model.add_motion(f"SLAT{k + 1:02d}", frames, offset=motion(k))
+    return model
+
+
+def war_factory_door(name, wall, team, glass, variant=""):
+    return roller_door(name, wall, 34.0, *WARFACT_DOOR)
+
+
+def command_center_door(name, wall, team, glass, variant=""):
+    return roller_door(name, wall, 40.0, *CMDHQ_DOOR)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -290,9 +341,9 @@ def war_factory(name, wall, team, glass, variant=""):
         gable = [(x, y, z) for y, z in arc]
         k.b.polygon(gable, WALL, outward_from=(0.0 if x == x1 else 10.0, yc, wall_h + 2))
     k.fx_spots.append((x0, y0 + 8, x1, y1 - 8, crown - 1.0))
-    # Roller door where vehicles exit, with a team band above.
-    k.door(x1, -40.0, -14.0, 17.0, depth=0.4)
-    k.team_band(x1, -42.0, x1, -12.0, 18.0, 19.4, proud=0.5)
+    # Opening where vehicles exit (its roller door is ABGXWARDOOR), with a team band on the drum housing.
+    k.bay(x1, *WARFACT_DOOR)
+    k.team_band(x1, -41.0, x1, -13.0, 17.6, 18.8, proud=1.1)
     # Office annex and a second, lower bay along +Y.
     k.block(-44.0, 2.0, 10.0, 52.0, 0.8, 14.0, storey=7.0)
     k.parapet(-44.0, 2.0, 10.0, 52.0, 14.0)
@@ -373,8 +424,9 @@ def command_center(name, wall, team, glass, variant=""):
     k.parapet(-50.0, -60.0, 40.0, 60.0, 12.0)
     k.window_band(40.0, -56.0, 40.0, -10.0, 5.0, 9.0)
     k.window_band(40.0, 10.0, 40.0, 56.0, 5.0, 9.0)
-    k.door(40.0, -8.0, 8.0, 9.0)
-    k.team_band(40.0, -58.0, 40.0, 58.0, 10.0, 11.2)
+    k.bay(40.0, *CMDHQ_DOOR)
+    k.team_band(40.0, -58.0, 40.0, -9.0, 10.0, 11.2)
+    k.team_band(40.0, 9.0, 40.0, 58.0, 10.0, 11.2)
     # Command block with a glass operations floor.
     k.block(-42.0, -40.0, 20.0, 40.0, 12.0, 26.0, storey=14.0)
     k.window_band(20.0, -38.0, 20.0, 38.0, 18.0, 23.0)
@@ -684,6 +736,12 @@ def particle_uplink(name, wall, team, glass, variant=""):
     k.hesco(60.0, 8.0, 60.0, 36.0)
     return k.finish(variant, height=20.0)
 
+
+# Rubble has no door: the E variants are not drawn.
+DOORS = {
+    "ABGXWARDOOR": war_factory_door,
+    "ABGXCMDDOOR": command_center_door,
+}
 
 BUILDERS = {
     "ABGXSTRATCTR": strategy_center,

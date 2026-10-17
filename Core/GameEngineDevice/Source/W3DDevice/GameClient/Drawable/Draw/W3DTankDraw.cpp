@@ -47,6 +47,8 @@
 #include "W3DDevice/GameClient/W3DGameClient.h"
 #include "W3DDevice/GameClient/Module/W3DTankDraw.h"
 #include "WW3D2/matinfo.h"
+#include "WW3D2/ww3d.h"
+#include "WWMath/aabox.h"
 
 
 class Matrix3D;
@@ -101,6 +103,16 @@ W3DTankDraw::W3DTankDraw( Thing *thing, const ModuleData* moduleData )
 		m_treads[i].m_robj = nullptr;
 
 	m_treadCount=0;
+	m_gearCount = 0;
+	for (Int i = 0; i < MAX_SCAN_BONES; i++)
+		m_scanBones[i] = 0;
+	for (Int i = 0; i < MAX_ANTENNA_BONES; i++)
+		m_antennaBones[i] = 0;
+	m_treadTravel[0] = m_treadTravel[1] = 0.0f;
+	m_lastTreadU[0] = m_lastTreadU[1] = 0.0f;
+	m_antennaAngle = 0.0f;
+	m_antennaRate = 0.0f;
+	m_lastSpeed = 0.0f;
 	//Assume all things face along x axis when created.
 	m_lastDirection.x=1.0f;
 	m_lastDirection.y=0.0f;
@@ -285,7 +297,132 @@ void W3DTankDraw::updateTreadObjects()
 		}
 	}
 
+	findMovingParts();
 	m_prevRenderObj = robj;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature Claude 16/10/2026 The detailed content models hang each road wheel, sprocket and
+// idler on its own bone named after its mesh (WHEELL01, SPROCKETR, IDLERL...), with the track side as
+// the letter after the prefix, and carry RWS / CITV sensor bones and ANTENNA01/02 whip bones.
+//-------------------------------------------------------------------------------------------------
+void W3DTankDraw::findMovingParts()
+{
+	RenderObjClass *robj = getRenderObject();
+	m_gearCount = 0;
+	for (Int i = 0; i < MAX_SCAN_BONES; i++)
+		m_scanBones[i] = 0;
+	for (Int i = 0; i < MAX_ANTENNA_BONES; i++)
+		m_antennaBones[i] = 0;
+	if (robj == nullptr)
+		return;
+
+	static const char *const prefixes[] = { "WHEEL", "SPROCKET", "IDLER" };
+	for (Int i = 0; i < robj->Get_Num_Sub_Objects() && m_gearCount < MAX_GEAR_BONES; i++)
+	{
+		RenderObjClass *subObj = robj->Get_Sub_Object(i);
+		if (subObj == nullptr)
+			continue;
+		const char *meshName = subObj->Get_Name() ? strchr(subObj->Get_Name(), '.') : nullptr;
+		if (meshName != nullptr)
+		{
+			meshName++;
+			for (size_t p = 0; p < ARRAY_SIZE(prefixes); p++)
+			{
+				const size_t len = strlen(prefixes[p]);
+				if (_strnicmp(meshName, prefixes[p], len) != 0)
+					continue;
+				const char side = meshName[len];
+				const Int bone = robj->Get_Bone_Index(meshName);
+				if (bone <= 0 || (side != 'L' && side != 'l' && side != 'R' && side != 'r'))
+					break;
+				AABoxClass box;
+				subObj->Get_Obj_Space_Bounding_Box(box);
+				const Real radius = box.Extent.Z;
+				if (radius > 0.05f)
+				{
+					m_gear[m_gearCount].m_bone = bone;
+					m_gear[m_gearCount].m_side = (side == 'L' || side == 'l') ? 0 : 1;
+					m_gear[m_gearCount].m_radius = radius;
+					m_gearCount++;
+				}
+				break;
+			}
+		}
+		REF_PTR_RELEASE(subObj);
+	}
+
+	m_scanBones[0] = robj->Get_Bone_Index("RWS");
+	m_scanBones[1] = robj->Get_Bone_Index("CITV");
+	m_antennaBones[0] = robj->Get_Bone_Index("ANTENNA01");
+	m_antennaBones[1] = robj->Get_Bone_Index("ANTENNA02");
+	for (Int t = 0; t < m_treadCount; t++)
+	{
+		const Int side = m_treads[t].m_type == TREAD_RIGHT ? 1 : 0;
+		m_lastTreadU[side] = m_treads[t].m_materialSettings.customUVOffset.X;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void W3DTankDraw::updateMovingParts(Real speed)
+{
+	RenderObjClass *robj = getRenderObject();
+	if (robj == nullptr)
+		return;
+
+	// Running gear turns with the track: the content's track texture repeats every TREAD_WORLD_PER_U
+	// world units along the band (blend/abrams.py track_loop links=3.0).
+	const Real TREAD_WORLD_PER_U = 3.0f;
+	if (m_gearCount > 0)
+	{
+		for (Int t = 0; t < m_treadCount; t++)
+		{
+			if (m_treads[t].m_type == TREAD_MIDDLE)
+				continue;
+			const Int side = m_treads[t].m_type == TREAD_RIGHT ? 1 : 0;
+			Real du = m_treads[t].m_materialSettings.customUVOffset.X - m_lastTreadU[side];
+			du -= WWMath::Floor(du + 0.5f);	// the offset wraps in [0, 1]
+			m_lastTreadU[side] = m_treads[t].m_materialSettings.customUVOffset.X;
+			m_treadTravel[side] -= du * TREAD_WORLD_PER_U;
+		}
+		for (Int i = 0; i < m_gearCount; i++)
+		{
+			Matrix3D xfrm(1);
+			xfrm.Rotate_Y(m_treadTravel[m_gear[i].m_side] / m_gear[i].m_radius);
+			robj->Capture_Bone(m_gear[i].m_bone);
+			robj->Control_Bone(m_gear[i].m_bone, xfrm);
+		}
+	}
+
+	// Sensors sweep slowly, each at its own pace.
+	const Real seconds = WW3D::Get_Sync_Time() * 0.001f;
+	for (Int i = 0; i < MAX_SCAN_BONES; i++)
+	{
+		if (m_scanBones[i] <= 0)
+			continue;
+		Matrix3D xfrm(1);
+		xfrm.Rotate_Z(WWMath::Sin(seconds * (0.35f + 0.17f * i) + i * 1.7f) * (i == 0 ? 0.7f : 1.4f));
+		robj->Capture_Bone(m_scanBones[i]);
+		robj->Control_Bone(m_scanBones[i], xfrm);
+	}
+
+	// Whip antennas lean back when the tank speeds up and spring forward when it brakes.
+	if (m_antennaBones[0] > 0 || m_antennaBones[1] > 0)
+	{
+		const Real accel = speed - m_lastSpeed;
+		m_lastSpeed = speed;
+		m_antennaRate += -0.12f * m_antennaAngle - 0.08f * m_antennaRate - 0.25f * accel;
+		m_antennaAngle = WWMath::Clamp(m_antennaAngle + m_antennaRate, -0.45f, 0.45f);
+		for (Int i = 0; i < MAX_ANTENNA_BONES; i++)
+		{
+			if (m_antennaBones[i] <= 0)
+				continue;
+			Matrix3D xfrm(1);
+			xfrm.Rotate_Y(m_antennaAngle * (1.0f - 0.2f * i) + 0.02f * WWMath::Sin(seconds * 2.3f + i));
+			robj->Capture_Bone(m_antennaBones[i]);
+			robj->Control_Bone(m_antennaBones[i], xfrm);
+		}
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -406,6 +543,8 @@ void W3DTankDraw::doDrawModule(const Matrix3D* transformMtx)
 			}
 		}
 	}
+
+	updateMovingParts((Real)sqrt(vel->x*vel->x + vel->y*vel->y));
 }
 
 // ------------------------------------------------------------------------------------------------

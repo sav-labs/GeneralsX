@@ -1,0 +1,64 @@
+# GeneralsX @feature Claude 16/10/2026 Finds and fetches openly licensed source models for the detailed
+# units. The candidates (contact sheets and a JSON list) and the fetched models with their credits are
+# published as prerelease assets, so the content tooling can pick them up from anywhere.
+name: Model sources
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - scripts/tooling/content/fetch/**
+      - .github/workflows/model-sources.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sources:
+    name: Search and fetch source models
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/tooling/content/fetch
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Pillow
+        run: python -m pip install pillow==12.0.0
+      - name: Search candidates
+        run: python scripts/tooling/content/fetch/sketchfab.py search candidates
+      - name: Publish candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view model-candidates >/dev/null 2>&1 || \
+            gh release create model-candidates --prerelease --title "Model candidates" \
+              --notes "Openly licensed source model candidates for the detailed units (not a game build)."
+          gh release upload model-candidates candidates/* --clobber
+      - name: Probe candidates
+        env:
+          SKETCHFAB_TOKEN: ${{ secrets.SKETCHFAB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$SKETCHFAB_TOKEN" ] || ! grep -qv '^#' scripts/tooling/content/fetch/probe.txt; then
+            echo "No token or nothing to probe."
+            exit 0
+          fi
+          python scripts/tooling/content/fetch/sketchfab.py probe scripts/tooling/content/fetch/probe.txt probe
+          gh release upload model-candidates probe/* --clobber
+      - name: Fetch picked models
+        env:
+          SKETCHFAB_TOKEN: ${{ secrets.SKETCHFAB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$SKETCHFAB_TOKEN" ] || ! grep -qv '^#' scripts/tooling/content/fetch/picks.txt; then
+            echo "No token or no picks yet; skipping the download."
+            exit 0
+          fi
+          python scripts/tooling/content/fetch/sketchfab.py fetch scripts/tooling/content/fetch/picks.txt sources
+          gh release view model-sources >/dev/null 2>&1 || \
+            gh release create model-sources --prerelease --title "Model sources" \
+              --notes "Third-party source models (CC0 / CC-BY / CC-BY-SA), credited in CREDITS.md (not a game build)."
+          gh release upload model-sources sources/* --clobber
