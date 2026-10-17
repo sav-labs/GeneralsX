@@ -50,9 +50,9 @@ index 4313f6a..f0d0e43 100644
  
        D3D9FixedFunctionPS* data = reinterpret_cast<D3D9FixedFunctionPS*>(mapPtr);
        DecodeD3DCOLOR((D3DCOLOR)rs[D3DRS_TEXTUREFACTOR], data->textureFactor.data);
-+
++      // _34 is +1 for a left-handed projection and -1 for a right-handed one (W3D); folding it into _33 makes _43 / (depth - _33) the view distance for both.
 +      const Matrix4& proj = m_state.transforms[GetTransformIndex(D3DTS_PROJECTION)];
-+      data->softParams = Vector4(proj[2][2], proj[3][2], m_softParticleInvFade, 0.0f);
++      data->softParams = Vector4(proj[2][3] * proj[2][2], proj[3][2], m_softParticleInvFade, 0.0f);
 +    }
 +  }
 +
@@ -367,7 +367,7 @@ index 436843a..7e6b544 100644
 +    idx = 2;
 +    uint32_t invFade = m_module.opCompositeExtract(m_floatType, m_ps.constants.softParams, 1, &idx);
 +
-+    // view z = _43 / (depth - _33)
++    // view distance = _43 / (depth - _33), with _33 already multiplied by _34
 +    uint32_t sceneZ = m_module.opFDiv(m_floatType, p43, m_module.opFSub(m_floatType, sceneDepth, p33));
 +    uint32_t fragZ  = m_module.opFDiv(m_floatType, p43, m_module.opFSub(m_floatType, fragDepth, p33));
 +
