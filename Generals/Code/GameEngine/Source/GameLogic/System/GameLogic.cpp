@@ -3368,6 +3368,7 @@ void GameLogic::update()
 
 	// update (execute) scripts
 	{
+		PERF_STATS_LOGIC(LOGIC_SCRIPTS);
 		TheScriptEngine->UPDATE();
 	}
 
@@ -3380,6 +3381,7 @@ void GameLogic::update()
 	// Note - TerrainLogic update needs to happen after ScriptEngine update, but before object updates.  jba.
 	// This way changes in bridges are noted in the script engine before being cleared in TerrainLogic->update
 	{
+		PERF_STATS_LOGIC(LOGIC_TERRAIN);
 		TheTerrainLogic->UPDATE();
 	}
 
@@ -3465,6 +3467,9 @@ void GameLogic::update()
 #endif
 
 	{
+		// GeneralsX @performance Claude 17/10/2026 Object update time, and the slowest module call of the frame
+		// for the [PERF] hitch logic line. Only reads clocks: the updates and their order are unchanged.
+		PERF_STATS_LOGIC(LOGIC_OBJECTS);
 		while (!m_sleepyUpdates.empty())
 		{
 			UpdateModulePtr u = peekSleepyUpdate();
@@ -3500,10 +3505,22 @@ void GameLogic::update()
 				//DEBUG_LOG(("calling update %08lx (%d %d)...",update,update->friend_getNextCallFrame(),update->friend_getNextCallPhase()));
 				m_curUpdateModule = u;
 
+				const double perfStart = PerfStats::isEnabled() ? PerfStats::nowMs() : 0.0;
 				sleepLen = u->update();
 				DEBUG_ASSERTCRASH(sleepLen > 0, ("you may not return 0 from update"));
 				if (sleepLen < 1)
 					sleepLen = UPDATE_SLEEP_NONE;
+				if (PerfStats::isEnabled())
+				{
+					const double perfMs = PerfStats::nowMs() - perfStart;
+					if (PerfStats::isSlowestLogicUpdate(perfMs))
+					{
+						const Object *perfObj = u->friend_getObject();
+						PerfStats::setSlowestLogicUpdate(perfMs,
+							perfObj != nullptr ? perfObj->getTemplate()->getName().str() : "",
+							TheNameKeyGenerator->keyToName(u->getModuleNameKey()).str());
+					}
+				}
 
 				m_curUpdateModule = nullptr;
 
@@ -3519,6 +3536,7 @@ void GameLogic::update()
 
 	// update the Artificial Intelligence system
 	{
+		PERF_STATS_LOGIC(LOGIC_AI);
 		TheAI->UPDATE();
 	}
 
@@ -3529,6 +3547,7 @@ void GameLogic::update()
 
 	// update partition info
 	{
+		PERF_STATS_LOGIC(LOGIC_PARTITION);
 		ThePartitionManager->UPDATE();
 	}
 

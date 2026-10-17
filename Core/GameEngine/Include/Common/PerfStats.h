@@ -125,6 +125,24 @@ namespace PerfStats
 	Bool wantsTextureMemory();
 	void setTextureMemory(UnsignedInt64 bytes, UnsignedInt64 freeBytes);
 
+	// GeneralsX @performance Claude 17/10/2026 Parts of TheGameLogic->update(), printed as a [PERF] hitch logic line
+	// when a hitch frame spent at least HitchLogicMs in game logic.
+	enum LogicPart
+	{
+		LOGIC_SCRIPTS,    ///< TheScriptEngine->update()
+		LOGIC_TERRAIN,    ///< TheTerrainLogic->update()
+		LOGIC_OBJECTS,    ///< Object update modules
+		LOGIC_AI,         ///< TheAI->update() (pathfinding queue, AI players)
+		LOGIC_PARTITION,  ///< ThePartitionManager->update()
+		LOGIC_PART_COUNT
+	};
+	const double HitchLogicMs = 20.0;
+	void addLogicTime(LogicPart part, double ms);
+	/// Counts one object update module call and says whether it is the slowest of the frame so far; the caller
+	/// then names it with setSlowestLogicUpdate (thing template and module), so names are only built when needed.
+	Bool isSlowestLogicUpdate(double ms);
+	void setSlowestLogicUpdate(double ms, const char *thing, const char *module);
+
 	/// Called once per main loop iteration.
 	void endFrame(Bool inMatch, UnsignedInt logicFrame);
 	/// Short multi-line text for the on-screen overlay, empty when the overlay is off.
@@ -145,6 +163,22 @@ namespace PerfStats
 		Section m_section;
 		double m_start;
 	};
+
+	// GeneralsX @performance Claude 17/10/2026 Times one part of TheGameLogic->update().
+	class ScopedLogicPart
+	{
+	public:
+		explicit ScopedLogicPart(LogicPart part) : m_part(part), m_start(s_enabled ? nowMs() : 0.0) {}
+		~ScopedLogicPart()
+		{
+			if (s_enabled)
+				addLogicTime(m_part, nowMs() - m_start);
+		}
+	private:
+		LogicPart m_part;
+		double m_start;
+	};
 }
 
 #define PERF_STATS_SCOPE(section) PerfStats::ScopedSection perfStatsScope_##section(PerfStats::section)
+#define PERF_STATS_LOGIC(part) PerfStats::ScopedLogicPart perfStatsLogic_##part(PerfStats::part)
