@@ -1282,6 +1282,19 @@ void MiniAudioManager::removeAllDisabledAudio(void)
 //-------------------------------------------------------------------------------------------------
 void MiniAudioManager::processRequestList(void)
 {
+	// GeneralsX @performance Claude 17/10/2026 Without an output device (Bluetooth headphones gone) every play
+	// request decoded its file with FFmpeg and failed in ma_sound_init_from_data_source on the main thread, about
+	// 55 ms per frame in battle. Drop the requests instead; the game runs silent until the next start.
+	if (!m_deviceOpened) {
+		for (auto it = m_audioRequests.begin(); it != m_audioRequests.end(); ++it) {
+			if (*it) {
+				deleteInstance(*it);
+			}
+		}
+		m_audioRequests.clear();
+		return;
+	}
+
 	for (auto it = m_audioRequests.begin(); it != m_audioRequests.end(); ) {
 		AudioRequest *req = (*it);
 		if (req == NULL) { continue; }
