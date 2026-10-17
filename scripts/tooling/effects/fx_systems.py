@@ -124,14 +124,14 @@ SYSTEMS = {
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
-        Lifetime=(6, 6), Size=(24, 24), SizeRate=(2, 2), SizeRateDamping=(0.7, 0.7),
-        Color=[((190, 140, 85), 0), ((140, 60, 16), 3), ((0, 0, 0), 6)],
+        Lifetime=(6, 6), Size=(18, 18), SizeRate=(1.5, 1.5), SizeRateDamping=(0.7, 0.7),
+        Color=[((140, 95, 50), 0), ((100, 40, 10), 3), ((0, 0, 0), 6)],
         BurstCount=(1, 1), AngleZ=(0, 6.28)),
     # Orange light pool on the ground under the blast.
     "GXTankBlastGroundGlow": system(
         Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
         Lifetime=(20, 20), Size=(30, 30), SizeRate=(0.4, 0.4), SizeRateDamping=(0.9, 0.9),
-        Color=[((105, 52, 16), 0), ((55, 20, 6), 9), ((0, 0, 0), 20)],
+        Color=[((70, 34, 10), 0), ((36, 13, 3), 9), ((0, 0, 0), 20)],
         BurstCount=(1, 1)),
     # Main fireball: a cluster of billowing flipbook puffs that rise and cool into smoke.
     "GXTankBlastFireball": system(
@@ -149,8 +149,9 @@ SYSTEMS = {
     # Smaller secondary blasts a moment later, as fuel and ammunition go off.
     "GXTankBlastSecondary": system(
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
-        Lifetime=(48, 58), Size=(24, 30), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 12), (0.3, 0.3, 20), (0.0, 0.0, 30)],
+        Lifetime=(48, 58), Size=(20, 26), SizeRate=(0.35, 0.5), SizeRateDamping=(0.97, 0.97),
+        AngularRateZ=(-0.01, 0.01),
+        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 2), (0.85, 0.85, 10), (0.25, 0.25, 18), (0.0, 0.0, 28)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
         VelocityType="SPHERICAL", VelSpherical=(0.6, 1.2),
@@ -158,9 +159,10 @@ SYSTEMS = {
     # Dust ring racing out along the ground, fast at first and slowing as it thins.
     "GXTankBlastShockwave": system(
         ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
-        Lifetime=(18, 18), Size=(8, 8), SizeRate=(9, 9), SizeRateDamping=(0.82, 0.82),
-        Alpha=[(0.55, 0.55, 0), (0.35, 0.35, 7), (0.0, 0.0, 18)],
-        Color=[((215, 196, 160), 0)],
+        # Small, faint and earth-brown: a large pale ring read as a flat circle drawn on the map.
+        Lifetime=(14, 14), Size=(8, 8), SizeRate=(5, 5), SizeRateDamping=(0.8, 0.8),
+        Alpha=[(0.3, 0.3, 0), (0.15, 0.15, 6), (0.0, 0.0, 14)],
+        Color=[((150, 128, 100), 0)],
         BurstCount=(1, 1)),
     # Brown dust thrown up and outwards around the hull.
     "GXTankBlastDust": system(
@@ -207,10 +209,10 @@ SYSTEMS = {
     "GXWreckFire": system(
         # Baked fire carries its own colour and soot; alpha blended so the soot darkens.
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8,
-        Lifetime=(28, 36), Size=(10, 14), SizeRate=(0.05, 0.1), SizeRateDamping=(0.97, 0.97),
+        Lifetime=(34, 42), Size=(13, 17), SizeRate=(0.08, 0.12), SizeRateDamping=(0.97, 0.97),
         AngleZ=(-0.1, 0.1),
-        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 4), (1.0, 1.0, 24), (0.0, 0.0, 36)],
-        Color=[((255, 255, 255), 0)],
+        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 5), (0.75, 0.75, 26), (0.0, 0.0, 42)],
+        Color=[((255, 185, 135), 0), ((190, 110, 70), 28)],
         BurstDelay=(2, 3), BurstCount=(1, 1), SystemLifetime=170,
         DriftVelocity=(0.0, 0.0, 0.3),
         VolumeType="CYLINDER", VolCylinderRadius=6.0, VolCylinderLength=3.0),
@@ -233,7 +235,7 @@ SYSTEMS = {
     "GXWreckHeatGlow": system(
         Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
         Lifetime=(40, 40), Size=(20, 24),
-        Color=[((0, 0, 0), 0), ((62, 28, 8), 10), ((62, 28, 8), 30), ((0, 0, 0), 40)],
+        Color=[((0, 0, 0), 0), ((30, 12, 3), 10), ((30, 12, 3), 30), ((0, 0, 0), 40)],
         BurstDelay=(30, 30), BurstCount=(1, 1), SystemLifetime=160),
 
     # ---- Damage states: retail systems redefined in place --------------------------------------
@@ -254,16 +256,18 @@ SYSTEMS = {
     "SmolderingFire": system(
         Priority="SEMI_CONSTANT", ParticleName="gxfx_flame.tga", FlipbookGrid=8,
         AngleZ=(-0.1, 0.1),
-        Lifetime=(22, 28), Size=(7.0, 9.0), SizeRate=(0.05, 0.1), SizeRateDamping=(0.95, 0.95),
-        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 3), (1.0, 1.0, 18), (0.0, 0.0, 28)],
-        Color=[((255, 255, 255), 0)],
-        BurstDelay=(1, 3), BurstCount=(1, 1), SystemLifetime=0,
+        # Larger, slower and deep orange: small bright yellow tongues read as candles on the wrecks.
+        Lifetime=(30, 38), Size=(9.0, 12.0), SizeRate=(0.08, 0.12), SizeRateDamping=(0.96, 0.96),
+        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 5), (0.75, 0.75, 24), (0.0, 0.0, 38)],
+        Color=[((255, 185, 135), 0), ((190, 110, 70), 26)],
+        BurstDelay=(2, 4), BurstCount=(1, 1), SystemLifetime=0,
         DriftVelocity=(-0.05, 0.08, 0.2),
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
     "SmolderingFlameCore": system(
         Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_spark.tga",
-        Lifetime=(6, 8), Size=(3.0, 4.5), SizeRate=(0.3, 0.3), SizeRateDamping=(0.5, 0.5),
-        Color=[((255, 236, 190), 0), ((255, 150, 60), 4), ((0, 0, 0), 8)],
+        # A soft dim heat glow inside the flames, not a bright yellow core.
+        Lifetime=(8, 10), Size=(5.0, 7.0), SizeRate=(0.2, 0.2), SizeRateDamping=(0.6, 0.6),
+        Color=[((120, 62, 24), 0), ((80, 30, 8), 5), ((0, 0, 0), 10)],
         BurstDelay=(0, 1), BurstCount=(1, 1), SystemLifetime=0, InitialDelay=(2, 3),
         DriftVelocity=(-0.1, 0.1, 0.2), VelocityDamping=(0.8, 0.95), Gravity=0.05,
         VolumeType="SPHERE", VolSphereRadius=0.4),
@@ -523,7 +527,7 @@ def _missile_trail(slave):
         SlaveSystem=slave,
         Lifetime=(45, 55), Size=(1.5, 2.2), SizeRate=(0.35, 0.45), SizeRateDamping=(0.95, 0.96),
         Alpha=[(0.0, 0.0, 0), (0.55, 0.55, 3), (0.25, 0.25, 25), (0.0, 0.0, 55)],
-        Color=[((200, 150, 110), 0), ((205, 202, 198), 8)],
+        Color=[((165, 150, 135), 0), ((200, 197, 193), 8)],
         BurstDelay=(1, 1), BurstCount=(1, 1), SystemLifetime=0,
         DriftVelocity=(0.0, 0.0, 0.03))
 
@@ -531,7 +535,7 @@ def _missile_trail(slave):
 def _missile_flame():
     return system(
         Priority="WEAPON_TRAIL", Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
-        Lifetime=(3, 3), Size=(2.0, 2.6), Color=[((255, 236, 200), 0), ((255, 120, 40), 2), ((0, 0, 0), 3)],
+        Lifetime=(2, 2), Size=(1.2, 1.5), Color=[((210, 150, 90), 0), ((120, 45, 10), 1), ((0, 0, 0), 2)],
         BurstDelay=(0, 0), BurstCount=(1, 1), SystemLifetime=0)
 
 
