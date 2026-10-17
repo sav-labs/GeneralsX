@@ -130,6 +130,12 @@ namespace
 	double s_lastPipelineMsTotal = 0.0;
 	// GeneralsX @performance Claude 17/10/2026 The current frame loads a map, see markLoadFrame.
 	Bool s_loadFrame = FALSE;
+	// GeneralsX @performance Claude 17/10/2026 Game logic parts and the slowest update module of the current frame.
+	double s_frameLogicMs[LOGIC_PART_COUNT];
+	UnsignedInt s_frameLogicUpdates = 0;
+	double s_frameSlowestUpdateMs = 0.0;
+	char s_frameSlowestThing[64];
+	char s_frameSlowestModule[64];
 
 	Window s_interval;
 	Window s_overlay;
@@ -311,6 +317,18 @@ namespace
 			s_frameShadersCreated, s_frameDrawablesCreated,
 			s_framePipelines, s_framePipelineMs, s_frameFullCompiles, s_frameFFShaders,
 			s_frameCounters.drawCalls, (double)s_frameCounters.triangles / 1000.0, s_frameCounters.particles);
+		// GeneralsX @performance Claude 17/10/2026 Where a slow game logic frame went.
+		if (s_frameSectionMs[SECTION_LOGIC] >= HitchLogicMs)
+		{
+			fprintf(stderr,
+				"[PERF] hitch logic logic_frame=%u | scripts=%.1f terrain=%.1f objects=%.1f (%u updates) ai=%.1f partition=%.1f"
+				" other=%.1f | slowest update %.1f ms: %s %s\n",
+				logicFrame, s_frameLogicMs[LOGIC_SCRIPTS], s_frameLogicMs[LOGIC_TERRAIN], s_frameLogicMs[LOGIC_OBJECTS],
+				s_frameLogicUpdates, s_frameLogicMs[LOGIC_AI], s_frameLogicMs[LOGIC_PARTITION],
+				s_frameSectionMs[SECTION_LOGIC] - s_frameLogicMs[LOGIC_SCRIPTS] - s_frameLogicMs[LOGIC_TERRAIN]
+					- s_frameLogicMs[LOGIC_OBJECTS] - s_frameLogicMs[LOGIC_AI] - s_frameLogicMs[LOGIC_PARTITION],
+				s_frameSlowestUpdateMs, s_frameSlowestThing, s_frameSlowestModule);
+		}
 		fflush(stderr);
 	}
 
@@ -587,6 +605,26 @@ void setTextureMemory(UnsignedInt64 bytes, UnsignedInt64 freeBytes)
 	s_textureMemoryKnown = TRUE;
 }
 
+void addLogicTime(LogicPart part, double ms)
+{
+	if (!s_enabled)
+		return;
+	s_frameLogicMs[part] += ms;
+}
+
+Bool isSlowestLogicUpdate(double ms)
+{
+	++s_frameLogicUpdates;
+	return ms > s_frameSlowestUpdateMs;
+}
+
+void setSlowestLogicUpdate(double ms, const char *thing, const char *module)
+{
+	s_frameSlowestUpdateMs = ms;
+	snprintf(s_frameSlowestThing, sizeof(s_frameSlowestThing), "%s", thing != nullptr ? thing : "");
+	snprintf(s_frameSlowestModule, sizeof(s_frameSlowestModule), "%s", module != nullptr ? module : "");
+}
+
 void endFrame(Bool inMatch, UnsignedInt logicFrame)
 {
 	if (!s_enabled)
@@ -667,6 +705,11 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_frameFFShaders = 0;
 	s_framePipelineMs = 0.0;
 	s_loadFrame = FALSE;
+	memset(s_frameLogicMs, 0, sizeof(s_frameLogicMs));
+	s_frameLogicUpdates = 0;
+	s_frameSlowestUpdateMs = 0.0;
+	s_frameSlowestThing[0] = '\0';
+	s_frameSlowestModule[0] = '\0';
 }
 
 const char *getOverlayText()
