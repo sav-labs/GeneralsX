@@ -118,6 +118,19 @@ namespace
 	// GeneralsX @bugfix Claude 17/10/2026 Overlapping splats multiply the ground, so ten lights of a night battle at
 	// 1 + 2 each washed the frame out white (fx-night5). Smaller per splat, and only the strongest splats draw.
 	const Real MAX_SPLAT_RATIO = 0.75f;
+	// GeneralsX @bugfix Claude 17/10/2026 Steady fires on wrecks lit a bright pool under every burning tank for as long
+	// as it burned (fx-day21, fx-night21). Their ground light is a fraction of a flash's.
+	/// Share of a light's strength that reaches the ground splat, per kind (flashes keep their full pool).
+	Real groundShare(Int kind)
+	{
+		switch (kind)
+		{
+			case EffectLights::KIND_FIRE: return 0.3f;
+			case EffectLights::KIND_EXHAUST: return 0.3f;
+			case EffectLights::KIND_FLAME: return 0.6f;
+			default: return 1.0f;
+		}
+	}
 	/// Ground splats per frame at most, the strongest lights first.
 	const Int MAX_SPLATS = 4;
 	/// Largest light radius after size and object scaling, world units (a tank is about 30 across).
@@ -813,16 +826,28 @@ void W3DEffectLights::drawTerrainSplats(WorldHeightMap &map)
 			if (!splatLight[i])
 				continue;
 			const ActiveLight &light = m_active[i];
-			const Real scale = light.intensity * terrainScale;
+			const Real scale = light.intensity * terrainScale * groundShare(light.kind);
 			// GeneralsX @bugfix Claude 16/10/2026 Absolute added light and ratio capped: dividing by the dark night
 			// ground light used to brighten it up to 8 times over the whole radius.
-			Vector3 ratio(
-				clampReal(clampReal(light.color.X * scale, 0.0f, MAX_SPLAT_ADD) / m_terrainLightColor.X, 0.0f, MAX_SPLAT_RATIO),
-				clampReal(clampReal(light.color.Y * scale, 0.0f, MAX_SPLAT_ADD) / m_terrainLightColor.Y, 0.0f, MAX_SPLAT_RATIO),
-				clampReal(clampReal(light.color.Z * scale, 0.0f, MAX_SPLAT_ADD) / m_terrainLightColor.Z, 0.0f, MAX_SPLAT_RATIO));
+			// GeneralsX @bugfix Claude 17/10/2026 Both caps scale all three channels together. Capping each channel on
+			// its own flattened orange fire light (1, 0.5, 0.18) to yellow, and on blue moonlit ground to yellow-green.
+			Vector3 add(light.color.X * scale, light.color.Y * scale, light.color.Z * scale);
+			Real addMax = add.X > add.Y ? add.X : add.Y;
+			if (add.Z > addMax)
+				addMax = add.Z;
+			if (addMax > MAX_SPLAT_ADD)
+				add *= MAX_SPLAT_ADD / addMax;
+			Vector3 ratio(add.X / m_terrainLightColor.X, add.Y / m_terrainLightColor.Y, add.Z / m_terrainLightColor.Z);
 			Real largest = ratio.X > ratio.Y ? ratio.X : ratio.Y;
 			if (ratio.Z > largest)
 				largest = ratio.Z;
+			if (largest > MAX_SPLAT_RATIO)
+			{
+				ratio *= MAX_SPLAT_RATIO / largest;
+				largest = MAX_SPLAT_RATIO;
+			}
+			if (largest <= 0.0f)
+				continue;
 			const Int passes = largest <= 1.0f ? 1 : (largest <= 3.0f ? 2 : 3);
 			if (passes != wantPasses)
 				continue;
