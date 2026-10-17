@@ -46,6 +46,8 @@
 //         Includes
 //-----------------------------------------------------------------------------
 #include "W3DDevice/GameClient/HeightMap.h"
+// GeneralsX @performance Claude 17/10/2026 Terrain parts for the [PERF] hitch terrain line.
+#include "Common/PerfStats.h"
 // GeneralsX @feature Claude 16/10/2026 Detail terrain shader.
 #include "W3DDevice/GameClient/W3DTerrainDetail.h"
 
@@ -1441,6 +1443,8 @@ void HeightMapRenderObjClass::On_Frame_Update()
 		pLight->m_priorEnable = pLight->m_enabled;
 	}
 	if (numDynaLights > 0) {
+		// GeneralsX @performance Claude 17/10/2026 Vertex colour updates for the [PERF] hitch terrain line.
+		PERF_STATS_SCOPE(SECTION_TERRAIN_LIGHT_VB);
 		//step through each vertex buffer that needs updating
 		for (j=0; j<m_numVBTilesY; j++)
 		{
@@ -2039,6 +2043,9 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 	}
 
 	Int pass;
+	{
+	// GeneralsX @performance Claude 17/10/2026 Parts of the terrain for the [PERF] hitch terrain line.
+	PERF_STATS_SCOPE(SECTION_TERRAIN_BASE);
  	for (pass=0; pass<devicePasses; pass++) {
 #ifdef TIMING_TESTS
 #endif
@@ -2079,6 +2086,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 			}
 	}
+	}
 
 	if (!doMultiPassWireFrame)
 	{
@@ -2086,11 +2094,17 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
  			W3DShaderManager::resetShader(st);
 
 		//Draw feathered shorelines
-		renderShoreLines(&rinfo.Camera);
+		{
+			PERF_STATS_SCOPE(SECTION_TERRAIN_SHORE);
+			renderShoreLines(&rinfo.Camera);
+		}
 
 		//Do additional pass over any tiles that have 3 textures blended together.
 		if (TheGlobalData->m_use3WayTerrainBlends)
+		{
+			PERF_STATS_SCOPE(SECTION_TERRAIN_BLEND);
 			renderExtraBlendTiles();
+		}
 
 		Int yCoordMin = m_map->getDrawOrgY();
 		Int yCoordMax = m_y+m_map->getDrawOrgY()-1;
@@ -2103,6 +2117,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 		ShaderClass::Invalidate();
 		if (!ShaderClass::Is_Backface_Culling_Inverted()) {
+			PERF_STATS_SCOPE(SECTION_TERRAIN_ROADS);
 			DX8Wrapper::Set_Material(m_vertexMaterialClass);
 			if (Scene) {
 				RTS3DScene *pMyScene = (RTS3DScene *)Scene;
@@ -2113,13 +2128,17 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		}
 	#endif
 	if (m_propBuffer) {
+		PERF_STATS_SCOPE(SECTION_TERRAIN_PROPS);
 		m_propBuffer->drawProps(rinfo);
 	}
 		DX8Wrapper::Set_Texture(0,nullptr);
 		DX8Wrapper::Set_Texture(1,nullptr);
 		m_stageTwoTexture->restore();
 
-		drawScorches();
+		{
+			PERF_STATS_SCOPE(SECTION_TERRAIN_SCORCH);
+			drawScorches();
+		}
 
 		DX8Wrapper::Set_Texture(0,nullptr);
 		DX8Wrapper::Set_Texture(1,nullptr);
@@ -2127,13 +2146,20 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		ShaderClass::Invalidate();
 		DX8Wrapper::Apply_Render_State_Changes();
 
-		m_bridgeBuffer->drawBridges(&rinfo.Camera, m_disableTextures, doCloud?m_stageTwoTexture:nullptr);
+		{
+			PERF_STATS_SCOPE(SECTION_TERRAIN_BRIDGES);
+			m_bridgeBuffer->drawBridges(&rinfo.Camera, m_disableTextures, doCloud?m_stageTwoTexture:nullptr);
+		}
 
 		if (TheTerrainTracksRenderObjClassSystem)
+		{
+			PERF_STATS_SCOPE(SECTION_TERRAIN_TRACKS);
 			TheTerrainTracksRenderObjClassSystem->flush();
+		}
 
 		if (m_shroud && rinfo.Additional_Pass_Count())
 		{
+			PERF_STATS_SCOPE(SECTION_TERRAIN_SHROUD);
 			rinfo.Peek_Additional_Pass(0)->Install_Materials();
 			renderTerrainPass(&rinfo.Camera);
 			rinfo.Peek_Additional_Pass(0)->UnInstall_Materials();
@@ -2145,10 +2171,13 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 	else
 			m_bridgeBuffer->drawBridges(&rinfo.Camera, m_disableTextures, m_stageTwoTexture);
 
+	{
+	PERF_STATS_SCOPE(SECTION_TERRAIN_BIBS);
   if ( m_waypointBuffer )
 	  m_waypointBuffer->drawWaypoints(rinfo);
 
 	m_bibBuffer->renderBibs();
+	}
 
 	// We do some custom blending, so tell the shader class to reset everything.
 	DX8Wrapper::Set_Texture(0,nullptr);

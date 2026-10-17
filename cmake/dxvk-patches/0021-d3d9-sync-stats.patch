@@ -1,0 +1,236 @@
+GeneralsX: main thread wait counters for the game's frame hitch report.
+The exported GeneralsX_GetSyncStats returns running totals of the time
+the main thread waited in buffer and texture locks (for the GPU or the CS
+thread) and in other CS thread synchronizations, with a description of
+the slowest wait since the previous call.
+
+diff --git a/src/d3d9/d3d9.def b/src/d3d9/d3d9.def
+index a075ece..46dd1d8 100644
+--- a/src/d3d9/d3d9.def
++++ b/src/d3d9/d3d9.def
+@@ -23,6 +23,7 @@ EXPORTS
+ 
+   GeneralsX_UpscalerSubmitFrame
+   GeneralsX_GetPipelineStats
++  GeneralsX_GetSyncStats
+ 
+   DXVK_RegisterAnnotation @28257 NONAME
+   DXVK_UnRegisterAnnotation @28258 NONAME
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index 5e5702a..b303635 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -4767,7 +4767,49 @@ namespace dxvk {
+   }
+ 
+ 
++  // GeneralsX: main thread waits for the GPU and the CS thread
++  GeneralsXSyncTotals g_gxSyncTotals;
++
++  void GeneralsXRecordWait(const GeneralsXWaitInfo& Info, uint64_t Us) {
++    // Waits shorter than 50 us are the normal cost of a lock
++    if (Us < 50u)
++      return;
++
++    uint32_t kind = std::min(Info.kind, 3u);
++    g_gxSyncTotals.waits[kind] += 1u;
++    g_gxSyncTotals.waitUs[kind] += Us;
++
++    if (Us > g_gxSyncTotals.slowestUs) {
++      g_gxSyncTotals.slowestUs = uint32_t(std::min<uint64_t>(Us, UINT32_MAX));
++      g_gxSyncTotals.slowest = Info;
++    }
++  }
++
++
+   bool D3D9DeviceEx::WaitForResource(
++    const DxvkPagedResource&                Resource,
++          uint64_t                          SequenceNumber,
++          DWORD                             MapFlags,
++    const GeneralsXWaitInfo*                pWaitInfo) {
++    // GeneralsX: time the wait, including the CS thread synchronization
++    GeneralsXWaitInfo waitInfo = { 2u };
++
++    if (pWaitInfo)
++      waitInfo = *pWaitInfo;
++
++    auto waitStart = dxvk::high_resolution_clock::now();
++    g_gxSyncTotals.waitDepth += 1u;
++
++    bool result = WaitForResourceImpl(Resource, SequenceNumber, MapFlags);
++
++    g_gxSyncTotals.waitDepth -= 1u;
++    GeneralsXRecordWait(waitInfo, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
++      dxvk::high_resolution_clock::now() - waitStart).count()));
++    return result;
++  }
++
++
++  bool D3D9DeviceEx::WaitForResourceImpl(
+     const DxvkPagedResource&                Resource,
+           uint64_t                          SequenceNumber,
+           DWORD                             MapFlags) {
+@@ -5022,7 +5064,9 @@ namespace dxvk {
+       }
+ 
+       // Wait until the buffer is idle which may include the copy (and resolve) we just issued.
+-      if (!WaitForResource(*mappedBuffer, pResource->GetMappingBufferSequenceNumber(Subresource), Flags))
++      GeneralsXWaitInfo waitInfo = { 1u, desc.Width >> MipLevel, desc.Height >> MipLevel,
++        uint32_t(desc.Format), uint32_t(desc.Pool), uint32_t(desc.Usage), 0u };
++      if (!WaitForResource(*mappedBuffer, pResource->GetMappingBufferSequenceNumber(Subresource), Flags, &waitInfo))
+         return D3DERR_WASSTILLDRAWING;
+     }
+ 
+@@ -5441,7 +5485,9 @@ namespace dxvk {
+ 
+       if (!skipWait) {
+         const Rc<DxvkBuffer> mappingBuffer = pResource->GetBuffer<D3D9_COMMON_BUFFER_TYPE_MAPPING>();
+-        if (!WaitForResource(*mappingBuffer, pResource->GetMappingBufferSequenceNumber(), Flags))
++        GeneralsXWaitInfo waitInfo = { 0u, 0u, 0u, uint32_t(desc.Format), uint32_t(desc.Pool),
++          uint32_t(desc.Usage), desc.Size };
++        if (!WaitForResource(*mappingBuffer, pResource->GetMappingBufferSequenceNumber(), Flags, &waitInfo))
+           return D3DERR_WASSTILLDRAWING;
+ 
+         pResource->SetNeedsReadback(false);
+@@ -5765,12 +5811,21 @@ namespace dxvk {
+   void D3D9DeviceEx::SynchronizeCsThread(uint64_t SequenceNumber) {
+     D3D9DeviceLock lock = LockDevice();
+ 
++    // GeneralsX: time synchronizations outside of a resource wait
++    auto syncStart = dxvk::high_resolution_clock::now();
++
+     // Dispatch current chunk so that all commands
+     // recorded prior to this function will be run
+     if (SequenceNumber > m_csSeqNum)
+       FlushCsChunk();
+ 
+     m_csThread.synchronize(SequenceNumber);
++
++    if (!g_gxSyncTotals.waitDepth) {
++      GeneralsXWaitInfo syncInfo = { 3u };
++      GeneralsXRecordWait(syncInfo, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
++        dxvk::high_resolution_clock::now() - syncStart).count()));
++    }
+   }
+ 
+ 
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+index 89b1dd5..0a16b5c 100644
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -44,6 +44,36 @@
+ 
+ namespace dxvk {
+ 
++  /**
++   * \brief GeneralsX: what the main thread waited for, see GeneralsX_GetSyncStats
++   *
++   * Kinds: 0 buffer lock, 1 texture lock, 2 other resource wait,
++   * 3 CS thread synchronization outside of a resource wait.
++   */
++  struct GeneralsXWaitInfo {
++    uint32_t kind;
++    uint32_t width;
++    uint32_t height;
++    uint32_t format;
++    uint32_t pool;
++    uint32_t usage;
++    uint32_t size;
++  };
++
++  struct GeneralsXSyncTotals {
++    std::atomic<uint32_t> waits[4] = { };
++    std::atomic<uint64_t> waitUs[4] = { };
++    // Slowest wait since the game last read the totals (main thread only)
++    uint32_t slowestUs = 0u;
++    GeneralsXWaitInfo slowest = { };
++    uint32_t waitDepth = 0u;
++  };
++
++  extern GeneralsXSyncTotals g_gxSyncTotals;
++
++  void GeneralsXRecordWait(const GeneralsXWaitInfo& Info, uint64_t Us);
++
++
+   // GeneralsX: private render state that marks the particle pass.
+   // D3D9 does not define render state 254.
+   constexpr D3DRENDERSTATETYPE D3D9SoftParticleRenderState = D3DRENDERSTATETYPE(254);
+@@ -775,6 +805,12 @@ namespace dxvk {
+       D3D9Format            Format) const;
+ 
+     bool WaitForResource(
++      const DxvkPagedResource&      Resource,
++            uint64_t                SequenceNumber,
++            DWORD                   MapFlags,
++      const GeneralsXWaitInfo*      pWaitInfo = nullptr);
++
++    bool WaitForResourceImpl(
+       const DxvkPagedResource&      Resource,
+             uint64_t                SequenceNumber,
+             DWORD                   MapFlags);
+diff --git a/src/d3d9/d3d9_main.cpp b/src/d3d9/d3d9_main.cpp
+index ed456ea..3c50cdc 100644
+--- a/src/d3d9/d3d9_main.cpp
++++ b/src/d3d9/d3d9_main.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "d3d9_annotation.h"
+ #include "d3d9_fixed_function.h"
++#include "d3d9_device.h"
+ 
+ #include "../dxvk/dxvk_graphics.h"
+ 
+@@ -72,6 +73,53 @@ extern "C" {
+     return TRUE;
+   }
+ 
++  // GeneralsX: running totals of the main thread waits for the GPU and
++  // the CS thread, for the game's frame hitch report. The layout is
++  // shared with the game (W3DDisplay.cpp) and checked with the size
++  // field. Kinds: buffer lock, texture lock, other resource wait, CS
++  // thread synchronization. The slowest wait since the previous call is
++  // described by its kind, size or texture extent, format, pool and usage.
++  struct GeneralsXSyncStats {
++    uint32_t size;
++    uint32_t waits[4];
++    uint64_t waitUs[4];
++    uint32_t slowestUs;
++    uint32_t slowestKind;
++    uint32_t slowestWidth;
++    uint32_t slowestHeight;
++    uint32_t slowestFormat;
++    uint32_t slowestPool;
++    uint32_t slowestUsage;
++    uint32_t slowestSize;
++  };
++
++  DLLEXPORT BOOL __stdcall GeneralsX_GetSyncStats(void* pStats) {
++    auto stats = reinterpret_cast<GeneralsXSyncStats*>(pStats);
++
++    if (!stats || stats->size != sizeof(GeneralsXSyncStats))
++      return FALSE;
++
++    auto& totals = dxvk::g_gxSyncTotals;
++
++    for (uint32_t i = 0; i < 4; i++) {
++      stats->waits[i]  = totals.waits[i].load();
++      stats->waitUs[i] = totals.waitUs[i].load();
++    }
++
++    stats->slowestUs     = totals.slowestUs;
++    stats->slowestKind   = totals.slowest.kind;
++    stats->slowestWidth  = totals.slowest.width;
++    stats->slowestHeight = totals.slowest.height;
++    stats->slowestFormat = totals.slowest.format;
++    stats->slowestPool   = totals.slowest.pool;
++    stats->slowestUsage  = totals.slowest.usage;
++    stats->slowestSize   = totals.slowest.size;
++
++    totals.slowestUs = 0u;
++    totals.slowest = { };
++    return TRUE;
++  }
++
+   DLLEXPORT int __stdcall D3DPERF_BeginEvent(D3DCOLOR col, LPCWSTR wszName) {
+     return dxvk::D3D9GlobalAnnotationList::Instance().BeginEvent(col, wszName);
+   }

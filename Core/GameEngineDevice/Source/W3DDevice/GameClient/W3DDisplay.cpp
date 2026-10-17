@@ -968,6 +968,66 @@ static void lookupPipelineStats()
 	fflush(stderr);
 }
 
+// GeneralsX @performance Claude 17/10/2026 Main thread wait totals of the GeneralsX DXVK d3d9.dll, for [PERF] lines.
+// The layout matches GeneralsXSyncStats in cmake/dxvk-patches/0021-d3d9-sync-stats.patch.
+struct DxvkSyncStats
+{
+	UnsignedInt size;
+	UnsignedInt waits[PerfStats::WAIT_KIND_COUNT];
+	UnsignedInt64 waitUs[PerfStats::WAIT_KIND_COUNT];
+	UnsignedInt slowestUs;
+	UnsignedInt slowestKind;
+	UnsignedInt slowestWidth;
+	UnsignedInt slowestHeight;
+	UnsignedInt slowestFormat;
+	UnsignedInt slowestPool;
+	UnsignedInt slowestUsage;
+	UnsignedInt slowestSize;
+};
+
+static GetPipelineStatsFunc s_getSyncStats = nullptr;
+
+static void readWaitTotals(PerfStats::WaitTotals &totals)
+{
+	DxvkSyncStats stats;
+	memset(&stats, 0, sizeof(stats));
+	stats.size = sizeof(stats);
+	if (s_getSyncStats == nullptr || !s_getSyncStats(&stats))
+		return;
+	for (Int i = 0; i < PerfStats::WAIT_KIND_COUNT; ++i)
+	{
+		totals.waits[i] = stats.waits[i];
+		totals.waitMs[i] = (double)stats.waitUs[i] / 1000.0;
+	}
+	totals.slowestMs = (double)stats.slowestUs / 1000.0;
+	static const char *const kindNames[PerfStats::WAIT_KIND_COUNT] = { "buffer lock", "texture lock", "resource", "cs sync" };
+	const char *kindName = stats.slowestKind < PerfStats::WAIT_KIND_COUNT ? kindNames[stats.slowestKind] : "?";
+	if (stats.slowestUs == 0)
+		totals.slowest[0] = '\0';
+	else if (stats.slowestKind == PerfStats::WAIT_BUFFER)
+		snprintf(totals.slowest, sizeof(totals.slowest), "%s %u bytes usage 0x%x pool %u", kindName,
+			stats.slowestSize, stats.slowestUsage, stats.slowestPool);
+	else if (stats.slowestKind == PerfStats::WAIT_TEXTURE)
+		snprintf(totals.slowest, sizeof(totals.slowest), "%s %ux%u format %u usage 0x%x pool %u", kindName,
+			stats.slowestWidth, stats.slowestHeight, stats.slowestFormat, stats.slowestUsage, stats.slowestPool);
+	else
+		snprintf(totals.slowest, sizeof(totals.slowest), "%s", kindName);
+}
+
+static void lookupSyncStats()
+{
+#ifdef _WIN32
+	HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+	if (d3d9 != nullptr)
+		s_getSyncStats = (GetPipelineStatsFunc)GetProcAddress(d3d9, "GeneralsX_GetSyncStats");
+#endif
+	if (s_getSyncStats != nullptr)
+		PerfStats::setWaitTotalsSource(readWaitTotals);
+	fprintf(stderr, "[PERF] DXVK wait counters %s\n",
+		s_getSyncStats != nullptr ? "on" : "off (d3d9.dll has no GeneralsX_GetSyncStats)");
+	fflush(stderr);
+}
+
 // W3DDisplay::init ===========================================================
 /** Initialize or re-initialize the W3D display system.  Here we need to
   * create our window, and get our 3D hardware setup and online */
@@ -1306,6 +1366,8 @@ void W3DDisplay::init()
 			PerfStats::setLoadTotalsSource(readTextureLoadTotals);
 			// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation, for [PERF] hitch lines.
 			lookupPipelineStats();
+			// GeneralsX @performance Claude 17/10/2026 Main thread waits for the GPU, for [PERF] lines.
+			lookupSyncStats();
 			fprintf(stderr, "[PERF] skin cache %s\n", MeshClass::Is_Skin_Cache_Enabled() ? "on" : "off (SkinCache = no)");
 			fflush(stderr);
 		}
