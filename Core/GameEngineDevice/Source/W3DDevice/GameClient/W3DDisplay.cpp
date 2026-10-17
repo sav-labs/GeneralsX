@@ -95,7 +95,6 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DCapture.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
-#include "W3DDevice/GameClient/W3DUpscaler.h"
 #include "WWMath/wwmath.h"
 #include "WWLib/registry.h"
 #include "WW3D2/ww3d.h"
@@ -922,51 +921,6 @@ static void readTextureLoadTotals(UnsignedInt &textureLoads, double &textureLoad
 	textureLoadMs = TextureLoader::Get_Sync_Load_Ms();
 }
 
-// GeneralsX @performance Claude 17/10/2026 Pipeline creation totals of the GeneralsX DXVK d3d9.dll, for [PERF]
-// hitch lines. The layout matches GeneralsXPipelineStats in cmake/dxvk-patches/0019-d3d9-pipeline-stats.patch.
-struct DxvkPipelineStats
-{
-	UnsignedInt size;
-	UnsignedInt pipelines;
-	UnsignedInt fullCompiles;
-	UnsignedInt ffShaders;
-	UnsignedInt64 pipelineUs;
-};
-
-#ifdef _WIN32
-typedef BOOL (WINAPI *GetPipelineStatsFunc)(void *stats);
-#else
-typedef bool (*GetPipelineStatsFunc)(void *stats);
-#endif
-static GetPipelineStatsFunc s_getPipelineStats = nullptr;
-
-static void readPipelineTotals(UnsignedInt &pipelines, UnsignedInt &fullCompiles, UnsignedInt &ffShaders, double &pipelineMs)
-{
-	DxvkPipelineStats stats;
-	memset(&stats, 0, sizeof(stats));
-	stats.size = sizeof(stats);
-	if (s_getPipelineStats == nullptr || !s_getPipelineStats(&stats))
-		return;
-	pipelines = stats.pipelines;
-	fullCompiles = stats.fullCompiles;
-	ffShaders = stats.ffShaders;
-	pipelineMs = (double)stats.pipelineUs / 1000.0;
-}
-
-static void lookupPipelineStats()
-{
-#ifdef _WIN32
-	HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-	if (d3d9 != nullptr)
-		s_getPipelineStats = (GetPipelineStatsFunc)GetProcAddress(d3d9, "GeneralsX_GetPipelineStats");
-#endif
-	if (s_getPipelineStats != nullptr)
-		PerfStats::setPipelineTotalsSource(readPipelineTotals);
-	fprintf(stderr, "[PERF] DXVK pipeline counters %s\n",
-		s_getPipelineStats != nullptr ? "on" : "off (d3d9.dll has no GeneralsX_GetPipelineStats)");
-	fflush(stderr);
-}
-
 // W3DDisplay::init ===========================================================
 /** Initialize or re-initialize the W3D display system.  Here we need to
   * create our window, and get our 3D hardware setup and online */
@@ -1296,8 +1250,6 @@ void W3DDisplay::init()
 		{
 			// GeneralsX @performance Claude 16/10/2026 Texture loads that stall the main thread, for [PERF] hitch lines.
 			PerfStats::setLoadTotalsSource(readTextureLoadTotals);
-			// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation, for [PERF] hitch lines.
-			lookupPipelineStats();
 			fprintf(stderr, "[PERF] skin cache %s\n", MeshClass::Is_Skin_Cache_Enabled() ? "on" : "off (SkinCache = no)");
 			fflush(stderr);
 		}
@@ -3716,66 +3668,6 @@ Int W3DDisplay::createPreloadedTextures()
 	// Finish the loads that went to the background loader instead.
 	TextureLoader::Flush_Pending_Load_Tasks();
 	return created;
-}
-
-//-------------------------------------------------------------------------------------------------
-// GeneralsX @performance Claude 17/10/2026 Renders the 3D scene of the match behind the load screen, without
-// presenting it. Everything the scene draws is then ready on the GPU when the match starts: managed textures are
-// uploaded, and DXVK has generated the fixed function shaders and created the Vulkan pipelines for the materials,
-// render states and render targets of the scene, its render target passes (water reflection, shadows) and its
-// particles. Doing that for the first time in a match frame stalled it for 100-200 ms. The caller places what
-// should be drawn in front of the camera. Render only: no logic, CRC or replay effect.
-//-------------------------------------------------------------------------------------------------
-Int W3DDisplay::warmUpRender(Int passes)
-{
-	if (TheGlobalData->m_headless || TheTacticalView == nullptr || TheTerrainRenderObject == nullptr
-		|| TheTerrainRenderObject->getMap() == nullptr)
-		return 0;
-	if (DX8Wrapper::_Get_D3D_Device8() == nullptr || DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel() != D3D_OK)
-		return 0;
-
-	W3DView *primaryW3DView = (W3DView *)getFirstView();
-	CameraClass *camera = primaryW3DView ? primaryW3DView->get3DCamera() : nullptr;
-	if (camera == nullptr)
-		return 0;
-
-	// The load screen draws only its interface; the scene renders like a match frame here.
-	const Bool loadScreenRender = TheGlobalData->m_loadScreenRender;
-	TheWritableGlobalData->m_loadScreenRender = FALSE;
-
-	Int rendered = 0;
-	for (Int pass = 0; pass < passes; ++pass)
-	{
-		updateViews();
-
-		if (TheTerrainRenderObject->getShroud())
-			TheTerrainRenderObject->getShroud()->render(camera);
-
-		TheParticleSystemManager->DRAW();
-		if (TheW3DEffectLights)
-			TheW3DEffectLights->update(camera);
-		if (TheWaterRenderObj)
-			TheWaterRenderObj->updateRenderTargetTextures(camera);
-		if (TheW3DProjectedShadowManager)
-			TheW3DProjectedShadowManager->updateRenderTargetTextures();
-		if (TheW3DSkinnedShadowManager)
-			TheW3DSkinnedShadowManager->updateRenderTargetTextures(camera);
-
-		DX8Wrapper::Pillarbox_Begin();
-		if (WW3D::Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f), TheWaterTransparency->m_minWaterOpacity) == WW3D_ERROR_OK)
-		{
-			// Not a frame for the temporal upscaler: nothing of it is presented.
-			W3DUpscaler::setSuspended(true);
-			drawViews();
-			W3DUpscaler::setSuspended(false);
-			// End the scene without presenting; the next load screen frame clears the back buffer.
-			WW3D::End_Render(false);
-			++rendered;
-		}
-	}
-
-	TheWritableGlobalData->m_loadScreenRender = loadScreenRender;
-	return rendered;
 }
 
 //-------------------------------------------------------------------------------------------------

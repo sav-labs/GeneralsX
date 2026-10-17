@@ -85,8 +85,6 @@ Bool s_jittered = false;				///< the camera of the current scene is jittered
 // GeneralsX @feature Claude 16/10/2026 Reactive mask state
 Bool s_sceneOpen = false;				///< between beginScene and endScene of the tactical view while FSR 2 is active
 Bool s_opaqueLogged = false;
-// GeneralsX @performance Claude 17/10/2026 Scenes rendered behind the load screen are not upscaler frames
-Bool s_suspended = false;
 Real s_jitterPixels[2] = { 0.0f, 0.0f };
 UnsignedInt s_phaseIndex = 0;
 UnsignedInt s_phaseCount = 1;
@@ -191,7 +189,7 @@ void W3DUpscaler::beginScene(CameraClass *camera)
 	s_jittered = false;
 	s_sceneOpen = false;
 
-	if (camera == nullptr || !isFsr2Selected() || !s_temporalActive || s_suspended)
+	if (camera == nullptr || !isFsr2Selected() || !s_temporalActive)
 		return;
 
 	// GeneralsX @feature Claude 16/10/2026 The scene may mark its opaque part for the reactive mask
@@ -227,7 +225,7 @@ void W3DUpscaler::endScene(CameraClass *camera)
 
 	camera->Set_Projection_Jitter(0.0f, 0.0f);
 
-	if (!isFsr2Selected() || s_suspended)
+	if (!isFsr2Selected())
 		return;
 
 	lookupSubmitFrame();
@@ -308,12 +306,6 @@ void W3DUpscaler::endScene(CameraClass *camera)
 // before translucent objects, particles and sorted alpha-blended polygons. Only the tactical view's scene sets
 // render state 251, and only while FSR 2 is active. When a view filter draws the scene twice, DXVK keeps the last
 // copy, and drops it if the final scene went to a different render target. Render only.
-// GeneralsX @performance Claude 17/10/2026 See W3DUpscaler.h
-void W3DUpscaler::setSuspended(Bool suspended)
-{
-	s_suspended = suspended;
-}
-
 void W3DUpscaler::markOpaqueScene()
 {
 	if (!s_sceneOpen || !isFsr2Selected())
