@@ -117,7 +117,7 @@ SYSTEMS = {
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8, AngleZ=(-0.1, 0.1),
         # Few large, slow tongues tinted deep orange: small fast yellow ones read as candles.
         Lifetime=(38, 46), Size=(12, 16), SizeRate=(0.08, 0.12), SizeRateDamping=(0.97, 0.97),
-        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 6), (0.8, 0.8, 28), (0.0, 0.0, 46)],
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 6), (0.55, 0.55, 28), (0.0, 0.0, 46)],
         Color=[((255, 190, 140), 0), ((200, 120, 80), 30)],
         BurstDelay=(5, 8), BurstCount=(1, 1), SystemLifetime=200,
         DriftVelocity=(0.0, 0.0, 0.25),
@@ -141,7 +141,7 @@ SYSTEMS = {
         # Fades out once the flipbook turns to soot, so the grey GXTankBlastSmoke takes over instead of
         # a black ball sitting on the wreck.
         Lifetime=(62, 68), Size=(52, 64), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 16), (0.3, 0.3, 26), (0.0, 0.0, 38)],
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 12), (0.25, 0.25, 19), (0.0, 0.0, 28)],
         Color=[((255, 255, 255), 0)],
         BurstCount=(3, 3), VelocityDamping=(0.85, 0.88), DriftVelocity=(0.0, 0.0, 0.12),
         VelocityType="SPHERICAL", VelSpherical=(0.2, 0.5),
@@ -151,7 +151,7 @@ SYSTEMS = {
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(48, 58), Size=(20, 26), SizeRate=(0.35, 0.5), SizeRateDamping=(0.97, 0.97),
         AngularRateZ=(-0.01, 0.01),
-        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 2), (0.85, 0.85, 10), (0.25, 0.25, 18), (0.0, 0.0, 28)],
+        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 2), (0.85, 0.85, 8), (0.2, 0.2, 14), (0.0, 0.0, 22)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
         VelocityType="SPHERICAL", VelSpherical=(0.6, 1.2),
@@ -168,8 +168,8 @@ SYSTEMS = {
     "GXTankBlastDust": system(
         ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
         Lifetime=(60, 85), Size=(14, 20), SizeRate=(0.5, 0.7), SizeRateDamping=(0.965, 0.97),
-        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 5), (0.0, 0.0, 85)],
-        Color=[((235, 225, 210), 0)],
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 5), (0.0, 0.0, 85)],
+        Color=[((190, 175, 155), 0)],
         BurstCount=(14, 14), VelocityDamping=(0.9, 0.92), Gravity=0.004,
         VelocityType="OUTWARD", VelOutward=(1.6, 2.8), VelOutwardOther=(0.1, 0.5),
         VolumeType="CYLINDER", VolCylinderRadius=8.0, VolCylinderLength=1.0, IsHollow="Yes"),
@@ -192,8 +192,8 @@ SYSTEMS = {
     # A whole baked spark shower over the hull, for the dense glow the single streaks lack.
     "GXTankBlastSparkBurst": system(
         Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8, AngleZ=(-0.4, 0.4),
-        Lifetime=(30, 30), Size=(34, 40), Color=[((255, 255, 255), 0)],
-        BurstCount=(2, 2), VolumeType="SPHERE", VolSphereRadius=3.0),
+        Lifetime=(30, 30), Size=(22, 26), Color=[((200, 130, 70), 0), ((120, 55, 15), 12)],
+        BurstCount=(1, 1), VolumeType="SPHERE", VolSphereRadius=3.0),
     # Thick black smoke that rolls up from the fireball.
     "GXTankBlastSmoke": system(
         ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
@@ -209,11 +209,11 @@ SYSTEMS = {
     "GXWreckFire": system(
         # Baked fire carries its own colour and soot; alpha blended so the soot darkens.
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8,
-        Lifetime=(34, 42), Size=(13, 17), SizeRate=(0.08, 0.12), SizeRateDamping=(0.97, 0.97),
-        AngleZ=(-0.1, 0.1),
-        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 5), (0.75, 0.75, 26), (0.0, 0.0, 42)],
+        Lifetime=(26, 34), Size=(8, 11), SizeRate=(0.1, 0.14), SizeRateDamping=(0.96, 0.96),
+        AngleZ=(-0.3, 0.3),
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 5), (0.55, 0.55, 20), (0.0, 0.0, 34)],
         Color=[((255, 185, 135), 0), ((190, 110, 70), 28)],
-        BurstDelay=(2, 3), BurstCount=(1, 1), SystemLifetime=170,
+        BurstDelay=(2, 3), BurstCount=(2, 2), SystemLifetime=170,
         DriftVelocity=(0.0, 0.0, 0.3),
         VolumeType="CYLINDER", VolCylinderRadius=6.0, VolCylinderLength=3.0),
     "GXWreckSmoke": system(
@@ -258,7 +258,7 @@ SYSTEMS = {
         AngleZ=(-0.1, 0.1),
         # Larger, slower and deep orange: small bright yellow tongues read as candles on the wrecks.
         Lifetime=(30, 38), Size=(9.0, 12.0), SizeRate=(0.08, 0.12), SizeRateDamping=(0.96, 0.96),
-        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 5), (0.75, 0.75, 24), (0.0, 0.0, 38)],
+        Alpha=[(0.0, 0.0, 0), (0.65, 0.65, 5), (0.5, 0.5, 22), (0.0, 0.0, 38)],
         Color=[((255, 185, 135), 0), ((190, 110, 70), 26)],
         BurstDelay=(2, 4), BurstCount=(1, 1), SystemLifetime=0,
         DriftVelocity=(-0.05, 0.08, 0.2),
@@ -328,17 +328,20 @@ SYSTEMS.update({
     # Fireball pushed out of the muzzle.
     "TankMuzzleFlashFlame": system(
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_burst.tga", FlipbookGrid=8, AngleZ=(-0.3, 0.3),
-        Lifetime=(10, 14), Size=(4.0, 6.0), SizeRate=(0.5, 0.7), SizeRateDamping=(0.9, 0.9),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 8), (0.0, 0.0, 14)],
-        BurstCount=(3, 3), SystemLifetime=10, VelocityDamping=(0.6, 0.75),
-        VelocityType="ORTHO", VelOrthoX=(1.5, 4.5), VelOrthoY=(-0.3, 0.3), VelOrthoZ=(-0.2, 0.3),
+        # Short: 2-4 frames that swell and die. Longer bursts dragged down the barrel read as a flat
+        # orange smear.
+        Lifetime=(4, 6), Size=(3.5, 5.0), SizeRate=(1.0, 1.3), SizeRateDamping=(0.7, 0.7),
+        Alpha=[(1.0, 1.0, 0), (0.7, 0.7, 2), (0.0, 0.0, 6)],
+        Color=[((235, 215, 195), 0)],
+        BurstCount=(2, 2), SystemLifetime=1, VelocityDamping=(0.5, 0.6),
+        VelocityType="ORTHO", VelOrthoX=(1.0, 2.5), VelOrthoY=(-0.3, 0.3), VelOrthoZ=(-0.2, 0.3),
         VolumeType="CYLINDER", VolCylinderRadius=0.5, VolCylinderLength=0.0),
     # Grey gun smoke that drifts off the barrel.
     "TankMuzzleFlashSmoke": system(
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(60, 80), Size=(4.0, 6.0), SizeRate=(0.35, 0.5), SizeRateDamping=(0.97, 0.98),
-        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 4), (0.35, 0.35, 40), (0.0, 0.0, 80)],
-        Color=[((210, 206, 200), 0), ((235, 232, 228), 60)],
+        Alpha=[(0.0, 0.0, 0), (0.5, 0.5, 4), (0.25, 0.25, 40), (0.0, 0.0, 80)],
+        Color=[((150, 146, 140), 0), ((185, 182, 178), 60)],
         BurstCount=(4, 4), SystemLifetime=10, VelocityDamping=(0.82, 0.88),
         DriftVelocity=(-0.05, 0.05, 0.12),
         VelocityType="ORTHO", VelOrthoX=(0.5, 2.5), VelOrthoY=(-0.8, 0.8), VelOrthoZ=(0.1, 0.6),
@@ -346,15 +349,15 @@ SYSTEMS.update({
     # Short white flash at the muzzle instead of the retail lens flare.
     "TankMuzzleFlare": system(
         Priority="CRITICAL", Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
-        Lifetime=(5, 5), Size=(12, 12), SizeRate=(2.0, 2.0), SizeRateDamping=(0.6, 0.6),
-        Color=[((255, 246, 220), 0), ((255, 160, 70), 2), ((0, 0, 0), 5)],
+        Lifetime=(3, 3), Size=(8, 8), SizeRate=(1.5, 1.5), SizeRateDamping=(0.6, 0.6),
+        Color=[((220, 180, 130), 0), ((150, 80, 30), 1), ((0, 0, 0), 3)],
         BurstCount=(1, 1), SystemLifetime=1),
     # Dust kicked up from the ground by the muzzle blast.
     "TankMuzzleWave": system(
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
         Lifetime=(45, 60), Size=(5.0, 8.0), SizeRate=(0.3, 0.45), SizeRateDamping=(0.96, 0.97),
-        Alpha=[(0.0, 0.0, 0), (0.75, 0.75, 4), (0.0, 0.0, 60)],
-        Color=[((235, 225, 210), 0)],
+        Alpha=[(0.0, 0.0, 0), (0.5, 0.5, 4), (0.0, 0.0, 60)],
+        Color=[((185, 170, 150), 0)],
         BurstCount=(4, 4), SystemLifetime=1, VelocityDamping=(0.85, 0.9),
         VelocityType="ORTHO", VelOrthoX=(0.5, 2.0), VelOrthoY=(-1.5, 1.5), VelOrthoZ=(0.0, 0.3),
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=0.0),
@@ -444,7 +447,7 @@ SYSTEMS.update({
     "TankStruckSmallArmsSmoke": _struck_smoke((1, 1), (1.5, 2.5), (25, 35), 0.45),
     "TankSmallMuzzleFlare": _gun_flash((7.0, 9.0), lifetime=4),
     "TankSmallMuzzleFlashFlame": system(**{**SYSTEMS["TankMuzzleFlashFlame"],
-                                           "Size": (2.5, 3.5), "VelOrthoX": (1.0, 3.0)}),
+                                           "Size": (2.2, 3.0), "VelOrthoX": (0.8, 2.0)}),
     "TankSmallMuzzleFlashSmoke": system(**{**SYSTEMS["TankMuzzleFlashSmoke"],
                                            "Size": (2.5, 4.0), "BurstCount": (3, 3)}),
 })
