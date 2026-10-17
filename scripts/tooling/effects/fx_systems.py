@@ -57,8 +57,8 @@ SYSTEMS = {
     # Bright flash that lights everything for a few frames.
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
-        Lifetime=(9, 9), Size=(70, 70), SizeRate=(5, 5), SizeRateDamping=(0.7, 0.7),
-        Color=[((255, 244, 220), 0), ((255, 150, 50), 4), ((0, 0, 0), 9)],
+        Lifetime=(7, 7), Size=(40, 40), SizeRate=(3, 3), SizeRateDamping=(0.7, 0.7),
+        Color=[((230, 170, 100), 0), ((180, 80, 20), 3), ((0, 0, 0), 7)],
         BurstCount=(1, 1), AngleZ=(0, 6.28)),
     # Orange light pool on the ground under the blast.
     "GXTankBlastGroundGlow": system(
