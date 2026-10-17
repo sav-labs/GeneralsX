@@ -64,6 +64,9 @@ namespace
 		double modelLoadMs;
 		UnsignedInt64 shadersCreated;
 		UnsignedInt64 drawablesCreated;
+		// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation (hitch counters).
+		UnsignedInt64 pipelines;
+		double pipelineMs;
 		UnsignedInt hitches;
 		UnsignedInt drawCallsMax;
 		Int particlesMax;
@@ -114,6 +117,18 @@ namespace
 	LoadTotalsSource s_loadTotalsSource = nullptr;
 	UnsignedInt s_lastTextureLoadTotal = 0;
 	double s_lastTextureLoadMsTotal = 0.0;
+	// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation of the current frame and the running totals.
+	UnsignedInt s_framePipelines = 0;
+	UnsignedInt s_frameFullCompiles = 0;
+	UnsignedInt s_frameFFShaders = 0;
+	double s_framePipelineMs = 0.0;
+	PipelineTotalsSource s_pipelineTotalsSource = nullptr;
+	UnsignedInt s_lastPipelineTotal = 0;
+	UnsignedInt s_lastFullCompileTotal = 0;
+	UnsignedInt s_lastFFShaderTotal = 0;
+	double s_lastPipelineMsTotal = 0.0;
+	// GeneralsX @performance Claude 17/10/2026 The current frame loads a map, see markLoadFrame.
+	Bool s_loadFrame = FALSE;
 
 	Window s_interval;
 	Window s_overlay;
@@ -151,6 +166,8 @@ namespace
 			w.frameMsMax = frameMs;
 		if (frameMs >= HitchThresholdMs)
 			++w.hitches;
+		w.pipelines += s_framePipelines;
+		w.pipelineMs += s_framePipelineMs;
 		for (Int i = 0; i < SECTION_COUNT; ++i)
 			w.sectionMs[i] += s_frameSectionMs[i];
 		w.drawCalls += s_frameCounters.drawCalls;
@@ -231,6 +248,9 @@ namespace
 		fprintf(stderr, " | hitches=%u texloads=%llu (%.0f ms) modelloads=%llu (%.0f ms) shaders=%llu drawables=%llu",
 			w.hitches, (unsigned long long)w.textureLoads, w.textureLoadMs, (unsigned long long)w.modelLoads, w.modelLoadMs,
 			(unsigned long long)w.shadersCreated, (unsigned long long)w.drawablesCreated);
+		// GeneralsX @performance Claude 17/10/2026 DXVK pipelines created for draws over the window.
+		if (s_pipelineTotalsSource != nullptr)
+			fprintf(stderr, " pipelines=%llu (%.0f ms)", (unsigned long long)w.pipelines, w.pipelineMs);
 		fprintf(stderr, "\n");
 		fflush(stderr);
 	}
@@ -264,16 +284,18 @@ namespace
 
 	// GeneralsX @performance Claude 16/10/2026 One line for a frame of at least HitchThresholdMs: where the time
 	// went and what was loaded or created in that frame.
-	void printHitch(double frameMs, Bool inMatch, UnsignedInt logicFrame)
+	// GeneralsX @performance Claude 17/10/2026 The same line names a map load frame "load" instead of "hitch".
+	void printHitch(double frameMs, Bool inMatch, UnsignedInt logicFrame, const char *kind)
 	{
 		fprintf(stderr,
-			"[PERF] hitch frame_ms=%.1f %s logic_frame=%u"
+			"[PERF] %s frame_ms=%.1f %s logic_frame=%u"
 			" | logic=%.1f client=%.1f (drawables=%.1f particles=%.1f draw=%.1f: targets=%.1f scene=%.1f"
 			" [meshes=%.1f shadows=%.1f particles=%.1f] present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
 			" untracked=%.1f"
 			" | texloads=%u (%.1f ms) modelloads=%u (%.1f ms) shaders=%u drawables=%u"
+			" pipelines=%u (%.1f ms, %u full) ffshaders=%u"
 			" | draws=%u tris=%.0fk particles=%d\n",
-			frameMs, inMatch ? "match" : "shell", logicFrame,
+			kind, frameMs, inMatch ? "match" : "shell", logicFrame,
 			s_frameSectionMs[SECTION_LOGIC], s_frameSectionMs[SECTION_CLIENT],
 			s_frameSectionMs[SECTION_DRAWABLES], s_frameSectionMs[SECTION_PARTICLE_UPDATE],
 			s_frameSectionMs[SECTION_DRAW], s_frameSectionMs[SECTION_RENDER_TARGETS],
@@ -284,6 +306,7 @@ namespace
 			frameMs - s_frameSectionMs[SECTION_LOGIC] - s_frameSectionMs[SECTION_CLIENT],
 			s_frameTextureLoads, s_frameTextureLoadMs, s_frameModelLoads, s_frameModelLoadMs,
 			s_frameShadersCreated, s_frameDrawablesCreated,
+			s_framePipelines, s_framePipelineMs, s_frameFullCompiles, s_frameFFShaders,
 			s_frameCounters.drawCalls, (double)s_frameCounters.triangles / 1000.0, s_frameCounters.particles);
 		fflush(stderr);
 	}
@@ -300,6 +323,26 @@ namespace
 		s_frameTextureLoadMs = ms - s_lastTextureLoadMsTotal;
 		s_lastTextureLoadTotal = loads;
 		s_lastTextureLoadMsTotal = ms;
+	}
+
+	// GeneralsX @performance Claude 17/10/2026 Turns DXVK's running pipeline totals into this frame's counts.
+	void readPipelineTotals()
+	{
+		if (s_pipelineTotalsSource == nullptr)
+			return;
+		UnsignedInt pipelines = 0;
+		UnsignedInt fullCompiles = 0;
+		UnsignedInt ffShaders = 0;
+		double ms = 0.0;
+		s_pipelineTotalsSource(pipelines, fullCompiles, ffShaders, ms);
+		s_framePipelines = pipelines - s_lastPipelineTotal;
+		s_frameFullCompiles = fullCompiles - s_lastFullCompileTotal;
+		s_frameFFShaders = ffShaders - s_lastFFShaderTotal;
+		s_framePipelineMs = ms - s_lastPipelineMsTotal;
+		s_lastPipelineTotal = pipelines;
+		s_lastFullCompileTotal = fullCompiles;
+		s_lastFFShaderTotal = ffShaders;
+		s_lastPipelineMsTotal = ms;
 	}
 
 	void closeDump(const char *reason)
@@ -448,6 +491,19 @@ void setLoadTotalsSource(LoadTotalsSource source)
 		source(s_lastTextureLoadTotal, s_lastTextureLoadMsTotal);
 }
 
+// GeneralsX @performance Claude 17/10/2026 DXVK pipeline counters and the map load frame.
+void setPipelineTotalsSource(PipelineTotalsSource source)
+{
+	s_pipelineTotalsSource = source;
+	if (source != nullptr)
+		source(s_lastPipelineTotal, s_lastFullCompileTotal, s_lastFFShaderTotal, s_lastPipelineMsTotal);
+}
+
+void markLoadFrame()
+{
+	s_loadFrame = TRUE;
+}
+
 void addModelLoad(double ms)
 {
 	if (!s_enabled)
@@ -542,13 +598,23 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	}
 
 	readLoadTotals();
+	readPipelineTotals();
 
-	if (s_lastFrameEndMs >= 0.0)
+	// GeneralsX @performance Claude 17/10/2026 A map load runs inside one main loop iteration behind the load screen.
+	// Print what it loaded and created, and start the summaries after it, so that the match frames stay separate.
+	if (s_loadFrame && s_lastFrameEndMs >= 0.0)
+	{
+		if (s_printEnabled)
+			printHitch(now - s_lastFrameEndMs, inMatch, logicFrame, "load");
+		s_interval.reset(now);
+		s_overlay.reset(now);
+	}
+	else if (s_lastFrameEndMs >= 0.0)
 	{
 		const double frameMs = now - s_lastFrameEndMs;
 
 		if (s_printEnabled && frameMs >= HitchThresholdMs)
-			printHitch(frameMs, inMatch, logicFrame);
+			printHitch(frameMs, inMatch, logicFrame, "hitch");
 
 		if (inMatch && s_dumpRequested)
 		{
@@ -593,6 +659,11 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_frameModelLoadMs = 0.0;
 	s_frameShadersCreated = 0;
 	s_frameDrawablesCreated = 0;
+	s_framePipelines = 0;
+	s_frameFullCompiles = 0;
+	s_frameFFShaders = 0;
+	s_framePipelineMs = 0.0;
+	s_loadFrame = FALSE;
 }
 
 const char *getOverlayText()

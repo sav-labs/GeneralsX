@@ -42,4 +42,7 @@ public:
 	/// Before particles and other alpha-blended effects: render state 251 lets DXVK copy the opaque scene,
 	/// which FSR 2 compares with the final scene to find the pixels those effects changed
 	static void markOpaqueScene();
+	// GeneralsX @performance Claude 17/10/2026 Scenes rendered while suspended are not handed to DXVK and do not jitter:
+	// the renderer warm-up draws the scene behind the load screen and never presents it.
+	static void setSuspended(Bool suspended);
 };

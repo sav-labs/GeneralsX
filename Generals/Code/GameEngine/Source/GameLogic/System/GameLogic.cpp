@@ -36,6 +36,7 @@
 #endif
 #endif
 
+#include "Common/PerfStats.h"
 #include "Common/AudioAffect.h"
 #include "Common/AudioHandleSpecialValues.h"
 #include "Common/BuildAssistant.h"
@@ -1070,6 +1071,10 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 
 	setLoadingMap( TRUE );
 
+	// GeneralsX @performance Claude 17/10/2026 The load runs inside this main loop iteration behind the load screen;
+	// the frame profiler reports it as a [PERF] load line instead of a match hitch.
+	PerfStats::markLoadFrame();
+
 	if( loadingSaveGame == FALSE )
 	{
 
@@ -1964,6 +1969,13 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 					m_rankPointsToAddAtGameStart, i, pPlayer->getPlayerDisplayName().str()));
 			}
 		}
+	}
+
+	// GeneralsX @performance Claude 17/10/2026 Draw the match scene once behind the load screen, so that its first
+	// frames do not compile GPU pipelines or upload textures (GameClient::warmUpRenderer). Part of the preload.
+	if( TheGlobalData->m_preloadAssets && !isInShellGame() && loadingSaveGame == FALSE )
+	{
+		TheGameClient->warmUpRenderer();
 	}
 
 	updateLoadProgress(LOAD_PROGRESS_END);
