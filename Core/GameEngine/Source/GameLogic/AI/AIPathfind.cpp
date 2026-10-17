@@ -1766,9 +1766,14 @@ void PathfindCell::forwardInsertionSort(PathfindCellList& list)
 
 	// Traverse the list to find correct position
 	PathfindCell* current = list.m_head;
+	UnsignedInt steps = 0;
 	while (current->m_info->m_nextOpen && current->m_info->m_nextOpen->m_totalCost <= m_info->m_totalCost) {
 		current = current->getNextOpen();
+		++steps;
 	}
+	// GeneralsX @performance Claude 17/10/2026 Insertion cost for the [PERF] hitch ai line.
+	if (PerfStats::isEnabled())
+		PerfStats::addOpenListSteps(steps);
 
 	// Insert the new node in the correct position
 	m_info->m_nextOpen = current->m_info->m_nextOpen;
@@ -1812,9 +1817,14 @@ void PathfindCell::reverseInsertionSort(PathfindCellList& list)
 
 	// Traverse the list to find correct position
 	PathfindCell* current = list.m_tail;
+	UnsignedInt steps = 0;
 	while (current->m_info->m_prevOpen && current->m_info->m_prevOpen->m_totalCost > m_info->m_totalCost) {
 		current = current->getPrevOpen();
+		++steps;
 	}
+	// GeneralsX @performance Claude 17/10/2026 Insertion cost for the [PERF] hitch ai line.
+	if (PerfStats::isEnabled())
+		PerfStats::addOpenListSteps(steps);
 
 	// Insert the new node in the correct position
 	m_info->m_prevOpen = current->m_info->m_prevOpen;

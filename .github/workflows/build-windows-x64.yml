@@ -105,6 +105,7 @@ jobs:
             -Denable_d3d10=false -Denable_d3d11=false -Denable_dxgi=false build
           ninja -C build src/d3d8/d3d8.dll src/d3d9/d3d9.dll
           x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_UpscalerSubmitFrame
+          x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_GetSyncStats
           test -f build/src/dxvk/libdxvk_fsr3.a
           mkdir -p ../dxvk-out
           cp build/src/d3d8/d3d8.dll build/src/d3d9/d3d9.dll ../dxvk-out/

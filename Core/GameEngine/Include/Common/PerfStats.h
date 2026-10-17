@@ -59,6 +59,19 @@ namespace PerfStats
 		SECTION_SCENE_TERRAIN,    ///< Terrain render object
 		SECTION_SCENE_OBJECTS,    ///< Object submission, including the delayed (occluded) objects
 		SECTION_SCENE_TRANSLUCENT,///< RTS3DScene::flushTranslucentObjects
+		// GeneralsX @performance Claude 17/10/2026 Parts of the terrain render object, for the [PERF] hitch terrain line;
+		// overlap scene_terrain.
+		SECTION_TERRAIN_BASE,     ///< Terrain tiles (all shader passes)
+		SECTION_TERRAIN_SHORE,    ///< Feathered shorelines
+		SECTION_TERRAIN_BLEND,    ///< Three-texture blend tiles
+		SECTION_TERRAIN_ROADS,    ///< Roads
+		SECTION_TERRAIN_PROPS,    ///< Props
+		SECTION_TERRAIN_SCORCH,   ///< Scorch marks
+		SECTION_TERRAIN_BRIDGES,  ///< Bridges
+		SECTION_TERRAIN_TRACKS,   ///< Tank tracks
+		SECTION_TERRAIN_SHROUD,   ///< Shroud pass
+		SECTION_TERRAIN_BIBS,     ///< Waypoints and building bibs
+		SECTION_TERRAIN_LIGHT_VB, ///< Terrain vertex colours of the retail dynamic lights (HeightMap On_Frame_Update)
 		SECTION_COUNT
 	};
 
@@ -118,6 +131,26 @@ namespace PerfStats
 	void setLoadTotalsSource(LoadTotalsSource source);
 	// GeneralsX @performance Claude 17/10/2026 The renderer's pipeline creation totals (DXVK d3d9.dll only).
 	void setPipelineTotalsSource(PipelineTotalsSource source);
+	// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer (DXVK d3d9.dll only): running totals of
+	// buffer locks, texture locks, other resource waits and CS thread synchronizations, and the slowest wait since the
+	// previous read.
+	enum WaitKind
+	{
+		WAIT_BUFFER,
+		WAIT_TEXTURE,
+		WAIT_OTHER,
+		WAIT_CS,
+		WAIT_KIND_COUNT
+	};
+	struct WaitTotals
+	{
+		UnsignedInt waits[WAIT_KIND_COUNT];
+		double waitMs[WAIT_KIND_COUNT];
+		double slowestMs;
+		char slowest[96];
+	};
+	typedef void (*WaitTotalsSource)(WaitTotals &totals);
+	void setWaitTotalsSource(WaitTotalsSource source);
 	// GeneralsX @performance Claude 17/10/2026 The current main loop iteration loads a map behind the load screen:
 	// endFrame prints it as one [PERF] load line instead of a hitch and leaves it out of the summaries.
 	void markLoadFrame();
@@ -155,6 +188,8 @@ namespace PerfStats
 	/// One queued pathfind request took this long and examined this many cells; counted per frame, the slowest
 	/// is named in the hitch logic line.
 	void addPathfind(double ms, Int cells, const char *thing);
+	// GeneralsX @performance Claude 17/10/2026 Open list cells a pathfinder insertion walked past, for the hitch ai line.
+	void addOpenListSteps(UnsignedInt steps);
 
 	/// Called once per main loop iteration.
 	void endFrame(Bool inMatch, UnsignedInt logicFrame);

@@ -68,6 +68,9 @@ namespace
 		// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation (hitch counters).
 		UnsignedInt64 pipelines;
 		double pipelineMs;
+		// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer.
+		UnsignedInt64 waits[WAIT_KIND_COUNT];
+		double waitMs[WAIT_KIND_COUNT];
 		UnsignedInt hitches;
 		UnsignedInt drawCallsMax;
 		Int particlesMax;
@@ -128,6 +131,14 @@ namespace
 	UnsignedInt s_lastFullCompileTotal = 0;
 	UnsignedInt s_lastFFShaderTotal = 0;
 	double s_lastPipelineMsTotal = 0.0;
+	// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer in the current frame and the totals.
+	UnsignedInt s_frameWaits[WAIT_KIND_COUNT];
+	double s_frameWaitMs[WAIT_KIND_COUNT];
+	double s_frameSlowestWaitMs = 0.0;
+	char s_frameSlowestWait[96];
+	WaitTotalsSource s_waitTotalsSource = nullptr;
+	WaitTotals s_lastWaitTotals;
+	UnsignedInt s_frameOpenListSteps = 0;
 	// GeneralsX @performance Claude 17/10/2026 The current frame loads a map, see markLoadFrame.
 	Bool s_loadFrame = FALSE;
 	// GeneralsX @performance Claude 17/10/2026 Game logic parts and the slowest update module of the current frame.
@@ -172,6 +183,17 @@ namespace
 		"scene_terrain_ms",
 		"scene_objects_ms",
 		"scene_translucent_ms",
+		"terrain_base_ms",
+		"terrain_shore_ms",
+		"terrain_blend_ms",
+		"terrain_roads_ms",
+		"terrain_props_ms",
+		"terrain_scorch_ms",
+		"terrain_bridges_ms",
+		"terrain_tracks_ms",
+		"terrain_shroud_ms",
+		"terrain_bibs_ms",
+		"terrain_light_vb_ms",
 	};
 
 	void accumulate(Window &w, double frameMs)
@@ -184,6 +206,11 @@ namespace
 			++w.hitches;
 		w.pipelines += s_framePipelines;
 		w.pipelineMs += s_framePipelineMs;
+		for (Int i = 0; i < WAIT_KIND_COUNT; ++i)
+		{
+			w.waits[i] += s_frameWaits[i];
+			w.waitMs[i] += s_frameWaitMs[i];
+		}
 		for (Int i = 0; i < SECTION_COUNT; ++i)
 			w.sectionMs[i] += s_frameSectionMs[i];
 		w.drawCalls += s_frameCounters.drawCalls;
@@ -269,6 +296,14 @@ namespace
 		// GeneralsX @performance Claude 17/10/2026 DXVK pipelines created for draws over the window.
 		if (s_pipelineTotalsSource != nullptr)
 			fprintf(stderr, " pipelines=%llu (%.0f ms)", (unsigned long long)w.pipelines, w.pipelineMs);
+		// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer, per frame.
+		if (s_waitTotalsSource != nullptr)
+		{
+			fprintf(stderr, " | waits_ms buffer=%.2f texture=%.2f other=%.2f cs=%.2f (per frame %.1f/%.1f/%.1f/%.1f)",
+				avg(w.waitMs[WAIT_BUFFER], n), avg(w.waitMs[WAIT_TEXTURE], n), avg(w.waitMs[WAIT_OTHER], n),
+				avg(w.waitMs[WAIT_CS], n), avg((double)w.waits[WAIT_BUFFER], n), avg((double)w.waits[WAIT_TEXTURE], n),
+				avg((double)w.waits[WAIT_OTHER], n), avg((double)w.waits[WAIT_CS], n));
+		}
 		fprintf(stderr, "\n");
 		fflush(stderr);
 	}
@@ -329,6 +364,28 @@ namespace
 			s_frameShadersCreated, s_frameDrawablesCreated,
 			s_framePipelines, s_framePipelineMs, s_frameFullCompiles, s_frameFFShaders,
 			s_frameCounters.drawCalls, (double)s_frameCounters.triangles / 1000.0, s_frameCounters.particles);
+		// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer and the parts of a slow terrain.
+		if (s_waitTotalsSource != nullptr)
+		{
+			fprintf(stderr,
+				"[PERF] hitch waits logic_frame=%u | buffer=%u (%.1f ms) texture=%u (%.1f ms) other=%u (%.1f ms) cs=%u (%.1f ms)"
+				" | slowest %.1f ms: %s\n",
+				logicFrame, s_frameWaits[WAIT_BUFFER], s_frameWaitMs[WAIT_BUFFER], s_frameWaits[WAIT_TEXTURE],
+				s_frameWaitMs[WAIT_TEXTURE], s_frameWaits[WAIT_OTHER], s_frameWaitMs[WAIT_OTHER], s_frameWaits[WAIT_CS],
+				s_frameWaitMs[WAIT_CS], s_frameSlowestWaitMs, s_frameSlowestWait);
+		}
+		if (s_frameSectionMs[SECTION_SCENE_TERRAIN] >= HitchLogicMs)
+		{
+			fprintf(stderr,
+				"[PERF] hitch terrain logic_frame=%u | base=%.1f shore=%.1f blend=%.1f roads=%.1f props=%.1f scorch=%.1f"
+				" bridges=%.1f tracks=%.1f shroud=%.1f bibs=%.1f | light_vb=%.1f\n",
+				logicFrame, s_frameSectionMs[SECTION_TERRAIN_BASE], s_frameSectionMs[SECTION_TERRAIN_SHORE],
+				s_frameSectionMs[SECTION_TERRAIN_BLEND], s_frameSectionMs[SECTION_TERRAIN_ROADS],
+				s_frameSectionMs[SECTION_TERRAIN_PROPS], s_frameSectionMs[SECTION_TERRAIN_SCORCH],
+				s_frameSectionMs[SECTION_TERRAIN_BRIDGES], s_frameSectionMs[SECTION_TERRAIN_TRACKS],
+				s_frameSectionMs[SECTION_TERRAIN_SHROUD], s_frameSectionMs[SECTION_TERRAIN_BIBS],
+				s_frameSectionMs[SECTION_TERRAIN_LIGHT_VB]);
+		}
 		// GeneralsX @performance Claude 17/10/2026 Where a slow game logic frame went.
 		if (s_frameSectionMs[SECTION_LOGIC] >= HitchLogicMs)
 		{
@@ -341,10 +398,11 @@ namespace
 					- s_frameLogicMs[LOGIC_OBJECTS] - s_frameLogicMs[LOGIC_AI] - s_frameLogicMs[LOGIC_PARTITION],
 				s_frameSlowestUpdateMs, s_frameSlowestThing, s_frameSlowestModule);
 			fprintf(stderr,
-				"[PERF] hitch ai logic_frame=%u | zones=%.1f paths=%.1f (%u paths, %d cells, slowest %.1f ms %d cells: %s)"
-				" players=%.1f\n",
+				"[PERF] hitch ai logic_frame=%u | zones=%.1f paths=%.1f (%u paths, %d cells, %u open list steps, slowest %.1f ms"
+				" %d cells: %s) players=%.1f\n",
 				logicFrame, s_frameLogicMs[LOGIC_AI_ZONES], s_frameLogicMs[LOGIC_AI_PATHS], s_framePaths, s_framePathCells,
-				s_frameSlowestPathMs, s_frameSlowestPathCells, s_frameSlowestPathThing, s_frameLogicMs[LOGIC_AI_PLAYERS]);
+				s_frameOpenListSteps, s_frameSlowestPathMs, s_frameSlowestPathCells, s_frameSlowestPathThing,
+				s_frameLogicMs[LOGIC_AI_PLAYERS]);
 		}
 		fflush(stderr);
 	}
@@ -361,6 +419,24 @@ namespace
 		s_frameTextureLoadMs = ms - s_lastTextureLoadMsTotal;
 		s_lastTextureLoadTotal = loads;
 		s_lastTextureLoadMsTotal = ms;
+	}
+
+	// GeneralsX @performance Claude 17/10/2026 Turns the renderer's running wait totals into this frame's counts.
+	void readWaitTotals()
+	{
+		if (s_waitTotalsSource == nullptr)
+			return;
+		WaitTotals totals;
+		memset(&totals, 0, sizeof(totals));
+		s_waitTotalsSource(totals);
+		for (Int i = 0; i < WAIT_KIND_COUNT; ++i)
+		{
+			s_frameWaits[i] = totals.waits[i] - s_lastWaitTotals.waits[i];
+			s_frameWaitMs[i] = totals.waitMs[i] - s_lastWaitTotals.waitMs[i];
+		}
+		s_frameSlowestWaitMs = totals.slowestMs;
+		snprintf(s_frameSlowestWait, sizeof(s_frameSlowestWait), "%s", totals.slowest);
+		s_lastWaitTotals = totals;
 	}
 
 	// GeneralsX @performance Claude 17/10/2026 Turns DXVK's running pipeline totals into this frame's counts.
@@ -537,6 +613,19 @@ void setPipelineTotalsSource(PipelineTotalsSource source)
 		source(s_lastPipelineTotal, s_lastFullCompileTotal, s_lastFFShaderTotal, s_lastPipelineMsTotal);
 }
 
+void setWaitTotalsSource(WaitTotalsSource source)
+{
+	s_waitTotalsSource = source;
+	memset(&s_lastWaitTotals, 0, sizeof(s_lastWaitTotals));
+	if (source != nullptr)
+		source(s_lastWaitTotals);
+}
+
+void addOpenListSteps(UnsignedInt steps)
+{
+	s_frameOpenListSteps += steps;
+}
+
 void markLoadFrame()
 {
 	s_loadFrame = TRUE;
@@ -671,6 +760,7 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 
 	readLoadTotals();
 	readPipelineTotals();
+	readWaitTotals();
 
 	// GeneralsX @performance Claude 17/10/2026 A map load runs inside one main loop iteration behind the load screen.
 	// Print what it loaded and created, and start the summaries after it, so that the match frames stay separate.
@@ -744,6 +834,7 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_framePaths = 0;
 	s_framePathCells = 0;
 	s_frameSlowestPathMs = 0.0;
+	s_frameOpenListSteps = 0;
 	s_frameSlowestPathCells = 0;
 	s_frameSlowestPathThing[0] = '\0';
 }
