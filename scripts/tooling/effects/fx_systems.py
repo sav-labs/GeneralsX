@@ -89,15 +89,9 @@ SYSTEMS = {
     # Dust ring racing out along the ground, fast at first and slowing as it thins.
     "GXTankBlastShockwave": system(
         ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
-        Lifetime=(22, 22), Size=(10, 10), SizeRate=(14, 14), SizeRateDamping=(0.84, 0.84),
-        Alpha=[(1.0, 1.0, 0), (0.7, 0.7, 8), (0.0, 0.0, 22)],
+        Lifetime=(18, 18), Size=(8, 8), SizeRate=(9, 9), SizeRateDamping=(0.82, 0.82),
+        Alpha=[(0.55, 0.55, 0), (0.35, 0.35, 7), (0.0, 0.0, 18)],
         Color=[((215, 196, 160), 0)],
-        BurstCount=(1, 1)),
-    # Hot pressure front: a short orange ring just ahead of the dust.
-    "GXTankBlastHeatRing": system(
-        Shader="ADDITIVE", ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
-        Lifetime=(9, 9), Size=(8, 8), SizeRate=(16, 16), SizeRateDamping=(0.82, 0.82),
-        Color=[((200, 120, 50), 0), ((90, 40, 10), 5), ((0, 0, 0), 9)],
         BurstCount=(1, 1)),
     # Brown dust thrown up and outwards around the hull.
     "GXTankBlastDust": system(
@@ -414,7 +408,6 @@ FXLISTS = {
             ("GXTankBlastFireball", (0, 0, 8)),
             ("GXTankBlastSecondary", (0, 0, 8)),
             ("GXTankBlastShockwave", (0, 0, 1)),
-            ("GXTankBlastHeatRing", (0, 0, 1)),
             ("GXTankBlastDust", (0, 0, 2)),
             ("GXTankBlastEmbers", (0, 0, 6)),
             ("GXTankBlastSparks", (0, 0, 5)),

@@ -243,14 +243,14 @@ def streak(size=128):
 
 
 def shockwave(size=512, seed=505):
-    """Ground-aligned dust ring; alpha blended, brightest at the leading edge."""
+    """Ground-aligned dust ring; alpha blended, a thin soft band at the leading edge."""
     noise = Noise3(seed)
     u, v = _grid(size)
     r = np.sqrt(u * u + v * v)
     a = np.arctan2(v, u)
     n = noise.fbm(np.cos(a) * 3 + 5, np.sin(a) * 3 + 5, r * 6, 5)
     edge = 0.86 + (n - 0.5) * 0.12
-    ring = _smooth(edge - 0.42, edge - 0.02, r) * _smooth(edge + 0.06, edge - 0.01, r)
+    ring = (_smooth(edge - 0.16, edge - 0.02, r) ** 2) * _smooth(edge + 0.06, edge - 0.01, r)
     ring *= 0.6 + 0.8 * n
     rgb = np.broadcast_to(np.array([0.78, 0.70, 0.58]), r.shape + (3,)) * (0.7 + 0.5 * n)[..., None]
     return np.dstack([rgb, np.clip(ring, 0, 1)])
