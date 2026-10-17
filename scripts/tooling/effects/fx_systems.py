@@ -55,6 +55,13 @@ def system(**fields):
 SYSTEMS = {
     # ---- Tank death explosion (FX_GenericTankDeathExplosion) ----------------------------------
     # Bright flash that lights everything for a few frames.
+    # Retail NukeCannonFlare (Nuke Cannon shell and its death blast) grew a near-white additive flare to
+    # about 200 units for 5 s, blowing out half the screen. A brief warm flash instead.
+    "NukeCannonFlare": system(
+        Priority="CRITICAL", Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
+        Lifetime=(36, 36), Size=(30, 30), SizeRate=(4, 4), SizeRateDamping=(0.85, 0.85),
+        Color=[((215, 160, 95), 0), ((150, 70, 20), 8), ((0, 0, 0), 36)],
+        BurstCount=(1, 1), AngleZ=(0, 6.28)),
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
         Lifetime=(6, 6), Size=(24, 24), SizeRate=(2, 2), SizeRateDamping=(0.7, 0.7),
