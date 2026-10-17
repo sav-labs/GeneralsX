@@ -442,6 +442,35 @@ SYSTEMS.update({
 })
 
 
+# Tomahawk missile trail. Retail grew each exhaust puff to about 50 units and spawned five white
+# lens flares a frame growing to 50 units; when the missile climbs past the camera they fill the
+# screen with a white glare and grey haze. Same names, so the missile and its weapon stay retail.
+def _missile_trail(slave):
+    return system(
+        Priority="WEAPON_TRAIL", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        SlaveSystem=slave,
+        Lifetime=(45, 55), Size=(1.5, 2.2), SizeRate=(0.35, 0.45), SizeRateDamping=(0.95, 0.96),
+        Alpha=[(0.0, 0.0, 0), (0.55, 0.55, 3), (0.25, 0.25, 25), (0.0, 0.0, 55)],
+        Color=[((200, 150, 110), 0), ((205, 202, 198), 8)],
+        BurstDelay=(1, 1), BurstCount=(1, 1), SystemLifetime=0,
+        DriftVelocity=(0.0, 0.0, 0.03))
+
+
+def _missile_flame():
+    return system(
+        Priority="WEAPON_TRAIL", Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
+        Lifetime=(3, 3), Size=(2.0, 2.6), Color=[((255, 236, 200), 0), ((255, 120, 40), 2), ((0, 0, 0), 3)],
+        BurstDelay=(0, 0), BurstCount=(1, 1), SystemLifetime=0)
+
+
+SYSTEMS.update({
+    "TomahawkMissileExhaust": _missile_trail("TomahawkMissileExhaustLenzflare"),
+    "HeroicTomahawkMissileExhaust": _missile_trail("HeroicTomahawkMissileExhaustLenzflare"),
+    "TomahawkMissileExhaustLenzflare": _missile_flame(),
+    "HeroicTomahawkMissileExhaustLenzflare": _missile_flame(),
+})
+
+
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {
     "FX_GenericTankDeathExplosion": {
@@ -491,6 +520,8 @@ def write_system(name, s):
     out = ["ParticleSystem %s" % name]
     for key in ("Priority", "IsOneShot", "Shader", "Type", "ParticleName"):
         out.append("  %s = %s" % (key, s[key]))
+    if s.get("SlaveSystem"):
+        out.append("  SlaveSystem = %s" % s["SlaveSystem"])
     for key in ("AngleZ", "AngularRateZ", "AngularDamping", "VelocityDamping"):
         out.append("  %s = %s" % (key, _pair(s[key])))
     out.append("  Gravity = %.3f" % s["Gravity"])
