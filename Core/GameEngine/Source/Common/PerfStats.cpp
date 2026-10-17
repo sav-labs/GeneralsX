@@ -163,6 +163,10 @@ namespace
 		"skinned_shadows_ms",
 		"lights_ms",
 		"water_reflection_ms",
+		"scene_visibility_ms",
+		"scene_terrain_ms",
+		"scene_objects_ms",
+		"scene_translucent_ms",
 	};
 
 	void accumulate(Window &w, double frameMs)
@@ -299,7 +303,8 @@ namespace
 		fprintf(stderr,
 			"[PERF] %s frame_ms=%.1f %s logic_frame=%u"
 			" | logic=%.1f client=%.1f (drawables=%.1f particles=%.1f draw=%.1f: targets=%.1f scene=%.1f"
-			" [meshes=%.1f shadows=%.1f particles=%.1f] present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
+			" [meshes=%.1f shadows=%.1f particles=%.1f vis=%.1f terrain=%.1f objects=%.1f translucent=%.1f]"
+			" present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
 			" untracked=%.1f"
 			" | texloads=%u (%.1f ms) modelloads=%u (%.1f ms) shaders=%u drawables=%u"
 			" pipelines=%u (%.1f ms, %u full) ffshaders=%u"
@@ -310,6 +315,8 @@ namespace
 			s_frameSectionMs[SECTION_DRAW], s_frameSectionMs[SECTION_RENDER_TARGETS],
 			s_frameSectionMs[SECTION_SCENE], s_frameSectionMs[SECTION_MESH_FLUSH],
 			s_frameSectionMs[SECTION_SHADOWS], s_frameSectionMs[SECTION_PARTICLE_RENDER],
+			s_frameSectionMs[SECTION_SCENE_VISIBILITY], s_frameSectionMs[SECTION_SCENE_TERRAIN],
+			s_frameSectionMs[SECTION_SCENE_OBJECTS], s_frameSectionMs[SECTION_SCENE_TRANSLUCENT],
 			s_frameSectionMs[SECTION_PRESENT], s_frameSectionMs[SECTION_WATER_REFLECTION],
 			s_frameSectionMs[SECTION_EFFECT_LIGHTS], s_frameSectionMs[SECTION_SKINNED_SHADOWS],
 			frameMs - s_frameSectionMs[SECTION_LOGIC] - s_frameSectionMs[SECTION_CLIENT],

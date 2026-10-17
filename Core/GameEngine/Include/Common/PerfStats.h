@@ -53,6 +53,12 @@ namespace PerfStats
 		SECTION_EFFECT_LIGHTS,    ///< W3DEffectLights update and terrain light splats
 		// GeneralsX @feature Claude 16/10/2026 Reflection pass of the water effects; overlaps render_targets.
 		SECTION_WATER_REFLECTION, ///< WaterRenderObjClass::renderWaterReflection
+		// GeneralsX @performance Claude 17/10/2026 Parts of the scene, for the hitch line; overlap scene (and the
+		// mirror passes of render_targets).
+		SECTION_SCENE_VISIBILITY, ///< RTS3DScene::Visibility_Check
+		SECTION_SCENE_TERRAIN,    ///< Terrain render object
+		SECTION_SCENE_OBJECTS,    ///< Object submission, including the delayed (occluded) objects
+		SECTION_SCENE_TRANSLUCENT,///< RTS3DScene::flushTranslucentObjects
 		SECTION_COUNT
 	};
 
