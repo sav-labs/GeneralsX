@@ -189,9 +189,6 @@ public:
 	// GeneralsX @performance Claude 16/10/2026 Creates the GPU textures of everything loaded so far, so that the
 	// first sight of a preloaded model does not load its textures in the middle of a frame.
 	virtual Int createPreloadedTextures() = 0;	///< returns how many textures were created
-	// GeneralsX @performance Claude 17/10/2026 Renders the 3D scene of the match this many times behind the load screen
-	// without presenting it, so that its first match frames do not upload textures or compile GPU pipelines.
-	virtual Int warmUpRender(Int passes) { return 0; }	///< returns how many passes were rendered
 
 	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence
