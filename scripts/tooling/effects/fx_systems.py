@@ -231,8 +231,8 @@ def _structure_dust(count, size, rate, speed, radius, length, gravity):
     return system(
         ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
         Lifetime=(150, 200), Size=size, SizeRate=rate, SizeRateDamping=(0.95, 0.96),
-        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 8), (0.5, 0.5, 90), (0.0, 0.0, 200)],
-        Color=[((240, 236, 230), 0), ((226, 220, 210), 60)],
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 8), (0.35, 0.35, 90), (0.0, 0.0, 200)],
+        Color=[((190, 180, 166), 0), ((176, 168, 156), 60)],
         BurstDelay=(99999, 99999), BurstCount=count, SystemLifetime=20,
         Gravity=gravity * 0.1, VelocityDamping=(0.88, 0.9),
         VelocityType="OUTWARD", VelOutward=speed, VelOutwardOther=(0.0, 0.3),
@@ -243,13 +243,13 @@ def _structure_dust(count, size, rate, speed, radius, length, gravity):
 # drops to damaged or badly damaged. Same names, counts and extents as retail.
 SYSTEMS.update({
     "StructureTransitionTinyExplosion": _structure_blast((2, 3), (14, 20), (0.8, 1.2), 2.0),
-    "StructureTransitionSmallExplosion": _structure_blast((4, 5), (26, 36), (1.6, 2.4), 5.0),
-    "StructureTransitionMediumExplosion": _structure_blast((7, 10), (30, 42), (3.0, 4.5), 15.0),
-    "StructureTransitionLargeExplosion": _structure_blast((10, 14), (34, 48), (4.0, 6.0), 30.0),
-    "StructureTransitionTinySmoke": _structure_dust((5, 5), (8, 12), (0.6, 0.9), (1.0, 2.0), 1.0, 0.0, 0.1),
-    "StructureTransitionSmallSmoke": _structure_dust((15, 15), (18, 26), (1.0, 1.5), (3.0, 4.5), 10.0, 0.0, 0.25),
-    "StructureTransitionMediumSmoke": _structure_dust((15, 15), (20, 30), (1.6, 2.4), (3.0, 4.5), 30.0, 0.0, 0.0),
-    "StructureTransitionLargeSmoke": _structure_dust((30, 30), (22, 32), (2.0, 3.0), (3.0, 4.5), 50.0, 25.0, 0.2),
+    "StructureTransitionSmallExplosion": _structure_blast((4, 5), (22, 30), (1.6, 2.4), 5.0),
+    "StructureTransitionMediumExplosion": _structure_blast((6, 8), (24, 32), (3.0, 4.5), 15.0),
+    "StructureTransitionLargeExplosion": _structure_blast((8, 10), (26, 36), (4.0, 6.0), 30.0),
+    "StructureTransitionTinySmoke": _structure_dust((5, 5), (8, 12), (0.3, 0.45), (1.0, 2.0), 1.0, 0.0, 0.1),
+    "StructureTransitionSmallSmoke": _structure_dust((15, 15), (14, 20), (0.4, 0.6), (3.0, 4.5), 10.0, 0.0, 0.25),
+    "StructureTransitionMediumSmoke": _structure_dust((15, 15), (16, 22), (0.5, 0.8), (3.0, 4.5), 30.0, 0.0, 0.0),
+    "StructureTransitionLargeSmoke": _structure_dust((24, 24), (18, 24), (0.6, 0.9), (3.0, 4.5), 50.0, 25.0, 0.2),
 })
 
 # Gun fire and shell impacts: retail systems behind WeaponFX_GenericTankGunNoTracer (most tank guns)
