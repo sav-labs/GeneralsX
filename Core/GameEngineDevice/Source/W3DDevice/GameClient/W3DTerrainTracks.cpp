@@ -833,7 +833,10 @@ Try improving the fit to vertical surfaces like cliffs.
 	//check if there is anything to draw and fill vertex buffer
 	if (m_edgesToFlush >= 2)
 	{
-		DX8VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexBuffer);
+		// GeneralsX @performance Claude 17/10/2026 The whole buffer is refilled every frame: discard it instead of
+		// locking the copy the GPU still draws from, which made DXVK wait for the GPU in every frame with tracks
+		// (18 ms per frame on the 780M, 52 ms in a battle frame).
+		DX8VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexBuffer, D3DLOCK_DISCARD);
 		VertexFormatXYZDUV1 *verts = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
 		trackStartIndex=0;
 
