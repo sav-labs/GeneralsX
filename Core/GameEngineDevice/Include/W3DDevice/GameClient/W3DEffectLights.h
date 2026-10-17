@@ -42,6 +42,8 @@
 #include <map>
 
 class CameraClass;
+class LightEnvironmentClass;
+class SphereClass;
 class ParticleSystem;
 class RTS3DScene;
 class TextureClass;
@@ -74,6 +76,12 @@ public:
 	void drawTerrainSplats(WorldHeightMap &map);
 
 	Int getMode() const { return m_mode; }
+
+	// GeneralsX @bugfix Claude 17/10/2026 Night hulls washed out white next to hits and muzzle flashes.
+	/// Adds the enabled dynamic lights of the scene (effect lights and retail LightPulse lights) that reach a model
+	/// to its light environment. Their light at the model together stays below MAX_MODEL_DYNAMIC_LIGHT: when several
+	/// flashes overlap on one model, all of them are scaled down for that model.
+	static void addModelDynamicLights(LightEnvironmentClass &env, const SphereClass &bounds, RTS3DScene &scene);
 
 private:
 	enum

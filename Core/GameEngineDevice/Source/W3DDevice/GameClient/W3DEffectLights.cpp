@@ -40,6 +40,8 @@
 #include "WW3D2/dx8indexbuffer.h"
 #include "WW3D2/dx8vertexbuffer.h"
 #include "WW3D2/dx8wrapper.h"
+#include "WW3D2/lightenvironment.h"
+#include "WW3D2/robjlist.h"
 #include "WW3D2/texture.h"
 #include "WW3D2/vertmaterial.h"
 #include "WWMath/sphere.h"
@@ -104,6 +106,12 @@ namespace
 	/// Share of an effect light that lights a whole nearby model evenly (WW3D folds a point light's ambient into
 	/// the model's ambient): small, or night buildings turn uniformly yellow.
 	const Real AMBIENT_FRACTION = 0.12f;
+	// GeneralsX @bugfix Claude 17/10/2026 Several flashes at one burning tank each lit the hull up to MAX_OBJECT_LIGHT
+	// and the fixed function lighting adds them up, so night hulls went flat white (fx-night15, fx-night17).
+	/// Light all dynamic lights together give one model at most (brightest channel, at the model's nearest point).
+	const Real MAX_MODEL_DYNAMIC_LIGHT = 0.6f;
+	/// Dynamic lights considered per model.
+	const Int MAX_MODEL_DYNAMIC_LIGHTS = 32;
 	/// Ground light a splat adds at its centre, absolute, per channel.
 	const Real MAX_SPLAT_ADD = 0.3f;
 	/// The ground is brightened at most 1 + this many times at a splat's centre.
@@ -994,4 +1002,68 @@ void W3DEffectLights::drawTerrainSplats(WorldHeightMap &map)
 	REF_PTR_RELEASE(material);
 	DX8Wrapper::Set_Texture(0, nullptr);
 	ShaderClass::Invalidate();
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 17/10/2026 Dynamic lights of one model, with a cap on their sum.
+// The fixed function point lights fade as 1 / (1 + 6 d^2 / r^2) (DX8Wrapper, enhanced falloff), so the light a
+// model gets is estimated at its point nearest to each light. Lights only change how a model is drawn: no logic or
+// CRC impact.
+//-------------------------------------------------------------------------------------------------
+void W3DEffectLights::addModelDynamicLights(LightEnvironmentClass &env, const SphereClass &bounds, RTS3DScene &scene)
+{
+	W3DDynamicLight *reaching[MAX_MODEL_DYNAMIC_LIGHTS];
+	Int count = 0;
+	Real total = 0.0f;
+
+	RefRenderObjListIterator it(scene.getDynamicLights());
+	for (it.First(); !it.Is_Done() && count < MAX_MODEL_DYNAMIC_LIGHTS; it.Next())
+	{
+		W3DDynamicLight *light = (W3DDynamicLight *)it.Peek_Obj();
+		if (!light->isEnabled())
+			continue;
+		if (light->Get_Type() == LightClass::POINT && !Spheres_Intersect(bounds, light->Get_Bounding_Sphere()))
+			continue;
+		reaching[count++] = light;
+
+		Vector3 diffuse;
+		light->Get_Diffuse(&diffuse);
+		Real peak = diffuse.X > diffuse.Y ? diffuse.X : diffuse.Y;
+		if (diffuse.Z > peak)
+			peak = diffuse.Z;
+		peak *= light->Get_Intensity();
+		if (light->Get_Type() == LightClass::POINT)
+		{
+			double start, end;
+			light->Get_Far_Attenuation_Range(start, end);
+			Real dist = (light->Get_Position() - bounds.Center).Length() - bounds.Radius;
+			if (dist < 0.0f)
+				dist = 0.0f;
+			if (end > 1e-5)
+				peak /= 1.0f + 6.0f * dist * dist / (Real)(end * end);
+		}
+		total += peak;
+	}
+
+	if (total <= MAX_MODEL_DYNAMIC_LIGHT)
+	{
+		for (Int i = 0; i < count; ++i)
+			env.Add_Light(*reaching[i]);
+		return;
+	}
+
+	// LightEnvironmentClass copies the colours, so the lights are dimmed for this model only and restored
+	const Real scale = MAX_MODEL_DYNAMIC_LIGHT / total;
+	for (Int i = 0; i < count; ++i)
+	{
+		W3DDynamicLight *light = reaching[i];
+		Vector3 diffuse, ambient;
+		light->Get_Diffuse(&diffuse);
+		light->Get_Ambient(&ambient);
+		light->Set_Diffuse(diffuse * scale);
+		light->Set_Ambient(ambient * scale);
+		env.Add_Light(*light);
+		light->Set_Diffuse(diffuse);
+		light->Set_Ambient(ambient);
+	}
 }

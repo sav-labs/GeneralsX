@@ -50,6 +50,7 @@
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "W3DDevice/GameClient/W3DEffectLights.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
@@ -758,19 +759,8 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 		}
 
 		// dynamic lights
-		RefRenderObjListIterator dynaLightIt(&m_dynamicLightList);
-		for (dynaLightIt.First(); !dynaLightIt.Is_Done(); dynaLightIt.Next())
-		{
-			W3DDynamicLight* pDyna = (W3DDynamicLight*)dynaLightIt.Peek_Obj();
-			if (!pDyna->isEnabled()) {
-				continue;
-			}
-			SphereClass lSph = pDyna->Get_Bounding_Sphere();
-			if (pDyna->Get_Type() == LightClass::POINT && !Spheres_Intersect(sph, lSph)) {
-				continue;
-			}
-			lightEnv.Add_Light(*(LightClass*)dynaLightIt.Peek_Obj());
-		}
+		// GeneralsX @bugfix Claude 17/10/2026 Overlapping flashes are capped per model (W3DEffectLights).
+		W3DEffectLights::addModelDynamicLights(lightEnv, sph, *this);
 
 		lightEnv.Pre_Render_Update(rinfo.Camera.Get_Transform());
 		rinfo.light_environment = &lightEnv;
