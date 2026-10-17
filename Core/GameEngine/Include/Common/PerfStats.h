@@ -53,6 +53,12 @@ namespace PerfStats
 		SECTION_EFFECT_LIGHTS,    ///< W3DEffectLights update and terrain light splats
 		// GeneralsX @feature Claude 16/10/2026 Reflection pass of the water effects; overlaps render_targets.
 		SECTION_WATER_REFLECTION, ///< WaterRenderObjClass::renderWaterReflection
+		// GeneralsX @performance Claude 17/10/2026 Parts of the scene, for the hitch line; overlap scene (and the
+		// mirror passes of render_targets).
+		SECTION_SCENE_VISIBILITY, ///< RTS3DScene::Visibility_Check
+		SECTION_SCENE_TERRAIN,    ///< Terrain render object
+		SECTION_SCENE_OBJECTS,    ///< Object submission, including the delayed (occluded) objects
+		SECTION_SCENE_TRANSLUCENT,///< RTS3DScene::flushTranslucentObjects
 		SECTION_COUNT
 	};
 
@@ -134,6 +140,10 @@ namespace PerfStats
 		LOGIC_OBJECTS,    ///< Object update modules
 		LOGIC_AI,         ///< TheAI->update() (pathfinding queue, AI players)
 		LOGIC_PARTITION,  ///< ThePartitionManager->update()
+		// GeneralsX @performance Claude 17/10/2026 Parts of LOGIC_AI.
+		LOGIC_AI_ZONES,   ///< Pathfinder zone recalculation
+		LOGIC_AI_PATHS,   ///< Queued pathfind requests
+		LOGIC_AI_PLAYERS, ///< ThePlayerList->update() (AI players, teams)
 		LOGIC_PART_COUNT
 	};
 	const double HitchLogicMs = 20.0;
@@ -142,6 +152,9 @@ namespace PerfStats
 	/// then names it with setSlowestLogicUpdate (thing template and module), so names are only built when needed.
 	Bool isSlowestLogicUpdate(double ms);
 	void setSlowestLogicUpdate(double ms, const char *thing, const char *module);
+	/// One queued pathfind request took this long and examined this many cells; counted per frame, the slowest
+	/// is named in the hitch logic line.
+	void addPathfind(double ms, Int cells, const char *thing);
 
 	/// Called once per main loop iteration.
 	void endFrame(Bool inMatch, UnsignedInt logicFrame);

@@ -136,6 +136,11 @@ namespace
 	double s_frameSlowestUpdateMs = 0.0;
 	char s_frameSlowestThing[64];
 	char s_frameSlowestModule[64];
+	UnsignedInt s_framePaths = 0;
+	Int s_framePathCells = 0;
+	double s_frameSlowestPathMs = 0.0;
+	Int s_frameSlowestPathCells = 0;
+	char s_frameSlowestPathThing[64];
 
 	Window s_interval;
 	Window s_overlay;
@@ -163,6 +168,10 @@ namespace
 		"skinned_shadows_ms",
 		"lights_ms",
 		"water_reflection_ms",
+		"scene_visibility_ms",
+		"scene_terrain_ms",
+		"scene_objects_ms",
+		"scene_translucent_ms",
 	};
 
 	void accumulate(Window &w, double frameMs)
@@ -299,7 +308,8 @@ namespace
 		fprintf(stderr,
 			"[PERF] %s frame_ms=%.1f %s logic_frame=%u"
 			" | logic=%.1f client=%.1f (drawables=%.1f particles=%.1f draw=%.1f: targets=%.1f scene=%.1f"
-			" [meshes=%.1f shadows=%.1f particles=%.1f] present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
+			" [meshes=%.1f shadows=%.1f particles=%.1f vis=%.1f terrain=%.1f objects=%.1f translucent=%.1f]"
+			" present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
 			" untracked=%.1f"
 			" | texloads=%u (%.1f ms) modelloads=%u (%.1f ms) shaders=%u drawables=%u"
 			" pipelines=%u (%.1f ms, %u full) ffshaders=%u"
@@ -310,6 +320,8 @@ namespace
 			s_frameSectionMs[SECTION_DRAW], s_frameSectionMs[SECTION_RENDER_TARGETS],
 			s_frameSectionMs[SECTION_SCENE], s_frameSectionMs[SECTION_MESH_FLUSH],
 			s_frameSectionMs[SECTION_SHADOWS], s_frameSectionMs[SECTION_PARTICLE_RENDER],
+			s_frameSectionMs[SECTION_SCENE_VISIBILITY], s_frameSectionMs[SECTION_SCENE_TERRAIN],
+			s_frameSectionMs[SECTION_SCENE_OBJECTS], s_frameSectionMs[SECTION_SCENE_TRANSLUCENT],
 			s_frameSectionMs[SECTION_PRESENT], s_frameSectionMs[SECTION_WATER_REFLECTION],
 			s_frameSectionMs[SECTION_EFFECT_LIGHTS], s_frameSectionMs[SECTION_SKINNED_SHADOWS],
 			frameMs - s_frameSectionMs[SECTION_LOGIC] - s_frameSectionMs[SECTION_CLIENT],
@@ -328,6 +340,11 @@ namespace
 				s_frameSectionMs[SECTION_LOGIC] - s_frameLogicMs[LOGIC_SCRIPTS] - s_frameLogicMs[LOGIC_TERRAIN]
 					- s_frameLogicMs[LOGIC_OBJECTS] - s_frameLogicMs[LOGIC_AI] - s_frameLogicMs[LOGIC_PARTITION],
 				s_frameSlowestUpdateMs, s_frameSlowestThing, s_frameSlowestModule);
+			fprintf(stderr,
+				"[PERF] hitch ai logic_frame=%u | zones=%.1f paths=%.1f (%u paths, %d cells, slowest %.1f ms %d cells: %s)"
+				" players=%.1f\n",
+				logicFrame, s_frameLogicMs[LOGIC_AI_ZONES], s_frameLogicMs[LOGIC_AI_PATHS], s_framePaths, s_framePathCells,
+				s_frameSlowestPathMs, s_frameSlowestPathCells, s_frameSlowestPathThing, s_frameLogicMs[LOGIC_AI_PLAYERS]);
 		}
 		fflush(stderr);
 	}
@@ -625,6 +642,20 @@ void setSlowestLogicUpdate(double ms, const char *thing, const char *module)
 	snprintf(s_frameSlowestModule, sizeof(s_frameSlowestModule), "%s", module != nullptr ? module : "");
 }
 
+void addPathfind(double ms, Int cells, const char *thing)
+{
+	if (!s_enabled)
+		return;
+	++s_framePaths;
+	s_framePathCells += cells;
+	if (ms > s_frameSlowestPathMs)
+	{
+		s_frameSlowestPathMs = ms;
+		s_frameSlowestPathCells = cells;
+		snprintf(s_frameSlowestPathThing, sizeof(s_frameSlowestPathThing), "%s", thing != nullptr ? thing : "");
+	}
+}
+
 void endFrame(Bool inMatch, UnsignedInt logicFrame)
 {
 	if (!s_enabled)
@@ -710,6 +741,11 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_frameSlowestUpdateMs = 0.0;
 	s_frameSlowestThing[0] = '\0';
 	s_frameSlowestModule[0] = '\0';
+	s_framePaths = 0;
+	s_framePathCells = 0;
+	s_frameSlowestPathMs = 0.0;
+	s_frameSlowestPathCells = 0;
+	s_frameSlowestPathThing[0] = '\0';
 }
 
 const char *getOverlayText()

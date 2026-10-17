@@ -884,10 +884,17 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	//draw all non-translucent objects which were separated because they are hidden and need custom rendering.
 #ifdef USE_NON_STENCIL_OCCLUSION
-	flushOccludedObjects(rinfo);
+	{
+		PERF_STATS_SCOPE(SECTION_SCENE_OBJECTS);
+		flushOccludedObjects(rinfo);
+	}
 #else
 	if (DX8Wrapper::Has_Stencil())
+	{
+		// GeneralsX @performance Claude 17/10/2026 Delayed objects count as object submission.
+		PERF_STATS_SCOPE(SECTION_SCENE_OBJECTS);
 		flushOccludedObjectsIntoStencil(rinfo);
+	}
 #endif
 
 	// (gth) CNC3 Flush the shader meshes
@@ -922,7 +929,10 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		// while FSR 2 is active (render state 251), other drivers never see the state. Render only.
 		if (!mirrorPass)
 			W3DUpscaler::markOpaqueScene();
-		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
+		{
+			PERF_STATS_SCOPE(SECTION_SCENE_TRANSLUCENT);
+			flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
+		}
 	}
 
 	{
@@ -1166,6 +1176,8 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 
    if (!Visibility_Checked) {
       // set the visibility bit in all render objects in all layers.
+	   // GeneralsX @performance Claude 17/10/2026 Scene parts for the [PERF] hitch line.
+	   PERF_STATS_SCOPE(SECTION_SCENE_VISIBILITY);
 	   Visibility_Check(&rinfo.Camera);
 #ifdef USE_NON_STENCIL_OCCLUSION
 	   flagOccludedObjects(&rinfo.Camera);
@@ -1188,6 +1200,9 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 		}
 	}
 
+	{
+	// GeneralsX @performance Claude 17/10/2026 Terrain time for the [PERF] hitch line.
+	PERF_STATS_SCOPE(SECTION_SCENE_TERRAIN);
 	//terrain needs to be rendered first
 	if (terrainObject)	// Don't check visibility - terrain is always visible. jba.
 	{
@@ -1209,6 +1224,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 		else
 		robj->Render(rinfo);
 	}
+	}
 
 	if (m_drawTerrainOnly) {
 		return;
@@ -1219,6 +1235,9 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 	}
 #endif
 
+	{
+	// GeneralsX @performance Claude 17/10/2026 Object submission time for the [PERF] hitch line.
+	PERF_STATS_SCOPE(SECTION_SCENE_OBJECTS);
 	// loop through all render objects in the list:
 	for (it.First(&RenderList); !it.Is_Done();)
 	{
@@ -1241,6 +1260,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 #endif
 				renderOneObject(rinfo, robj, localPlayerIndex);
 		}
+	}
 	}
 
 	//Tell shadow manager to render shadows at the end of this frame
