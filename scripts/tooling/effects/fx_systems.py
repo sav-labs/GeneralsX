@@ -62,6 +62,32 @@ SYSTEMS = {
         Lifetime=(36, 36), Size=(30, 30), SizeRate=(4, 4), SizeRateDamping=(0.85, 0.85),
         Color=[((215, 160, 95), 0), ((150, 70, 20), 8), ((0, 0, 0), 36)],
         BurstCount=(1, 1), AngleZ=(0, 6.28)),
+    # Retail Nuke Cannon mushroom: 50 additive puffs growing 10 units a frame (and a ring of 150 more)
+    # stacked into an orange blow-out over a quarter of the screen. Rebuilt from the baked fireball and
+    # smoke flipbooks: a rising fireball column that rolls over into a grey-brown cloud.
+    "NukeCannonMushroomExplosion": system(
+        Priority="CRITICAL", ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(80, 92), Size=(46, 58), SizeRate=(0.5, 0.7), SizeRateDamping=(0.985, 0.985),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 30), (0.45, 0.45, 46), (0.0, 0.0, 66)],
+        BurstDelay=(4, 4), BurstCount=(1, 2), SystemLifetime=24,
+        DriftVelocity=(0.0, 0.0, 0.45), VelocityDamping=(0.9, 0.9),
+        VelocityType="SPHERICAL", VelSpherical=(0.3, 0.8),
+        VolumeType="SPHERE", VolSphereRadius=10.0),
+    "NukeCannonMushroomRing": system(
+        Priority="CRITICAL", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.15, 0.15),
+        Lifetime=(150, 180), Size=(30, 40), SizeRate=(0.35, 0.5), SizeRateDamping=(0.99, 0.99),
+        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 20), (0.6, 0.6, 100), (0.0, 0.0, 180)],
+        Color=[((150, 136, 120), 0), ((190, 182, 172), 120)],
+        BurstDelay=(3, 3), BurstCount=(2, 2), SystemLifetime=15,
+        DriftVelocity=(0.1, 0.05, 0.25), VelocityDamping=(0.95, 0.95),
+        VelocityType="OUTWARD", VelOutward=(0.8, 1.4), VelOutwardOther=(0.0, 0.2),
+        VolumeType="SPHERE", VolSphereRadius=14.0, IsHollow="Yes"),
+    "NukeCannonBlastWave": system(
+        Priority="CRITICAL", ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
+        Lifetime=(24, 24), Size=(20, 20), SizeRate=(16, 16), SizeRateDamping=(0.85, 0.85),
+        Alpha=[(0.6, 0.6, 0), (0.35, 0.35, 10), (0.0, 0.0, 24)],
+        Color=[((215, 196, 160), 0)],
+        BurstCount=(1, 1)),
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
         Lifetime=(6, 6), Size=(24, 24), SizeRate=(2, 2), SizeRateDamping=(0.7, 0.7),
