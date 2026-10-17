@@ -1,7 +1,7 @@
 """Procedural particle textures for the GeneralsX effects pack (no third-party art).
 
 GeneralsX @feature Claude 16/10/2026 Flipbook atlases (fireball, smoke, flame, dust) and single
-sprites (flash, spark, shockwave ring, debris) generated from seeded 3D value noise, so every
+sprites (flash, spark, shockwave ring) generated from seeded 3D value noise, so every
 pixel is ours and the build is reproducible. Flipbooks are square grids of square frames read
 row by row from the top left, matching the FlipbookGrid particle field.
 """
@@ -244,29 +244,6 @@ def shockwave(size=512, seed=505):
     return np.dstack([rgb, np.clip(ring, 0, 1)])
 
 
-def debris(size=128, grid=2, seed=606):
-    """Charred metal fragments, one per frame; drawn with a random frame per particle."""
-    rng = np.random.default_rng(seed)
-    noise = Noise3(seed)
-    u, v = _grid(size)
-    frames = []
-    for i in range(grid * grid):
-        k = rng.integers(5, 9)
-        angles = np.sort(rng.uniform(0, 2 * np.pi, k))
-        radii = rng.uniform(0.45, 0.9, k)
-        a = np.arctan2(v, u) % (2 * np.pi)
-        r = np.sqrt(u * u + v * v)
-        edge = np.interp(a, np.concatenate([angles, angles[:1] + 2 * np.pi]),
-                         np.concatenate([radii, radii[:1]]), period=2 * np.pi)
-        mask = _smooth(edge, edge - 0.06, r)
-        n = noise.fbm(u * 4 + i * 3.7, v * 4, np.full_like(u, i * 1.3), 4)
-        glow = _smooth(0.62, 0.9, n) * _smooth(edge - 0.25, edge - 0.02, r)
-        metal = (0.10 + 0.20 * n)[..., None] * np.array([1.0, 0.95, 0.9])
-        rgb = metal + glow[..., None] * np.array([1.0, 0.42, 0.08])
-        frames.append(np.dstack([rgb, mask]))
-    return _atlas(frames, grid)
-
-
 def dust(size=256, grid=4, seed=707):
     """Brown ground dust thrown up by the blast."""
     return smoke(size, grid, seed, tint=(0.58, 0.50, 0.38), lit=0.7)
@@ -299,7 +276,6 @@ def baked_path(name):
 TEXTURES = {
     # name: (builder or None when baked, flipbook grid or 1)
     **{name: (None, grid) for name, (_, grid) in BAKED.items()},
-    "gxfx_debris.tga": (debris, 2),
     "gxfx_flash.tga": (flash, 1),
     "gxfx_spark.tga": (spark, 1),
     "gxfx_ring.tga": (shockwave, 1),

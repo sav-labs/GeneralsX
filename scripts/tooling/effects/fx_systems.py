@@ -71,7 +71,7 @@ SYSTEMS = {
         # The baked flipbook holds the whole blast (flash, fireball, burning-out, rolling smoke) over
         # 72 frames, so a few large overlapping copies play it once each.
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
-        Lifetime=(66, 78), Size=(36, 46), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
+        Lifetime=(66, 78), Size=(52, 64), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
         Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 56), (0.0, 0.0, 78)],
         Color=[((255, 255, 255), 0)],
         BurstCount=(3, 3), VelocityDamping=(0.85, 0.88), DriftVelocity=(0.0, 0.0, 0.12),
@@ -80,7 +80,7 @@ SYSTEMS = {
     # Smaller secondary blasts a moment later, as fuel and ammunition go off.
     "GXTankBlastSecondary": system(
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
-        Lifetime=(48, 58), Size=(16, 22), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
+        Lifetime=(48, 58), Size=(24, 30), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
         Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 40), (0.0, 0.0, 58)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
@@ -102,15 +102,6 @@ SYSTEMS = {
         BurstCount=(14, 14), VelocityDamping=(0.9, 0.92), Gravity=0.004,
         VelocityType="OUTWARD", VelOutward=(1.6, 2.8), VelOutwardOther=(0.1, 0.5),
         VolumeType="CYLINDER", VolCylinderRadius=8.0, VolCylinderLength=1.0, IsHollow="Yes"),
-    # Charred fragments flung out on arcs.
-    "GXTankBlastDebris": system(
-        ParticleName="gxfx_debris.tga", FlipbookGrid=2, FlipbookRandom="Yes",
-        Lifetime=(36, 46), Size=(2.5, 4.5), AngularRateZ=(-0.35, 0.35),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 34), (0.0, 0.0, 46)],
-        Color=[((255, 255, 255), 0)],
-        BurstCount=(18, 18), Gravity=-0.17, VelocityDamping=(0.99, 0.99),
-        VelocityType="OUTWARD", VelOutward=(1.2, 3.4), VelOutwardOther=(2.2, 4.4),
-        VolumeType="CYLINDER", VolCylinderRadius=5.0, VolCylinderLength=4.0),
     # Fast glowing embers.
     "GXTankBlastEmbers": system(
         Shader="ADDITIVE", ParticleName="gxfx_spark.tga",
@@ -405,7 +396,6 @@ FXLISTS = {
             ("GXTankBlastSecondary", (0, 0, 8)),
             ("GXTankBlastShockwave", (0, 0, 1)),
             ("GXTankBlastDust", (0, 0, 2)),
-            ("GXTankBlastDebris", (0, 0, 6)),
             ("GXTankBlastEmbers", (0, 0, 6)),
             ("GXTankBlastSmoke", (0, 0, 12)),
             ("GXWreckFire", (0, 0, 6)),
