@@ -404,13 +404,15 @@ def _gun_flash(size, lifetime=3):
 
 
 def _struck_sparks(size):
-    # A whole spark shower in one sprite (gxfx_sparks): flash, sparks arcing out, cooling, falling.
+    # A few separate glowing streaks that fly off and fall. The baked spark-shower sprite read as grey
+    # speckle noise once rapid gattling hits stacked several of them on one hull.
     return system(
-        Priority="UNIT_DAMAGE_FX", Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8,
-        AngleZ=(-0.3, 0.3), Lifetime=(9, 11), Size=size,
-        # Warm, dim and short: gattling hits overlap on one hull, and long white showers read as noise.
-        Color=[((170, 110, 60), 0), ((110, 50, 15), 4), ((0, 0, 0), 11)],
-        BurstCount=(1, 1), SystemLifetime=1)
+        Priority="UNIT_DAMAGE_FX", Shader="ADDITIVE", ParticleName="gxfx_streak.tga",
+        IsParticleUpTowardsEmitter="Yes", Lifetime=(6, 10), Size=size, SizeRate=(-0.04, -0.04),
+        Color=[((255, 200, 130), 0), ((220, 100, 25), 4), ((0, 0, 0), 10)],
+        BurstCount=(3, 5), SystemLifetime=1, Gravity=-0.15, VelocityDamping=(0.9, 0.93),
+        VelocityType="OUTWARD", VelOutward=(1.5, 3.5), VelOutwardOther=(1.0, 2.5),
+        VolumeType="SPHERE", VolSphereRadius=0.5)
 
 
 def _struck_smoke(count, size, lifetime, alpha):
@@ -431,8 +433,8 @@ def _struck_smoke(count, size, lifetime, alpha):
 SYSTEMS.update({
     "GattlingCannonLenzflare": _gun_flash((5.0, 7.0)),
     "GattlingCannonLenzflareIntense": _gun_flash((8.0, 10.0)),
-    "TankStruckSparks": _struck_sparks((5.0, 6.0)),
-    "SmallTankStruckSparks": _struck_sparks((3.0, 4.0)),
+    "TankStruckSparks": _struck_sparks((0.9, 1.4)),
+    "SmallTankStruckSparks": _struck_sparks((0.6, 1.0)),
     "TankStruckLenzflare": _gun_flash((6.0, 8.0), lifetime=4),
     "TankStruckSmoke": _struck_smoke((3, 3), (3.0, 4.5), (70, 90), 0.6),
     "TankStruckSmallArmsSmoke": _struck_smoke((1, 1), (1.5, 2.5), (25, 35), 0.45),
@@ -670,6 +672,17 @@ FXLISTS["WeaponFX_BombTruckDefaultBombDetonation"] = {
   End
   Sound
     Name = ExplosionScudExplosive
+  End
+""",
+}
+
+# Every small-arms hit on a vehicle: retail adds a yellow-white LightPulse (radius 15) that, under rapid
+# gattling fire, left a bright yellow pool on the ground and the hull at night. The sparks, smoke and
+# sound stay; the light goes.
+FXLISTS["FX_DamageTankStruckSmallArms"] = {
+    "particles": [("TankStruckSparks", (0, 0, 10)), ("TankStruckSmallArmsSmoke", (0, 0, 10))],
+    "extra": """  Sound
+    Name = VehicleImpactLight
   End
 """,
 }
