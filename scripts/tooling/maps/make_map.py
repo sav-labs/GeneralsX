@@ -30,7 +30,7 @@ def register(repo, layout):
     if layout.NAME_TAG + "\n" in text:
         return
     with open(path, "a", encoding="utf-8") as f:
-        f.write(f'\n{layout.NAME_TAG}\n"{layout.DISPLAY_NAME}"\nEND\n')
+        f.write(f'\n{layout.NAME_TAG}\n"{layout.NAME}"\nEND\n')
 
 
 def main():
