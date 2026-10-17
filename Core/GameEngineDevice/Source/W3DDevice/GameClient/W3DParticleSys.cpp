@@ -36,11 +36,6 @@
 #include "W3DDevice/GameClient/W3DSnow.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/sortingrenderer.h"
-#include "WW3D2/texture.h"
-#include "WW3D2/dx8wrapper.h"
-
-#include <map>
-#include <set>
 
 
 //------------------------------------------------------------------------------ Performance Timers
@@ -317,23 +312,6 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 						frame = frameCount - 1;
 				}
 				frameArray[pointCount] = (uint8)frame;
-
-				// GeneralsX @feature Claude 16/10/2026 Trace the first particle of each flipbook system through its life.
-				{
-					static std::map<AsciiString, UnsignedInt> traced;
-					const AsciiString &name = sys->getTemplate()->getName();
-					std::map<AsciiString, UnsignedInt>::iterator it = traced.find(name);
-					if (it == traced.end() && traced.size() < 64)
-						it = traced.insert(std::make_pair(name, p->getPersonality())).first;
-					const UnsignedInt elapsed = p->getElapsedFrames();
-					if (it != traced.end() && it->second == p->getPersonality() && elapsed % 8 == 0 && elapsed <= 96)
-					{
-						fprintf(stderr, "[FX] trace %s age=%u/%u frame=%u size=%.2f alpha=%.2f rgb=%.2f,%.2f,%.2f pos=%.1f,%.1f,%.1f\n",
-							name.str(), elapsed, p->getLifetime(), frame, psize, p->getAlpha(),
-							color->red, color->green, color->blue, pos->x, pos->y, pos->z);
-						fflush(stderr);
-					}
-				}
 			}
 			else
 			{
@@ -359,30 +337,6 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		if (pointCount == startCount)
 		{
 			continue;	//this system has no particles to render
-		}
-
-		// GeneralsX @feature Claude 16/10/2026 Report each flipbook system once with its texture, so a capture
-		// log shows whether the atlases load and draw.
-		if (frameLog2 != 0 && sys->getTemplate())
-		{
-			static std::set<AsciiString> reported;
-			if (reported.insert(sys->getTemplate()->getName()).second)
-			{
-				TextureClass *tex = texture.Peek();
-				IDirect3DTexture8 *d3dTex = tex ? tex->Peek_D3D_Texture() : nullptr;
-				D3DSURFACE_DESC desc;
-				memset(&desc, 0, sizeof(desc));
-				const unsigned levels = d3dTex ? d3dTex->GetLevelCount() : 0;
-				if (d3dTex)
-					d3dTex->GetLevelDesc(0, &desc);
-				fprintf(stderr, "[FX] flipbook %s tex=%s init=%d missing=%d %dx%d grid=%u points=%u shader=%d d3d=%p %ux%u fmt=%d levels=%u\n",
-					sys->getTemplate()->getName().str(), sys->getParticleTypeName().str(),
-					tex ? (int)tex->Is_Initialized() : -1, tex ? (int)tex->Is_Missing_Texture() : -1,
-					tex ? tex->Get_Width() : 0, tex ? tex->Get_Height() : 0, 1u << frameLog2,
-					pointCount - startCount, (int)sys->getShaderType(), (void *)d3dTex,
-					desc.Width, desc.Height, (int)desc.Format, levels);
-				fflush(stderr);
-			}
 		}
 
 		const UnsignedInt volumeParticleDepth = sys->getVolumeParticleDepth();
