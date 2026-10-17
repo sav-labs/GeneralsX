@@ -1,4 +1,4 @@
-"""Twin Rivers Fortress: 8-player skirmish map in the spirit of "A River Divided".
+"""Crossing Rivers: 8-player skirmish map in the spirit of "A River Divided".
 
 GeneralsX @feature Claude 16/10/2026 Two rivers cross in the middle and cut the map into four
 quadrants with two bases each. What the layout keeps from the maps Artem likes:
@@ -22,9 +22,9 @@ import numpy as np
 
 import mapgen
 
-NAME = "GX Twin Rivers Fortress"
-NAME_TAG = "MAP:GXTwinRiversFortress"
-DISPLAY_NAME = "Twin Rivers Fortress"
+NAME = "GX Crossing Rivers"
+NAME_TAG = "MAP:GXCrossingRivers"
+DISPLAY_NAME = "Crossing Rivers"
 PLAYERS = 8
 SEED = 1610
 
