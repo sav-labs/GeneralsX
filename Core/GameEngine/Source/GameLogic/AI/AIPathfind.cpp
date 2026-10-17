@@ -1209,6 +1209,7 @@ void PathfindCellInfo::releaseACellInfo(PathfindCellInfo *theInfo)
 
 //-----------------------------------------------------------------------------------
 
+#if RETAIL_COMPATIBLE_PATHFINDING
 Bool PathfindCellList::canReverseSort(PathfindCell& currentCell) const
 {
 	if (m_head && m_tail)
@@ -1216,6 +1217,7 @@ Bool PathfindCellList::canReverseSort(PathfindCell& currentCell) const
 
 	return false;
 }
+#endif
 
 //-----------------------------------------------------------------------------------
 
@@ -1737,6 +1739,7 @@ void PathfindCell::forwardInsertionSortRetailCompatible(PathfindCellList& list)
 }
 #endif
 
+#if RETAIL_COMPATIBLE_PATHFINDING
 // Forward insertion sort, returns early if the list is being initialized or we are prepending the list
 void PathfindCell::forwardInsertionSort(PathfindCellList& list)
 {
@@ -1766,14 +1769,9 @@ void PathfindCell::forwardInsertionSort(PathfindCellList& list)
 
 	// Traverse the list to find correct position
 	PathfindCell* current = list.m_head;
-	UnsignedInt steps = 0;
 	while (current->m_info->m_nextOpen && current->m_info->m_nextOpen->m_totalCost <= m_info->m_totalCost) {
 		current = current->getNextOpen();
-		++steps;
 	}
-	// GeneralsX @performance Claude 17/10/2026 Insertion cost for the [PERF] hitch ai line.
-	if (PerfStats::isEnabled())
-		PerfStats::addOpenListSteps(steps);
 
 	// Insert the new node in the correct position
 	m_info->m_nextOpen = current->m_info->m_nextOpen;
@@ -1817,14 +1815,9 @@ void PathfindCell::reverseInsertionSort(PathfindCellList& list)
 
 	// Traverse the list to find correct position
 	PathfindCell* current = list.m_tail;
-	UnsignedInt steps = 0;
 	while (current->m_info->m_prevOpen && current->m_info->m_prevOpen->m_totalCost > m_info->m_totalCost) {
 		current = current->getPrevOpen();
-		++steps;
 	}
-	// GeneralsX @performance Claude 17/10/2026 Insertion cost for the [PERF] hitch ai line.
-	if (PerfStats::isEnabled())
-		PerfStats::addOpenListSteps(steps);
 
 	// Insert the new node in the correct position
 	m_info->m_prevOpen = current->m_info->m_prevOpen;
@@ -1838,6 +1831,50 @@ void PathfindCell::reverseInsertionSort(PathfindCellList& list)
 	current->m_info->m_prevOpen = this->m_info;
 	m_info->m_nextOpen = current->m_info;
 }
+#else
+// GeneralsX @performance Claude 17/10/2026 Same place as forwardInsertionSort / reverseInsertionSort (after every
+// cell whose total cost is not above this one), found through the cost index of the list.
+void PathfindCell::indexedInsertionSort(PathfindCellList& list)
+{
+	DEBUG_ASSERTCRASH(m_info, ("Has to have info."));
+	DEBUG_ASSERTCRASH(m_info->m_closed == FALSE && m_info->m_open == FALSE, ("Serious error - Invalid flags. jba"));
+
+	// mark the new cell as being on the open list
+	m_info->m_open = true;
+	m_info->m_closed = false;
+	m_info->m_openCost = m_info->m_totalCost;
+
+	// last cell of the highest cost that is not above this one
+	PathfindCell* previous = nullptr;
+	std::map<UnsignedShort, PathfindCell*>::iterator it = list.m_lastOfCost.upper_bound(m_info->m_openCost);
+	if (it != list.m_lastOfCost.begin()) {
+		--it;
+		previous = it->second;
+	}
+
+	if (previous == nullptr) {
+		// cheapest cell: new head
+		m_info->m_prevOpen = nullptr;
+		m_info->m_nextOpen = list.m_head ? list.m_head->m_info : nullptr;
+		if (list.m_head)
+			list.m_head->m_info->m_prevOpen = this->m_info;
+		else
+			list.m_tail = this;
+		list.m_head = this;
+	}
+	else {
+		m_info->m_prevOpen = previous->m_info;
+		m_info->m_nextOpen = previous->m_info->m_nextOpen;
+		if (previous->m_info->m_nextOpen)
+			previous->m_info->m_nextOpen->m_prevOpen = this->m_info;
+		else
+			list.m_tail = this;
+		previous->m_info->m_nextOpen = this->m_info;
+	}
+
+	list.m_lastOfCost[m_info->m_openCost] = this;
+}
+#endif
 
 /// put self on "open" list in ascending cost order, return new list
 void PathfindCell::putOnSortedOpenList( PathfindCellList &list )
@@ -1849,6 +1886,7 @@ void PathfindCell::putOnSortedOpenList( PathfindCellList &list )
 	}
 #endif
 
+#if RETAIL_COMPATIBLE_PATHFINDING
 	// TheSuperHackers @performance Mauller 20/03/2026 Implement reverse insertion sorting.
 	// Long and complex paths often append PathfindCell's, with high total path costs, to the open list.
 	// Appending and reverse traversal allow faster insertion of these cells, reducing pathfinding overhead by 50 - 66%.
@@ -1858,6 +1896,9 @@ void PathfindCell::putOnSortedOpenList( PathfindCellList &list )
 	else {
 		forwardInsertionSort(list);
 	}
+#else
+	indexedInsertionSort(list);
+#endif
 }
 
 /// remove self from "open" list
@@ -1865,6 +1906,16 @@ void PathfindCell::removeFromOpenList( PathfindCellList &list )
 {
 	DEBUG_ASSERTCRASH(m_info, ("Has to have info."));
 	DEBUG_ASSERTCRASH(m_info->m_closed==FALSE && m_info->m_open==TRUE, ("Serious error - Invalid flags. jba"));
+#if !RETAIL_COMPATIBLE_PATHFINDING
+	// GeneralsX @performance Claude 17/10/2026 Keep the cost index on the last cell of each cost.
+	std::map<UnsignedShort, PathfindCell*>::iterator it = list.m_lastOfCost.find(m_info->m_openCost);
+	if (it != list.m_lastOfCost.end() && it->second == this) {
+		if (m_info->m_prevOpen && m_info->m_prevOpen->m_openCost == m_info->m_openCost)
+			it->second = m_info->m_prevOpen->m_cell;
+		else
+			list.m_lastOfCost.erase(it);
+	}
+#endif
 	if (m_info->m_nextOpen)
 		m_info->m_nextOpen->m_prevOpen = m_info->m_prevOpen;
 	else {

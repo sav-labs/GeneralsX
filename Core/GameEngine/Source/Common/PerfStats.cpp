@@ -138,7 +138,6 @@ namespace
 	char s_frameSlowestWait[96];
 	WaitTotalsSource s_waitTotalsSource = nullptr;
 	WaitTotals s_lastWaitTotals;
-	UnsignedInt s_frameOpenListSteps = 0;
 	// GeneralsX @performance Claude 17/10/2026 The current frame loads a map, see markLoadFrame.
 	Bool s_loadFrame = FALSE;
 	// GeneralsX @performance Claude 17/10/2026 Game logic parts and the slowest update module of the current frame.
@@ -398,10 +397,10 @@ namespace
 					- s_frameLogicMs[LOGIC_OBJECTS] - s_frameLogicMs[LOGIC_AI] - s_frameLogicMs[LOGIC_PARTITION],
 				s_frameSlowestUpdateMs, s_frameSlowestThing, s_frameSlowestModule);
 			fprintf(stderr,
-				"[PERF] hitch ai logic_frame=%u | zones=%.1f paths=%.1f (%u paths, %d cells, %u open list steps, slowest %.1f ms"
-				" %d cells: %s) players=%.1f\n",
+				"[PERF] hitch ai logic_frame=%u | zones=%.1f paths=%.1f (%u paths, %d cells, slowest %.1f ms %d cells: %s)"
+				" players=%.1f\n",
 				logicFrame, s_frameLogicMs[LOGIC_AI_ZONES], s_frameLogicMs[LOGIC_AI_PATHS], s_framePaths, s_framePathCells,
-				s_frameOpenListSteps, s_frameSlowestPathMs, s_frameSlowestPathCells, s_frameSlowestPathThing,
+				s_frameSlowestPathMs, s_frameSlowestPathCells, s_frameSlowestPathThing,
 				s_frameLogicMs[LOGIC_AI_PLAYERS]);
 		}
 		fflush(stderr);
@@ -621,11 +620,6 @@ void setWaitTotalsSource(WaitTotalsSource source)
 		source(s_lastWaitTotals);
 }
 
-void addOpenListSteps(UnsignedInt steps)
-{
-	s_frameOpenListSteps += steps;
-}
-
 void markLoadFrame()
 {
 	s_loadFrame = TRUE;
@@ -834,7 +828,6 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_framePaths = 0;
 	s_framePathCells = 0;
 	s_frameSlowestPathMs = 0.0;
-	s_frameOpenListSteps = 0;
 	s_frameSlowestPathCells = 0;
 	s_frameSlowestPathThing[0] = '\0';
 }

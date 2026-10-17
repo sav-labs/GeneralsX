@@ -44,6 +44,9 @@ protected:
 	PathfindCell *m_cell;															///< Cell this info belongs to currently.
 
 	UnsignedShort m_totalCost, m_costSoFar;	///< cost estimates for A* search
+	// GeneralsX @performance Claude 17/10/2026 Total cost when the cell went on the open list: its key in the open
+	// list cost index (the A* code changes m_totalCost just before it takes a cell off the list).
+	UnsignedShort m_openCost;
 
 	/// have to include cell's coordinates, since cells are often accessed via pointer only
 	ICoord2D m_pos;
