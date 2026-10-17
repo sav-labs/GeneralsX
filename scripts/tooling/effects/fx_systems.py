@@ -71,8 +71,10 @@ SYSTEMS = {
         # The baked flipbook holds the whole blast (flash, fireball, burning-out, rolling smoke) over
         # 72 frames, so a few large overlapping copies play it once each.
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
-        Lifetime=(66, 78), Size=(52, 64), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 56), (0.0, 0.0, 78)],
+        # Fades out once the flipbook turns to soot, so the grey GXTankBlastSmoke takes over instead of
+        # a black ball sitting on the wreck.
+        Lifetime=(62, 68), Size=(52, 64), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 24), (0.45, 0.45, 36), (0.0, 0.0, 50)],
         Color=[((255, 255, 255), 0)],
         BurstCount=(3, 3), VelocityDamping=(0.85, 0.88), DriftVelocity=(0.0, 0.0, 0.12),
         VelocityType="SPHERICAL", VelSpherical=(0.2, 0.5),
@@ -81,7 +83,7 @@ SYSTEMS = {
     "GXTankBlastSecondary": system(
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(48, 58), Size=(24, 30), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 40), (0.0, 0.0, 58)],
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 18), (0.4, 0.4, 28), (0.0, 0.0, 40)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
         VelocityType="SPHERICAL", VelSpherical=(0.6, 1.2),
@@ -490,14 +492,9 @@ FXLISTS = {
             ("GXWreckEmbers", (0, 0, 6)),
             ("GXWreckHeatGlow", (0, 0, 1)),
         ],
-        # Retail nuggets kept as they are.
-        "extra": """  LightPulse
-    Color = R:255 G:150 B:70
-    Radius = 90
-    IncreaseTime = 0
-    DecreaseTime = 900
-  End
-  ViewShake
+        # Retail nuggets kept, apart from the LightPulse: the engine already lights a STRONG-shake blast
+        # (EffectLights), and the two lights together washed the whole battle out white.
+        "extra": """  ViewShake
     Type = STRONG
   End
   TerrainScorch
