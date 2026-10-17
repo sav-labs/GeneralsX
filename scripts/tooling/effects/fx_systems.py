@@ -589,3 +589,19 @@ def write_ini():
 # same explosion and burning wreck.
 FXLISTS["FX_BattleMasterExplosionOneFinal"] = FXLISTS["FX_GenericTankDeathExplosion"]
 FXLISTS["FX_GattlingExplosionOneFinal"] = FXLISTS["FX_GenericTankDeathExplosion"]
+
+# The Tomahawk missile and the GLA bomb truck detonate through this retail list. Its lens flare and
+# SEVERE shake (which the engine lights like a superweapon) turned every Tomahawk hit into a white
+# glare over half the screen with a black puff in it; it now gets the tank blast without the burning
+# wreck. The shake drops to STRONG so the engine lights it as a large explosion; the sound stays.
+FXLISTS["WeaponFX_BombTruckDefaultBombDetonation"] = {
+    "particles": [p for p in FXLISTS["FX_GenericTankDeathExplosion"]["particles"]
+                  if not p[0].startswith("GXWreck")],
+    "extra": """  ViewShake
+    Type = STRONG
+  End
+  Sound
+    Name = ExplosionScudExplosive
+  End
+""",
+}
