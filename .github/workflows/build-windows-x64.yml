@@ -221,11 +221,20 @@ jobs:
           python scripts/tooling/maps/test_maps.py
           python scripts/tooling/content/build_content.py . content-out
 
+      # GeneralsX @feature Claude 16/10/2026 Build the effects pack (our own particle textures and the
+      # particle system / FX list INI that replace retail explosions) from scripts/tooling/effects.
+      - name: Build effects pack
+        shell: pwsh
+        run: |
+          python scripts/tooling/effects/test_effects.py
+          python scripts/tooling/effects/build_effects.py effects-out
+
       - name: Collect runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Copy-Item content-out/GeneralsXContent.big artifacts/
+          Copy-Item effects-out/GeneralsXEffects.big artifacts/
           Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.exe artifacts/
           Copy-Item build/win64-vcpkg/GeneralsMD/Release/GeneralsXZH.pdb artifacts/ -ErrorAction SilentlyContinue
           Get-ChildItem -Path @("vcpkg_installed/x64-windows/bin/*.dll", "build/win64-vcpkg/vcpkg_installed/x64-windows/bin/*.dll") -ErrorAction SilentlyContinue | ForEach-Object {
@@ -297,6 +306,7 @@ jobs:
           shows [DISPLAY] lines with the screen, Resolution, back buffer and image sizes.
           GeneralsXContent.big holds the remaster's own models (e.g. a modern tank in place of the USA Crusader);
           delete it to play with the original look. Unit stats and gameplay are unchanged either way.
+          GeneralsXEffects.big holds the new explosions, fire and smoke; delete it for the original effects.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
           the game, or start GeneralsXZH.exe -renderscale 67. Pick a normal resolution to turn it off.
           FSR 2 (experimental, off by default): add Upscaler = FSR2 to Options.ini, or start the game with

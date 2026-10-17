@@ -53,6 +53,7 @@ private:
 	Bool finishedBatch(const ParticleSystem& system, const RefCountPtr<TextureClass>& texture);
 	void initializeBatch(const ParticleSystem& system, const RefCountPtr<TextureClass>& texture);
 	void flushParticleBatch(RenderInfoClass& rinfo, UnsignedInt& pointCount);
+	static UnsignedByte getFlipbookLog2(const ParticleSystem& system);
 
 	enum { MAX_POINTS_PER_GROUP = 512 };
 
@@ -63,8 +64,10 @@ private:
 	ShareBufferClass<Vector4> *m_RGBABuffer;		///< array of particle color and alpha
 	ShareBufferClass<float> *m_sizeBuffer;			///< array of particle sizes
 	ShareBufferClass<uint8> *m_angleBuffer;			///< array of particle orientations
+	ShareBufferClass<uint8> *m_frameBuffer;			///< array of particle flipbook frames
 
 	ParticleSystemInfo::ParticleShaderType m_batchShaderType;
 	Bool m_readyToRender;											///< if true, it is OK to render
 	ParticleSystemInfo::ParticleAlignmentType m_batchParticleAlignment;
+	UnsignedByte m_batchFrameLog2;							///< flipbook grid of the batch as log2 of frames per row, 0 = none
 };

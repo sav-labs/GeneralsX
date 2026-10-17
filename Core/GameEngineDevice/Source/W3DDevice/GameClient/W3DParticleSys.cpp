@@ -56,6 +56,8 @@ W3DParticleSystemManager::W3DParticleSystemManager()
 	m_RGBABuffer = nullptr;
 	m_sizeBuffer = nullptr;
 	m_angleBuffer = nullptr;
+	m_frameBuffer = nullptr;
+	m_batchFrameLog2 = 0;
 	m_readyToRender = false;
 
 	m_onScreenParticleCount = 0;
@@ -68,6 +70,7 @@ W3DParticleSystemManager::W3DParticleSystemManager()
 	m_RGBABuffer = NEW_REF( ShareBufferClass<Vector4>, (MAX_POINTS_PER_GROUP, "W3DParticleSystemManager::m_RGBABuffer") );
 	m_sizeBuffer = NEW_REF( ShareBufferClass<float>, (MAX_POINTS_PER_GROUP, "W3DParticleSystemManager::m_sizeBuffer") );
 	m_angleBuffer = NEW_REF( ShareBufferClass<uint8>, (MAX_POINTS_PER_GROUP, "W3DParticleSystemManager::m_angleBuffer") );
+	m_frameBuffer = NEW_REF( ShareBufferClass<uint8>, (MAX_POINTS_PER_GROUP, "W3DParticleSystemManager::m_frameBuffer") );
 }
 
 W3DParticleSystemManager::~W3DParticleSystemManager()
@@ -85,6 +88,7 @@ W3DParticleSystemManager::~W3DParticleSystemManager()
 	REF_PTR_RELEASE(m_RGBABuffer);
 	REF_PTR_RELEASE(m_sizeBuffer);
 	REF_PTR_RELEASE(m_angleBuffer);
+	REF_PTR_RELEASE(m_frameBuffer);
 }
 
 // GeneralsX @feature Claude 15/10/2026 Soft particles.
@@ -256,6 +260,10 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		Real *sizeArray = m_sizeBuffer->Get_Array();
 		Vector4 *RGBAArray = m_RGBABuffer->Get_Array();
 		uint8 *angleArray = m_angleBuffer->Get_Array();
+		uint8 *frameArray = m_frameBuffer->Get_Array();
+		const UnsignedByte frameLog2 = getFlipbookLog2(*sys);
+		const UnsignedInt frameCount = 1u << (frameLog2 * 2);
+		const Bool frameRandom = frameLog2 != 0 && sys->getTemplate() && sys->getTemplate()->isFlipbookRandom();
 		const Coord3D *pos;
 		const RGBColor *color;
 		Real psize;
@@ -289,6 +297,26 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			RGBAArray[pointCount].W = p->getAlpha();
 
 			angleArray[pointCount] = (uint8)(p->getAngle() * 255.0f / (2.0f * PI));
+
+			// GeneralsX @feature Claude 16/10/2026 Flipbook frame from the particle's age, or a fixed frame per particle.
+			if (frameLog2 != 0)
+			{
+				UnsignedInt frame;
+				if (frameRandom)
+					frame = personalities[pointCount] % frameCount;
+				else
+				{
+					const UnsignedInt lifetime = p->getLifetime() > 0 ? p->getLifetime() : 1;
+					frame = p->getElapsedFrames() * frameCount / lifetime;
+					if (frame >= frameCount)
+						frame = frameCount - 1;
+				}
+				frameArray[pointCount] = (uint8)frame;
+			}
+			else
+			{
+				frameArray[pointCount] = 0;
+			}
 
 			if (++pointCount == MAX_POINTS_PER_GROUP)
 			{
@@ -392,6 +420,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			m_pointGroup->Set_Point_Mode( PointGroupClass::QUADS );
 			m_pointGroup->Set_Arrays( m_posBuffer, m_RGBABuffer, nullptr, m_sizeBuffer, m_angleBuffer, nullptr, pointCount );
 			m_pointGroup->Set_Billboard(sys->getParticleAlignment() == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
+			m_pointGroup->Set_Frame_Row_Column_Count_Log2( 0 );
 
 			/// @todo Support animated texture particles
 			/// @todo lorenzen sez: unimplemented code wastes cpu cycles
@@ -450,7 +479,25 @@ Bool W3DParticleSystemManager::finishedBatch(const ParticleSystem& system, const
 {
 	return texture.Peek() != m_batchTexture.Peek() ||
 		system.getShaderType() != m_batchShaderType ||
-		system.getParticleAlignment() != m_batchParticleAlignment;
+		system.getParticleAlignment() != m_batchParticleAlignment ||
+		getFlipbookLog2(system) != m_batchFrameLog2;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Flipbook grid of a particle system as log2 of frames per row (0 = none).
+UnsignedByte W3DParticleSystemManager::getFlipbookLog2(const ParticleSystem& system)
+{
+	const ParticleSystemTemplate *tmpl = system.getTemplate();
+	if (tmpl == nullptr)
+		return 0;
+
+	switch (tmpl->getFlipbookGrid())
+	{
+		case 2: return 1;
+		case 4: return 2;
+		case 8: return 3;
+		case 16: return 4;
+		default: return 0;
+	}
 }
 
 void W3DParticleSystemManager::initializeBatch(const ParticleSystem& system, const RefCountPtr<TextureClass>& texture)
@@ -458,6 +505,7 @@ void W3DParticleSystemManager::initializeBatch(const ParticleSystem& system, con
 	m_batchTexture = texture;
 	m_batchShaderType = system.getShaderType();
 	m_batchParticleAlignment = system.getParticleAlignment();
+	m_batchFrameLog2 = getFlipbookLog2(system);
 }
 
 void W3DParticleSystemManager::flushParticleBatch(RenderInfoClass& rinfo, UnsignedInt& pointCount)
@@ -484,8 +532,10 @@ void W3DParticleSystemManager::flushParticleBatch(RenderInfoClass& rinfo, Unsign
 
 		m_pointGroup->Set_Flag(PointGroupClass::TRANSFORM, true);
 		m_pointGroup->Set_Point_Mode(PointGroupClass::QUADS);
-		m_pointGroup->Set_Arrays(m_posBuffer, m_RGBABuffer, nullptr, m_sizeBuffer, m_angleBuffer, nullptr, pointCount);
+		m_pointGroup->Set_Arrays(m_posBuffer, m_RGBABuffer, nullptr, m_sizeBuffer, m_angleBuffer,
+			m_batchFrameLog2 != 0 ? m_frameBuffer : nullptr, pointCount);
 		m_pointGroup->Set_Billboard(m_batchParticleAlignment == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
+		m_pointGroup->Set_Frame_Row_Column_Count_Log2(m_batchFrameLog2);
 		m_pointGroup->Set_Point_Frame(0);
 		SortingRendererClass::Set_Soft_Particle_State(getSoftParticleState(m_batchShaderType));
 		m_pointGroup->Render(rinfo);
@@ -497,4 +547,5 @@ void W3DParticleSystemManager::flushParticleBatch(RenderInfoClass& rinfo, Unsign
 	m_batchTexture.Clear();
 	m_batchParticleAlignment = ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD;
 	m_batchShaderType = ParticleSystemInfo::INVALID_SHADER;
+	m_batchFrameLog2 = 0;
 }

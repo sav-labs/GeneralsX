@@ -3037,6 +3037,10 @@ const FieldParse ParticleSystemTemplate::m_fieldParseTable[] =
 	{ "WindPingPongEndAngleMin",				INI::parseReal, nullptr, offsetof( ParticleSystemTemplate, m_windMotionEndAngleMin ) },
 	{ "WindPingPongEndAngleMax",				INI::parseReal, nullptr, offsetof( ParticleSystemTemplate, m_windMotionEndAngleMax ) },
 
+	// GeneralsX @feature Claude 16/10/2026 Flipbook textures, see ParticleSystemTemplate::getFlipbookGrid
+	{ "FlipbookGrid",										INI::parseUnsignedInt, nullptr, offsetof( ParticleSystemTemplate, m_flipbookGrid ) },
+	{ "FlipbookRandom",									INI::parseBool, nullptr, offsetof( ParticleSystemTemplate, m_flipbookRandom ) },
+
 
 	{ nullptr,											nullptr,																					nullptr,		0 },
 };
@@ -3128,6 +3132,8 @@ ParticleSystemTemplate::ParticleSystemTemplate( const AsciiString &name ) :
 	m_name(name)
 {
 	m_slaveTemplate = nullptr;
+	m_flipbookGrid = 0;
+	m_flipbookRandom = FALSE;
 }
 
 // ------------------------------------------------------------------------------------------------

@@ -208,6 +208,7 @@ public:
 	void setPersonality(UnsignedInt p) { m_personality = p; };
 
 	UnsignedInt getElapsedFrames() const;
+	UnsignedInt getLifetime() const { return m_lifetime; }	///< total lifetime in frames
 
 protected:
 
@@ -582,6 +583,13 @@ public:
 	ParticleSystem *createSlaveSystem( Bool createSlaves = TRUE ) const ;					///< if returns non-null, it is a slave system for use
 
 	const FieldParse *getFieldParse() const { return m_fieldParseTable; }	///< Parsing from INI access
+
+	// GeneralsX @feature Claude 16/10/2026 Flipbook particle textures. FlipbookGrid = N (2, 4, 8 or 16)
+	// splits the texture into N x N frames read row by row from the top left. Each particle plays the
+	// frames once over its lifetime, or shows one frame picked per particle with FlipbookRandom = Yes.
+	// Render only: it does not change how particles move or live.
+	UnsignedInt getFlipbookGrid() const { return m_flipbookGrid; }
+	Bool isFlipbookRandom() const { return m_flipbookRandom; }
 	static void parseRGBColorKeyframe( INI* ini, void *instance, void *store, const void* /*userData*/ );
 	static void parseRandomKeyframe( INI* ini, void *instance, void *store, const void* /*userData*/ );
 	static void parseRandomRGBColor( INI* ini, void *instance, void *store, const void* /*userData*/ );
@@ -604,6 +612,9 @@ protected:
 
 	// This has to be mutable because of the delayed initialization thing in createSlaveSystem
 	mutable const ParticleSystemTemplate *m_slaveTemplate;		///< if non-null, use this to create a slave system
+
+	UnsignedInt								m_flipbookGrid;									///< frames per row and column of the texture, 0 or 1 = no flipbook
+	Bool											m_flipbookRandom;								///< one random frame per particle instead of playing the frames
 
 	// template attribute data inherited from ParticleSystemInfo class
 };
@@ -709,7 +720,7 @@ public:
 	static ParticleInfo mergeRelatedParticleSystems( ParticleSystem *masterParticleSystem, ParticleSystem *slaveParticleSystem, Bool slaveNeedsFullPromotion);
 
 	/// @todo Const this (MSB)
-	const ParticleSystemTemplate *getTemplate() { return m_template; }	///< get the template used to create this system
+	const ParticleSystemTemplate *getTemplate() const { return m_template; }	///< get the template used to create this system
 
 	// @todo Const this jkmcd
 	Particle *getFirstParticle() { return m_systemParticlesHead; }
