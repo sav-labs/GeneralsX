@@ -6,12 +6,23 @@ first line, then the present time stamp of each frame in microseconds). This
 script streams the frames to ffmpeg as Matroska raw video with those time
 stamps, so the mp4 keeps the real presentation timing, including stutter.
 
+DXVK writes every presented frame, so a battle the game draws at 21 fps gives
+a 21 fps capture with uneven frame times (vsync rounds each frame to whole
+refresh intervals). By default the mp4 is constant frame rate (60 fps): each
+captured frame is shown from its own present time until the next one, so
+motion keeps its real speed in every player. A variable frame rate mp4 (or one
+re-timed to the average rate, which compresses hitches and stretches fast
+frames) judders in players and messengers that assume a fixed rate.
+
 With DXVK_CAPTURE_VIDEO_START=camtest and the game started with -camtest, the
 first frame is the first frame of the camera flight and the time stamps count
 from it, so clips of different runs line up frame for frame in time.
 
 Usage:
-    python3 scripts/qa/dxvk_video_to_mp4.py <path> [out.mp4] [-- extra ffmpeg output args]
+    python3 scripts/qa/dxvk_video_to_mp4.py <path> [out.mp4] [--fps N | --vfr] [-- extra ffmpeg output args]
+
+    --fps N   constant output rate (default 60), frames placed at their present times
+    --vfr     keep the captured time stamps as a variable frame rate mp4
 
 Example:
     python3 scripts/qa/dxvk_video_to_mp4.py ~/caps/clip clip.mp4
@@ -54,6 +65,15 @@ def main():
     if "--" in args:
         extra = args[args.index("--") + 1:]
         args = args[:args.index("--")]
+    # GeneralsX @bugfix Claude 16/10/2026 Constant frame rate output from the real time stamps (see above).
+    out_fps = 60
+    if "--vfr" in args:
+        args.remove("--vfr")
+        out_fps = 0
+    if "--fps" in args:
+        i = args.index("--fps")
+        out_fps = int(args[i + 1])
+        del args[i:i + 2]
     if not args:
         print(__doc__)
         return 2
@@ -68,12 +88,17 @@ def main():
     frame_size = width * height * 4
     if len(stamps) > 1:
         seconds = (stamps[-1] - stamps[0]) / 1e6
+        intervals = sorted(b - a for a, b in zip(stamps, stamps[1:]))
         print(f"{len(stamps)} frames, {width}x{height}, {seconds:.3f} s, "
-              f"average {(len(stamps) - 1) / seconds:.2f} fps")
+              f"average {(len(stamps) - 1) / seconds:.2f} fps, frame time median "
+              f"{intervals[len(intervals) // 2] / 1000:.1f} ms, longest {intervals[-1] / 1000:.1f} ms")
 
+    if out_fps > 0:
+        timing = ["-fps_mode", "cfr", "-r", str(out_fps)]
+    else:
+        timing = ["-fps_mode", "passthrough", "-enc_time_base", "-1"]
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "matroska", "-i", "-",
-           "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-           "-fps_mode", "passthrough", "-enc_time_base", "-1"] + extra + [out]
+           "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"] + timing + extra + [out]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     proc.stdin.write(header(width, height))
 

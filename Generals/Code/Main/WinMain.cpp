@@ -820,13 +820,45 @@ static LONG WINAPI UnHandledExceptionFilter( struct _EXCEPTION_POINTERS* e_info 
 // FSR 2 and the render scale; see OptionPreferences::getUpscaler.
 // GeneralsX @feature Claude 16/10/2026 Upscaler = FSR3 / -upscaler fsr3 picks FSR 3, and FrameGeneration = yes /
 // -framegen on adds FSR 3 frame generation (DXVK_FSR3_FRAMEGEN); both are render only.
+// GeneralsX @bugfix Claude 16/10/2026 The output size (m_renderScaleDisplayWidth/Height) is the image DXVK presents:
+// Options.ini Resolution fitted into the screen with its aspect ratio, not the whole screen. A 3440x1440 Resolution
+// on a 3840x2160 screen gives a 3840x1607 image, and RenderScale is a share of that image, so the engine, the FSR
+// contexts in DXVK and the mouse mapping use the same sizes. Without a Resolution entry it is the screen.
+// GeneralsX @feature Claude 16/10/2026 Upscaler = FSR2 / FSR3 with RenderScale 100 (or UpscalerQuality = Native)
+// runs FSR 2 / FSR 3 as native anti-aliasing at the output size instead of turning the upscaler off.
 //=============================================================================
+static Bool isDisplayModeAvailable( Int width, Int height )
+{
+	DEVMODEA mode;
+	memset( &mode, 0, sizeof(mode) );
+	mode.dmSize = sizeof(mode);
+	for (DWORD index = 0; EnumDisplaySettingsA( nullptr, index, &mode ); ++index)
+	{
+		if ((Int)mode.dmPelsWidth == width && (Int)mode.dmPelsHeight == height && mode.dmBitsPerPel >= 32)
+			return true;
+	}
+	return false;
+}
+
 static void applyRenderScale()
 {
-	TheWritableGlobalData->m_renderScaleDisplayWidth = GetSystemMetrics( SM_CXSCREEN );
-	TheWritableGlobalData->m_renderScaleDisplayHeight = GetSystemMetrics( SM_CYSCREEN );
+	const Int screenWidth = GetSystemMetrics( SM_CXSCREEN );
+	const Int screenHeight = GetSystemMetrics( SM_CYSCREEN );
 
 	OptionPreferences optionPref;
+
+	// GeneralsX @bugfix Claude 16/10/2026 Options.ini Resolution, fitted into the screen, is the output size
+	const Bool haveResolution = optionPref.hasResolution();
+	Int configWidth = screenWidth;
+	Int configHeight = screenHeight;
+	optionPref.getResolution( &configWidth, &configHeight );
+
+	Int outputWidth = screenWidth;
+	Int outputHeight = screenHeight;
+	if (haveResolution)
+		OptionPreferences::fitToDisplay( configWidth, configHeight, screenWidth, screenHeight, &outputWidth, &outputHeight );
+	TheWritableGlobalData->m_renderScaleDisplayWidth = outputWidth;
+	TheWritableGlobalData->m_renderScaleDisplayHeight = outputHeight;
 
 	// GeneralsX @feature Claude 16/10/2026 Upscaler choice: -upscaler, else Options.ini Upscaler, else the FSR 1.0
 	// behaviour of RenderScale. FSR 2 is never picked by default; it needs Upscaler = FSR2 or -upscaler fsr2.
@@ -852,13 +884,21 @@ static void applyRenderScale()
 	else if (upscaler != OptionPreferences::UPSCALER_DEFAULT && !explicitScale)
 		TheWritableGlobalData->m_renderScale = optionPref.getUpscalerQualityScale();
 
-	if (TheGlobalData->m_renderScale >= OptionPreferences::RENDER_SCALE_OFF)
+	// GeneralsX @feature Claude 16/10/2026 At RenderScale 100 there is nothing to upscale. FSR 1.0 is only an
+	// upscaler and turns off; FSR 2 and FSR 3 chosen by name keep running as native anti-aliasing (a 1:1 ratio).
+	const Bool temporalUpscaler = upscaler == OptionPreferences::UPSCALER_FSR2 || upscaler == OptionPreferences::UPSCALER_FSR3;
+	const Bool nativeTemporal = TheGlobalData->m_renderScale >= OptionPreferences::RENDER_SCALE_OFF && temporalUpscaler;
+	if (nativeTemporal)
 	{
-		if (upscaler == OptionPreferences::UPSCALER_FSR1 || upscaler == OptionPreferences::UPSCALER_FSR2
-			|| upscaler == OptionPreferences::UPSCALER_FSR3)
+		fprintf(stderr, "[FSR2] Upscaler %s at RenderScale 100: native anti-aliasing, %s renders and outputs at the same size\n",
+			OptionPreferences::getUpscalerName(upscaler), OptionPreferences::getUpscalerName(upscaler));
+		fflush(stderr);
+	}
+	else if (TheGlobalData->m_renderScale >= OptionPreferences::RENDER_SCALE_OFF)
+	{
+		if (upscaler == OptionPreferences::UPSCALER_FSR1)
 		{
-			fprintf(stderr, "[FSR2] Upscaler %s needs RenderScale below 100, rendering at full resolution\n",
-				OptionPreferences::getUpscalerName(upscaler));
+			fprintf(stderr, "[FSR2] Upscaler FSR1 at RenderScale 100: nothing to upscale, FSR off (RenderScale below 100 upscales; Upscaler = FSR2 or FSR3 also runs at 100 as anti-aliasing)\n");
 			fflush(stderr);
 		}
 		upscaler = OptionPreferences::UPSCALER_OFF;
@@ -886,11 +926,50 @@ static void applyRenderScale()
 	if (TheGlobalData->m_headless)
 		return;
 
+	const Bool upscaling = TheGlobalData->m_renderScale < OptionPreferences::RENDER_SCALE_OFF;
+	if (upscaling)
 	{
-		Int renderWidth = TheGlobalData->m_renderScaleDisplayWidth;
-		Int renderHeight = TheGlobalData->m_renderScaleDisplayHeight;
+		TheWritableGlobalData->m_windowed = true;
+		TheWritableGlobalData->m_upscaleToDisplay = true;
+	}
+	else if (!TheGlobalData->m_windowed && haveResolution
+		&& (configWidth != screenWidth || configHeight != screenHeight)
+		&& !isDisplayModeAvailable( configWidth, configHeight ))
+	{
+		// GeneralsX @bugfix Claude 16/10/2026 Fullscreen at a Resolution the display has no mode for (3440x1440 on a
+		// 3840x2160 monitor): DXVK cannot switch to it ("EnterFullscreenMode: Failed to change display mode") and
+		// the device fell back to another resolution. Render at the Resolution instead, in a borderless window
+		// covering the screen, and let DXVK scale the image to fit it (FSR 1.0 EASU, aspect ratio kept).
+		TheWritableGlobalData->m_windowed = true;
+		TheWritableGlobalData->m_upscaleToDisplay = true;
+		if (GetEnvironmentVariableA( "DXVK_FSR", nullptr, 0 ) == 0)
+			SetEnvironmentVariableA( "DXVK_FSR", "1" );
+		fprintf(stderr, "[DISPLAY] the display has no %dx%d mode: borderless %dx%d window, DXVK scales the image to %dx%d\n",
+			configWidth, configHeight, screenWidth, screenHeight, outputWidth, outputHeight);
+		fflush(stderr);
+	}
+
+	{
+		// GeneralsX @bugfix Claude 16/10/2026 Back buffer size the device will use (GlobalData::parseCustomDefinition
+		// applies the render scale) and the image DXVK presents, with DXVK's own rounding
+		Int renderWidth = configWidth;
+		Int renderHeight = configHeight;
 		OptionPreferences::getRenderScaleResolution(TheGlobalData->m_renderScale,
 			TheGlobalData->m_renderScaleDisplayWidth, TheGlobalData->m_renderScaleDisplayHeight, &renderWidth, &renderHeight);
+
+		Int presentWidth = renderWidth;
+		Int presentHeight = renderHeight;
+		if (TheGlobalData->m_upscaleToDisplay)
+			OptionPreferences::fitToDisplay( renderWidth, renderHeight, screenWidth, screenHeight, &presentWidth, &presentHeight );
+
+		fprintf(stderr, "[DISPLAY] screen %dx%d, Options.ini Resolution %dx%d%s, %s, back buffer %dx%d (RenderScale %d%%), image on screen %dx%d\n",
+			screenWidth, screenHeight,
+			configWidth, configHeight, haveResolution ? "" : " (no entry, default)",
+			TheGlobalData->m_upscaleToDisplay ? "borderless window scaled by DXVK"
+				: (TheGlobalData->m_windowed ? "window" : "fullscreen"),
+			renderWidth, renderHeight, TheGlobalData->m_renderScale,
+			presentWidth, presentHeight);
+		fflush(stderr);
 
 		fprintf(stderr, "[FSR2] upscaler %s (command line %s, Options.ini %s), quality %s, render scale %d%%, render %dx%d, display %dx%d\n",
 			OptionPreferences::getUpscalerName(upscaler),
@@ -903,11 +982,8 @@ static void applyRenderScale()
 		fflush(stderr);
 	}
 
-	if (TheGlobalData->m_renderScale >= OptionPreferences::RENDER_SCALE_OFF)
+	if (!upscaling && !nativeTemporal)
 		return;
-
-	TheWritableGlobalData->m_windowed = true;
-	TheWritableGlobalData->m_upscaleToDisplay = true;
 
 	if (GetEnvironmentVariableA( "DXVK_FSR", nullptr, 0 ) == 0)
 		SetEnvironmentVariableA( "DXVK_FSR", "1" );

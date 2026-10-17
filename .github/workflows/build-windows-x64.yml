@@ -40,7 +40,9 @@ jobs:
   # (default 50) of the presented size, with the DXVK HUD. raw:<path> writes <path>.bgra and <path>.txt
   # (scripts/qa/dxvk_video_to_mp4.py turns them into an mp4); any other value is a command that reads
   # Matroska raw BGRA video with present time stamps on stdin, e.g.
-  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 clip.mp4
+  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode cfr -r 60 clip.mp4
+  # GeneralsX @bugfix Claude 16/10/2026 Constant 60 fps output placed by the present time stamps: a variable rate mp4 judders
+  # in players that assume a fixed rate. Every presented frame is captured, so a 21 fps battle gives a 21 fps clip.
   # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0011) starts recording with the first frame
   # of the -camtest flight instead of a fixed time, so A/B clips line up whatever the load time. The game sets the process
   # environment variable DXVK_CAPTURE_VIDEO_SIGNAL to camtest.prepare when the match starts and to camtest when the flight begins.
@@ -288,12 +290,16 @@ jobs:
           sets a building near them on fire and circles the fight for 10 s; add a unit count for both sides together
           (-camtest 10 battle 60) and night for a night match (-camtest 10 battle 60 night). Use it with -skirmish.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
-          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
+          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode cfr -r 60 C:\cap\clip.mp4
           Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
           starts and stops a video (mp4, at most 1080 lines). Files are named by date and time and go to D:\GeneralsX\bugs,
           or to CapturePath in Options.ini (for example CapturePath = E:\Captures); when that folder cannot be created,
           they go to the bugs folder in the game's user data folder. Video recording needs the d3d8.dll and d3d9.dll above.
-          Pick the game resolution in Options; use the same aspect ratio as the display.
+          Pick the game resolution in Options; use the same aspect ratio as the display. In fullscreen, a Resolution
+          the monitor has no mode for (for example 3440 1440 on a 4K monitor) is rendered at that size in a
+          borderless window and scaled to fit the screen with its aspect ratio kept (black bars), instead of
+          falling back to another resolution. With FSR, RenderScale is a share of that image on screen. The console
+          shows [DISPLAY] lines with the screen, Resolution, back buffer and image sizes.
           GeneralsXContent.big holds the remaster's own models (e.g. a modern tank in place of the USA Crusader);
           delete it to play with the original look. Unit stats and gameplay are unchanged either way.
           GeneralsXEffects.big holds the new explosions, fire and smoke; delete it for the original effects.
@@ -303,7 +309,9 @@ jobs:
           -upscaler fsr2 (-upscaler fsr1 or -upscaler off override Options.ini the same way). UpscalerQuality =
           Quality, Balanced, Performance or UltraPerformance picks the render scale (67%, 59%, 50%, 33%) unless
           RenderScale or -renderscale is set. FSR 2 adds detail over several frames. The console and d3d9.log
-          show [FSR2] / FSR2: lines with the active upscaler.
+          show [FSR2] / FSR2: lines with the active upscaler. UpscalerQuality = Native or RenderScale = 100 with
+          Upscaler = FSR2 (or FSR3) runs it as anti-aliasing at full resolution, without upscaling. With FSR 2 or
+          FSR 3, MSAA (AntiAliasing) is not used: they anti-alias the scene themselves.
           FSR 2 smoke, explosions and particles: UpscalerReactiveScale (0 to 1, default 0.9, 0 = off) tells FSR 2
           to trust the current frame where such effects are drawn, so they do not smear or leave trails.
           FSR 2 sharpening: UpscalerSharpness (0 to 1, default 0.5) is FSR 2's own sharpening of the 3D scene;

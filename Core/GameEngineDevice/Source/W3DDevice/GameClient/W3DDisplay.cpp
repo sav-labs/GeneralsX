@@ -1113,8 +1113,21 @@ void W3DDisplay::init()
 
 			// TheSuperHackers @feature Mauller 13/03/2026 Add native MSAA support, must be set before creating render device
 			// GeneralsX @tweak Claude 15/10/2026 Without an Options.ini AntiAliasing key the device picks 2x or 4x by GPU class.
-			WW3D::Set_MSAA_Mode((WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel,
-				TheGlobalData->m_antiAliasLevelIsDefault);
+			// GeneralsX @performance Claude 16/10/2026 FSR 2 and FSR 3 anti-alias the scene themselves and take
+			// single-sampled colour and depth. With MSAA the device rendered every sample, DXVK resolved the colour,
+			// depth and reactive mask copies each frame, and FSR 2 then worked on the resolved, already blended edges.
+			// The Options.ini AntiAliasing entry is kept for the other upscalers.
+			const Bool temporalUpscaler = TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR2
+				|| TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR3;
+			if (temporalUpscaler && attempt == 0 && TheWritableGlobalData->m_antiAliasLevel != WW3D::MULTISAMPLE_MODE_NONE)
+			{
+				fprintf(stderr, "[MSAA] off: %s anti-aliases the scene (AntiAliasing %ux not used with it)\n",
+					OptionPreferences::getUpscalerName((OptionPreferences::UpscalerType)TheGlobalData->m_upscaler),
+					(unsigned)TheWritableGlobalData->m_antiAliasLevel);
+				fflush(stderr);
+			}
+			WW3D::Set_MSAA_Mode(temporalUpscaler ? WW3D::MULTISAMPLE_MODE_NONE : (WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel,
+				temporalUpscaler ? false : TheGlobalData->m_antiAliasLevelIsDefault);
 
 			renderDeviceError = WW3D::Set_Render_Device(
 				0,
@@ -1127,7 +1140,10 @@ void W3DDisplay::init()
 			// TheSuperHackers @info Update the MSAA mode that was set as some GPU's may not support certain levels
 			// Texture filtering must also be updated after render device initialization
 			if (renderDeviceError == WW3D_ERROR_OK) {
-				TheWritableGlobalData->m_antiAliasLevel = (UnsignedInt)WW3D::Get_MSAA_Mode();
+				// GeneralsX @tweak Claude 16/10/2026 Keep the player's level while FSR 2 / FSR 3 turn MSAA off, so the
+				// Options menu does not save AntiAliasing = 0
+				if (!temporalUpscaler)
+					TheWritableGlobalData->m_antiAliasLevel = (UnsignedInt)WW3D::Get_MSAA_Mode();
 				WW3D::Set_Texture_Filter(TheWritableGlobalData->m_textureFilteringMode);
 				TheWritableGlobalData->m_textureFilteringMode = WW3D::Get_Texture_Filter();
 				WW3D::Set_Anisotropy_Level(TheWritableGlobalData->m_textureAnisotropyLevel);
@@ -1151,6 +1167,15 @@ void W3DDisplay::init()
 			DEBUG_CRASH( ("Unable to set render device") );
 			return;
 		}
+		// GeneralsX @bugfix Claude 16/10/2026 Log the size the device really got; a failed first attempt falls back
+		// to another display mode
+		fprintf(stderr, "[DISPLAY] device created: back buffer %dx%d, %s%s, %d attempt(s)%s\n",
+			getWidth(), getHeight(), getWindowed() ? "windowed" : "fullscreen",
+			TheGlobalData->m_upscaleToDisplay ? ", borderless window scaled by DXVK" : "",
+			attempt,
+			attempt > 2 ? " (fallback display mode, the configured resolution failed)" : "");
+		fflush(stderr);
+
 		// GeneralsX @bugfix Jaredl-Dev 28/08/2026 Import display-based texture depth and normalize it for WW3D.
 		// Upstream PR: https://github.com/TheSuperHackers/GeneralsGameCode/pull/3181
 		WW3D::Set_Texture_Bitdepth(getBitDepth() == 16 ? 16 : 32);
