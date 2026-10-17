@@ -218,10 +218,10 @@ SYSTEMS = {
         VolumeType="CYLINDER", VolCylinderRadius=6.0, VolCylinderLength=3.0),
     "GXWreckSmoke": system(
         Priority="WEAPON_EXPLOSION", ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
-        Lifetime=(140, 180), Size=(10, 14), SizeRate=(0.12, 0.16), SizeRateDamping=(0.995, 0.995),
-        Alpha=[(0.0, 0.0, 0), (0.85, 0.85, 18), (0.5, 0.5, 100), (0.0, 0.0, 180)],
+        Lifetime=(140, 180), Size=(6, 9), SizeRate=(0.14, 0.18), SizeRateDamping=(0.995, 0.995),
+        Alpha=[(0.0, 0.0, 0), (0.7, 0.7, 30), (0.45, 0.45, 100), (0.0, 0.0, 180)],
         Color=[((120, 114, 108), 0), ((190, 186, 180), 130)],
-        BurstDelay=(5, 8), BurstCount=(1, 1), SystemLifetime=200, InitialDelay=(20, 20),
+        BurstDelay=(5, 8), BurstCount=(1, 1), SystemLifetime=200, InitialDelay=(34, 34),
         DriftVelocity=(0.14, 0.06, 0.5),
         VolumeType="CYLINDER", VolCylinderRadius=4.0, VolCylinderLength=2.0),
     "GXWreckSparks": system(
@@ -399,13 +399,15 @@ SYSTEMS.update({
         VolumeType="SPHERE", VolSphereRadius=3.0),
 })
 
-def _gun_flash(size, lifetime=3):
+def _gun_flash(size, lifetime=2):
     # One random flash per shot from the gxfx_muzzle frames; ADDITIVE, so it only brightens.
     return system(
         Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_muzzle.tga",
         FlipbookGrid=4, FlipbookRandom="Yes",
-        Lifetime=(lifetime, lifetime), Size=size, SizeRate=(0.4, 0.4), SizeRateDamping=(0.7, 0.7),
-        Color=[((255, 255, 255), 0), ((150, 110, 70), lifetime - 1), ((0, 0, 0), lifetime)],
+        Lifetime=(lifetime, lifetime), Size=(size[0] * 0.55, size[1] * 0.55), SizeRate=(0.3, 0.3),
+        SizeRateDamping=(0.7, 0.7),
+        # Dim and warm: at full white each shot left a long flat yellow cone in the video.
+        Color=[((215, 170, 115), 0), ((110, 55, 18), lifetime - 1), ((0, 0, 0), lifetime)],
         BurstCount=(1, 1), SystemLifetime=1, VelocityType="ORTHO", VelOrthoX=(0.0, 0.0),
         VelOrthoY=(0.0, 0.0), VelOrthoZ=(0.0, 0.0))
 
@@ -428,7 +430,7 @@ def _struck_smoke(count, size, lifetime, alpha):
         Lifetime=lifetime, Size=size, SizeRate=(0.25, 0.35), SizeRateDamping=(0.96, 0.97),
         Alpha=[(0.0, 0.0, 0), (alpha, alpha, 3), (alpha * 0.5, alpha * 0.5, lifetime[0] // 2),
                (0.0, 0.0, lifetime[1])],
-        Color=[((170, 164, 156), 0), ((215, 211, 205), lifetime[0] // 2)],
+        Color=[((120, 116, 110), 0), ((160, 156, 150), lifetime[0] // 2)],
         BurstCount=count, SystemLifetime=1, VelocityDamping=(0.8, 0.85),
         DriftVelocity=(0.08, 0.16, 0.08),
         VelocityType="ORTHO", VelOrthoX=(0.3, 1.5), VelOrthoY=(-0.8, 0.8), VelOrthoZ=(0.0, 0.4))
@@ -442,10 +444,10 @@ SYSTEMS.update({
     "GattlingCannonLenzflareIntense": _gun_flash((8.0, 10.0)),
     "TankStruckSparks": _struck_sparks((0.9, 1.4)),
     "SmallTankStruckSparks": _struck_sparks((0.6, 1.0)),
-    "TankStruckLenzflare": _gun_flash((6.0, 8.0), lifetime=4),
+    "TankStruckLenzflare": _gun_flash((6.0, 8.0)),
     "TankStruckSmoke": _struck_smoke((3, 3), (3.0, 4.5), (70, 90), 0.6),
     "TankStruckSmallArmsSmoke": _struck_smoke((1, 1), (1.5, 2.5), (25, 35), 0.45),
-    "TankSmallMuzzleFlare": _gun_flash((7.0, 9.0), lifetime=4),
+    "TankSmallMuzzleFlare": _gun_flash((7.0, 9.0), lifetime=3),
     "TankSmallMuzzleFlashFlame": system(**{**SYSTEMS["TankMuzzleFlashFlame"],
                                            "Size": (2.2, 3.0), "VelOrthoX": (0.8, 2.0)}),
     "TankSmallMuzzleFlashSmoke": system(**{**SYSTEMS["TankMuzzleFlashSmoke"],
