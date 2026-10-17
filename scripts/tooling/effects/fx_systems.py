@@ -107,7 +107,7 @@ SYSTEMS = {
         # Fades out once the flipbook turns to soot, so the grey GXTankBlastSmoke takes over instead of
         # a black ball sitting on the wreck.
         Lifetime=(62, 68), Size=(52, 64), SizeRate=(0.25, 0.35), SizeRateDamping=(0.98, 0.98),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 24), (0.45, 0.45, 36), (0.0, 0.0, 50)],
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 16), (0.3, 0.3, 26), (0.0, 0.0, 38)],
         Color=[((255, 255, 255), 0)],
         BurstCount=(3, 3), VelocityDamping=(0.85, 0.88), DriftVelocity=(0.0, 0.0, 0.12),
         VelocityType="SPHERICAL", VelSpherical=(0.2, 0.5),
@@ -116,7 +116,7 @@ SYSTEMS = {
     "GXTankBlastSecondary": system(
         ParticleName="gxfx_fireball.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(48, 58), Size=(24, 30), SizeRate=(0.15, 0.25), SizeRateDamping=(0.98, 0.98),
-        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 18), (0.4, 0.4, 28), (0.0, 0.0, 40)],
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 12), (0.3, 0.3, 20), (0.0, 0.0, 30)],
         BurstDelay=(3, 6), BurstCount=(1, 1), SystemLifetime=18, InitialDelay=(5, 5),
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
         VelocityType="SPHERICAL", VelSpherical=(0.6, 1.2),
@@ -162,9 +162,9 @@ SYSTEMS = {
     "GXTankBlastSmoke": system(
         ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(120, 160), Size=(20, 26), SizeRate=(0.3, 0.4), SizeRateDamping=(0.99, 0.99),
-        Alpha=[(0.0, 0.0, 0), (0.8, 0.8, 24), (0.6, 0.6, 80), (0.0, 0.0, 160)],
-        Color=[((165, 158, 150), 0), ((205, 200, 194), 110)],
-        BurstDelay=(2, 2), BurstCount=(2, 2), SystemLifetime=10, InitialDelay=(18, 18),
+        Alpha=[(0.0, 0.0, 0), (0.6, 0.6, 20), (0.45, 0.45, 80), (0.0, 0.0, 160)],
+        Color=[((150, 142, 132), 0), ((200, 195, 188), 110)],
+        BurstDelay=(2, 2), BurstCount=(2, 2), SystemLifetime=10, InitialDelay=(12, 12),
         DriftVelocity=(0.12, 0.05, 0.42), VelocityDamping=(0.92, 0.94),
         VelocityType="SPHERICAL", VelSpherical=(0.4, 0.9),
         VolumeType="SPHERE", VolSphereRadius=8.0),
