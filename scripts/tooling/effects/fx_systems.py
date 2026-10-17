@@ -57,14 +57,14 @@ SYSTEMS = {
     # Bright flash that lights everything for a few frames.
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
-        Lifetime=(7, 7), Size=(40, 40), SizeRate=(3, 3), SizeRateDamping=(0.7, 0.7),
-        Color=[((230, 170, 100), 0), ((180, 80, 20), 3), ((0, 0, 0), 7)],
+        Lifetime=(6, 6), Size=(24, 24), SizeRate=(2, 2), SizeRateDamping=(0.7, 0.7),
+        Color=[((190, 140, 85), 0), ((140, 60, 16), 3), ((0, 0, 0), 6)],
         BurstCount=(1, 1), AngleZ=(0, 6.28)),
     # Orange light pool on the ground under the blast.
     "GXTankBlastGroundGlow": system(
         Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
-        Lifetime=(26, 26), Size=(90, 90), SizeRate=(1.0, 1.0), SizeRateDamping=(0.9, 0.9),
-        Color=[((230, 120, 40), 0), ((120, 40, 10), 12), ((0, 0, 0), 26)],
+        Lifetime=(22, 22), Size=(44, 44), SizeRate=(0.6, 0.6), SizeRateDamping=(0.9, 0.9),
+        Color=[((150, 76, 24), 0), ((80, 28, 8), 10), ((0, 0, 0), 22)],
         BurstCount=(1, 1)),
     # Main fireball: a cluster of billowing flipbook puffs that rise and cool into smoke.
     "GXTankBlastFireball": system(
@@ -127,9 +127,9 @@ SYSTEMS = {
     "GXTankBlastSmoke": system(
         ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
         Lifetime=(120, 160), Size=(20, 26), SizeRate=(0.3, 0.4), SizeRateDamping=(0.99, 0.99),
-        Alpha=[(0.0, 0.0, 0), (0.9, 0.9, 14), (0.6, 0.6, 80), (0.0, 0.0, 160)],
-        Color=[((150, 144, 138), 0), ((200, 196, 190), 110)],
-        BurstDelay=(2, 2), BurstCount=(2, 2), SystemLifetime=10, InitialDelay=(6, 6),
+        Alpha=[(0.0, 0.0, 0), (0.8, 0.8, 24), (0.6, 0.6, 80), (0.0, 0.0, 160)],
+        Color=[((165, 158, 150), 0), ((205, 200, 194), 110)],
+        BurstDelay=(2, 2), BurstCount=(2, 2), SystemLifetime=10, InitialDelay=(18, 18),
         DriftVelocity=(0.12, 0.05, 0.42), VelocityDamping=(0.92, 0.94),
         VelocityType="SPHERICAL", VelSpherical=(0.4, 0.9),
         VolumeType="SPHERE", VolSphereRadius=8.0),
@@ -163,8 +163,8 @@ SYSTEMS = {
         VolumeType="CYLINDER", VolCylinderRadius=6.0, VolCylinderLength=2.0),
     "GXWreckHeatGlow": system(
         Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
-        Lifetime=(40, 40), Size=(34, 40),
-        Color=[((0, 0, 0), 0), ((110, 50, 14), 10), ((110, 50, 14), 30), ((0, 0, 0), 40)],
+        Lifetime=(40, 40), Size=(20, 24),
+        Color=[((0, 0, 0), 0), ((62, 28, 8), 10), ((62, 28, 8), 30), ((0, 0, 0), 40)],
         BurstDelay=(30, 30), BurstCount=(1, 1), SystemLifetime=160),
 
     # ---- Damage states: retail systems redefined in place --------------------------------------
