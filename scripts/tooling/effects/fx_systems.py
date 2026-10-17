@@ -400,6 +400,48 @@ SYSTEMS.update({
     "LiveWireSparks02": _wire_sparks((4.0, 6.0), (20, 90)),
 })
 
+# Inferno Cannon fire field (Object FireFieldSmall / FireFieldUpgradedSmall, about 2.5 s). Retail
+# drew a growing ground-aligned lens flare and a fire-ring sprite, which read as a flat yellow disk,
+# plus big additive glows. Same names, so the object, its weapon and its lifetime stay retail.
+def _inferno_fire(radius):
+    return system(
+        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_flame.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
+        Lifetime=(34, 44), Size=(9.0, 14.0), SizeRate=(0.08, 0.14), SizeRateDamping=(0.98, 0.99),
+        Alpha=[(0.0, 0.0, 0), (1.0, 1.0, 4), (1.0, 1.0, 30), (0.0, 0.0, 44)],
+        BurstDelay=(2, 3), BurstCount=(2, 3), SystemLifetime=75,
+        DriftVelocity=(0.03, 0.06, 0.06),
+        VolumeType="CYLINDER", VolCylinderRadius=radius, VolCylinderLength=1.0)
+
+
+def _inferno_glow(size):
+    # Warm light the burning ground throws, soft and low; no rings.
+    return system(
+        Priority="WEAPON_EXPLOSION", Shader="ADDITIVE", ParticleName="gxfx_spark.tga", IsGroundAligned="Yes",
+        Lifetime=(80, 80), Size=(size, size), SizeRate=(0.1, 0.1), SizeRateDamping=(0.98, 0.98),
+        Color=[((0, 0, 0), 0), ((110, 52, 16), 10), ((70, 30, 8), 60), ((0, 0, 0), 80)],
+        BurstCount=(1, 1), SystemLifetime=1)
+
+
+def _inferno_burst(size):
+    # The shell bursting: one fireball and a soft dust ring, instead of the retail fire-ring sprite.
+    return system(
+        Priority="CRITICAL", ParticleName="gxfx_burst.tga", FlipbookGrid=8, AngleZ=(-0.3, 0.3),
+        Lifetime=(22, 26), Size=(size, size), SizeRate=(0.4, 0.5), SizeRateDamping=(0.93, 0.95),
+        Alpha=[(1.0, 1.0, 0), (1.0, 1.0, 16), (0.0, 0.0, 26)],
+        BurstCount=(2, 2), SystemLifetime=1, VelocityType="SPHERICAL", VelSpherical=(0.2, 0.5),
+        VolumeType="SPHERE", VolSphereRadius=3.0)
+
+
+SYSTEMS.update({
+    "InfernoCannonFire": _inferno_fire(18.0),
+    "InfernoCannonFireUpgraded": _inferno_fire(20.0),
+    "InfernoCannonFlare": _inferno_glow(48.0),
+    "InfernoCannonFlareUpgraded": _inferno_glow(54.0),
+    "InfernoCannonRing": _inferno_burst(16.0),
+    "InfernoCannonRingUpgraded": _inferno_burst(18.0),
+})
+
+
 # Particle systems of one FX list entry: (system, offset x y z).
 FXLISTS = {
     "FX_GenericTankDeathExplosion": {
