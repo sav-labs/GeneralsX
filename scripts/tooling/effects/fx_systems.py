@@ -120,22 +120,6 @@ SYSTEMS = {
         BurstDelay=(3, 5), BurstCount=(1, 1), SystemLifetime=200,
         DriftVelocity=(0.0, 0.0, 0.25),
         VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=1.0),
-    # Retail small-arms hits on vehicles (FX_DamageTankStruckSmallArms, gattling and machine-gun fire):
-    # white additive sparks growing to about 30 units and a white cloud growing to about 75, which read as
-    # white-turquoise noise over the hull at night. Small warm ricochet sparks and a thin grey puff instead.
-    "TankStruckSparks": system(
-        Shader="ADDITIVE", ParticleName="gxfx_streak.tga", IsParticleUpTowardsEmitter="Yes",
-        Priority="WEAPON_EXPLOSION",
-        Lifetime=(5, 9), Size=(0.8, 1.4), SizeRate=(-0.05, -0.05),
-        Color=[((255, 210, 150), 0), ((220, 100, 30), 4), ((0, 0, 0), 9)],
-        BurstCount=(4, 4), Gravity=-0.15, VelocityDamping=(0.92, 0.94),
-        VelocityType="SPHERICAL", VelSpherical=(1.0, 2.5)),
-    "TankStruckSmallArmsSmoke": system(
-        Priority="WEAPON_EXPLOSION", ParticleName="gxfx_dust.tga", FlipbookGrid=8, AngleZ=(-0.3, 0.3),
-        Lifetime=(24, 30), Size=(2.0, 3.0), SizeRate=(0.12, 0.18), SizeRateDamping=(0.97, 0.97),
-        Alpha=[(0.0, 0.0, 0), (0.45, 0.45, 3), (0.0, 0.0, 30)],
-        Color=[((150, 145, 138), 0)],
-        BurstCount=(1, 1), DriftVelocity=(0.0, 0.0, 0.06)),
     "GXTankBlastFlash": system(
         Shader="ADDITIVE", ParticleName="gxfx_flash.tga",
         Lifetime=(6, 6), Size=(24, 24), SizeRate=(2, 2), SizeRateDamping=(0.7, 0.7),
@@ -421,8 +405,9 @@ def _struck_sparks(size):
     # A whole spark shower in one sprite (gxfx_sparks): flash, sparks arcing out, cooling, falling.
     return system(
         Priority="UNIT_DAMAGE_FX", Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8,
-        AngleZ=(-0.3, 0.3), Lifetime=(18, 24), Size=size,
-        Color=[((255, 255, 255), 0), ((255, 255, 255), 14), ((0, 0, 0), 24)],
+        AngleZ=(-0.3, 0.3), Lifetime=(14, 18), Size=size,
+        # Warm and dim: at full white every gattling hit left a white-turquoise speckle over the hull.
+        Color=[((215, 160, 105), 0), ((160, 85, 30), 7), ((0, 0, 0), 18)],
         BurstCount=(1, 1), SystemLifetime=1)
 
 
@@ -444,9 +429,9 @@ def _struck_smoke(count, size, lifetime, alpha):
 SYSTEMS.update({
     "GattlingCannonLenzflare": _gun_flash((5.0, 7.0)),
     "GattlingCannonLenzflareIntense": _gun_flash((8.0, 10.0)),
-    "TankStruckSparks": _struck_sparks((12.0, 16.0)),
-    "SmallTankStruckSparks": _struck_sparks((8.0, 11.0)),
-    "TankStruckLenzflare": _gun_flash((10.0, 12.0), lifetime=4),
+    "TankStruckSparks": _struck_sparks((7.0, 9.0)),
+    "SmallTankStruckSparks": _struck_sparks((5.0, 7.0)),
+    "TankStruckLenzflare": _gun_flash((6.0, 8.0), lifetime=4),
     "TankStruckSmoke": _struck_smoke((3, 3), (3.0, 4.5), (70, 90), 0.6),
     "TankStruckSmallArmsSmoke": _struck_smoke((1, 1), (1.5, 2.5), (25, 35), 0.45),
     "TankSmallMuzzleFlare": _gun_flash((7.0, 9.0), lifetime=4),
