@@ -95,6 +95,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DScreenshot.h"
 #include "W3DDevice/GameClient/W3DCapture.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
+#include "W3DDevice/GameClient/W3DUpscaler.h"
 #include "WWMath/wwmath.h"
 #include "WWLib/registry.h"
 #include "WW3D2/ww3d.h"
@@ -102,6 +103,7 @@ static void drawFramerateBar();
 #include "WW3D2/part_emt.h"
 #include "WW3D2/part_ldr.h"
 #include "WW3D2/dx8caps.h"
+#include "WW3D2/modelnormalmap.h"
 #include "WW3D2/ww3dformat.h"
 #include "WW3D2/agg_def.h"
 #include "WW3D2/render2dsentence.h"
@@ -921,6 +923,111 @@ static void readTextureLoadTotals(UnsignedInt &textureLoads, double &textureLoad
 	textureLoadMs = TextureLoader::Get_Sync_Load_Ms();
 }
 
+// GeneralsX @performance Claude 17/10/2026 Pipeline creation totals of the GeneralsX DXVK d3d9.dll, for [PERF]
+// hitch lines. The layout matches GeneralsXPipelineStats in cmake/dxvk-patches/0019-d3d9-pipeline-stats.patch.
+struct DxvkPipelineStats
+{
+	UnsignedInt size;
+	UnsignedInt pipelines;
+	UnsignedInt fullCompiles;
+	UnsignedInt ffShaders;
+	UnsignedInt64 pipelineUs;
+};
+
+#ifdef _WIN32
+typedef BOOL (WINAPI *GetPipelineStatsFunc)(void *stats);
+#else
+typedef bool (*GetPipelineStatsFunc)(void *stats);
+#endif
+static GetPipelineStatsFunc s_getPipelineStats = nullptr;
+
+static void readPipelineTotals(UnsignedInt &pipelines, UnsignedInt &fullCompiles, UnsignedInt &ffShaders, double &pipelineMs)
+{
+	DxvkPipelineStats stats;
+	memset(&stats, 0, sizeof(stats));
+	stats.size = sizeof(stats);
+	if (s_getPipelineStats == nullptr || !s_getPipelineStats(&stats))
+		return;
+	pipelines = stats.pipelines;
+	fullCompiles = stats.fullCompiles;
+	ffShaders = stats.ffShaders;
+	pipelineMs = (double)stats.pipelineUs / 1000.0;
+}
+
+static void lookupPipelineStats()
+{
+#ifdef _WIN32
+	HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+	if (d3d9 != nullptr)
+		s_getPipelineStats = (GetPipelineStatsFunc)GetProcAddress(d3d9, "GeneralsX_GetPipelineStats");
+#endif
+	if (s_getPipelineStats != nullptr)
+		PerfStats::setPipelineTotalsSource(readPipelineTotals);
+	fprintf(stderr, "[PERF] DXVK pipeline counters %s\n",
+		s_getPipelineStats != nullptr ? "on" : "off (d3d9.dll has no GeneralsX_GetPipelineStats)");
+	fflush(stderr);
+}
+
+// GeneralsX @performance Claude 17/10/2026 Main thread wait totals of the GeneralsX DXVK d3d9.dll, for [PERF] lines.
+// The layout matches GeneralsXSyncStats in cmake/dxvk-patches/0021-d3d9-sync-stats.patch.
+struct DxvkSyncStats
+{
+	UnsignedInt size;
+	UnsignedInt waits[PerfStats::WAIT_KIND_COUNT];
+	UnsignedInt64 waitUs[PerfStats::WAIT_KIND_COUNT];
+	UnsignedInt slowestUs;
+	UnsignedInt slowestKind;
+	UnsignedInt slowestWidth;
+	UnsignedInt slowestHeight;
+	UnsignedInt slowestFormat;
+	UnsignedInt slowestPool;
+	UnsignedInt slowestUsage;
+	UnsignedInt slowestSize;
+};
+
+static GetPipelineStatsFunc s_getSyncStats = nullptr;
+
+static void readWaitTotals(PerfStats::WaitTotals &totals)
+{
+	DxvkSyncStats stats;
+	memset(&stats, 0, sizeof(stats));
+	stats.size = sizeof(stats);
+	if (s_getSyncStats == nullptr || !s_getSyncStats(&stats))
+		return;
+	for (Int i = 0; i < PerfStats::WAIT_KIND_COUNT; ++i)
+	{
+		totals.waits[i] = stats.waits[i];
+		totals.waitMs[i] = (double)stats.waitUs[i] / 1000.0;
+	}
+	totals.slowestMs = (double)stats.slowestUs / 1000.0;
+	static const char *const kindNames[PerfStats::WAIT_KIND_COUNT] = { "buffer lock", "texture lock", "resource", "cs sync" };
+	const char *kindName = stats.slowestKind < PerfStats::WAIT_KIND_COUNT ? kindNames[stats.slowestKind] : "?";
+	if (stats.slowestUs == 0)
+		totals.slowest[0] = '\0';
+	else if (stats.slowestKind == PerfStats::WAIT_BUFFER)
+		snprintf(totals.slowest, sizeof(totals.slowest), "%s %u bytes usage 0x%x pool %u", kindName,
+			stats.slowestSize, stats.slowestUsage, stats.slowestPool);
+	else if (stats.slowestKind == PerfStats::WAIT_TEXTURE)
+		snprintf(totals.slowest, sizeof(totals.slowest), "%s %ux%u format %u usage 0x%x pool %u", kindName,
+			stats.slowestWidth, stats.slowestHeight, stats.slowestFormat, stats.slowestUsage, stats.slowestPool);
+	else
+		snprintf(totals.slowest, sizeof(totals.slowest), "%s", kindName);
+}
+
+static void lookupSyncStats()
+{
+#ifdef _WIN32
+	HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+	if (d3d9 != nullptr)
+		s_getSyncStats = (GetPipelineStatsFunc)GetProcAddress(d3d9, "GeneralsX_GetSyncStats");
+#endif
+	if (s_getSyncStats != nullptr)
+		PerfStats::setWaitTotalsSource(readWaitTotals);
+	fprintf(stderr, "[PERF] DXVK wait counters %s\n",
+		s_getSyncStats != nullptr ? "on" : "off (d3d9.dll has no GeneralsX_GetSyncStats)");
+	fflush(stderr);
+}
+
 // W3DDisplay::init ===========================================================
 /** Initialize or re-initialize the W3D display system.  Here we need to
   * create our window, and get our 3D hardware setup and online */
@@ -1113,8 +1220,21 @@ void W3DDisplay::init()
 
 			// TheSuperHackers @feature Mauller 13/03/2026 Add native MSAA support, must be set before creating render device
 			// GeneralsX @tweak Claude 15/10/2026 Without an Options.ini AntiAliasing key the device picks 2x or 4x by GPU class.
-			WW3D::Set_MSAA_Mode((WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel,
-				TheGlobalData->m_antiAliasLevelIsDefault);
+			// GeneralsX @performance Claude 16/10/2026 FSR 2 and FSR 3 anti-alias the scene themselves and take
+			// single-sampled colour and depth. With MSAA the device rendered every sample, DXVK resolved the colour,
+			// depth and reactive mask copies each frame, and FSR 2 then worked on the resolved, already blended edges.
+			// The Options.ini AntiAliasing entry is kept for the other upscalers.
+			const Bool temporalUpscaler = TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR2
+				|| TheGlobalData->m_upscaler == OptionPreferences::UPSCALER_FSR3;
+			if (temporalUpscaler && attempt == 0 && TheWritableGlobalData->m_antiAliasLevel != WW3D::MULTISAMPLE_MODE_NONE)
+			{
+				fprintf(stderr, "[MSAA] off: %s anti-aliases the scene (AntiAliasing %ux not used with it)\n",
+					OptionPreferences::getUpscalerName((OptionPreferences::UpscalerType)TheGlobalData->m_upscaler),
+					(unsigned)TheWritableGlobalData->m_antiAliasLevel);
+				fflush(stderr);
+			}
+			WW3D::Set_MSAA_Mode(temporalUpscaler ? WW3D::MULTISAMPLE_MODE_NONE : (WW3D::MultiSampleModeEnum)TheWritableGlobalData->m_antiAliasLevel,
+				temporalUpscaler ? false : TheGlobalData->m_antiAliasLevelIsDefault);
 
 			renderDeviceError = WW3D::Set_Render_Device(
 				0,
@@ -1127,7 +1247,10 @@ void W3DDisplay::init()
 			// TheSuperHackers @info Update the MSAA mode that was set as some GPU's may not support certain levels
 			// Texture filtering must also be updated after render device initialization
 			if (renderDeviceError == WW3D_ERROR_OK) {
-				TheWritableGlobalData->m_antiAliasLevel = (UnsignedInt)WW3D::Get_MSAA_Mode();
+				// GeneralsX @tweak Claude 16/10/2026 Keep the player's level while FSR 2 / FSR 3 turn MSAA off, so the
+				// Options menu does not save AntiAliasing = 0
+				if (!temporalUpscaler)
+					TheWritableGlobalData->m_antiAliasLevel = (UnsignedInt)WW3D::Get_MSAA_Mode();
 				WW3D::Set_Texture_Filter(TheWritableGlobalData->m_textureFilteringMode);
 				TheWritableGlobalData->m_textureFilteringMode = WW3D::Get_Texture_Filter();
 				WW3D::Set_Anisotropy_Level(TheWritableGlobalData->m_textureAnisotropyLevel);
@@ -1151,6 +1274,15 @@ void W3DDisplay::init()
 			DEBUG_CRASH( ("Unable to set render device") );
 			return;
 		}
+		// GeneralsX @bugfix Claude 16/10/2026 Log the size the device really got; a failed first attempt falls back
+		// to another display mode
+		fprintf(stderr, "[DISPLAY] device created: back buffer %dx%d, %s%s, %d attempt(s)%s\n",
+			getWidth(), getHeight(), getWindowed() ? "windowed" : "fullscreen",
+			TheGlobalData->m_upscaleToDisplay ? ", borderless window scaled by DXVK" : "",
+			attempt,
+			attempt > 2 ? " (fallback display mode, the configured resolution failed)" : "");
+		fflush(stderr);
+
 		// GeneralsX @bugfix Jaredl-Dev 28/08/2026 Import display-based texture depth and normalize it for WW3D.
 		// Upstream PR: https://github.com/TheSuperHackers/GeneralsGameCode/pull/3181
 		WW3D::Set_Texture_Bitdepth(getBitDepth() == 16 ? 16 : 32);
@@ -1182,6 +1314,13 @@ void W3DDisplay::init()
 		init2DScene();
 		init3DScene();
 		W3DShaderManager::init();
+		// GeneralsX @feature Claude 16/10/2026 Model normal and gloss maps (Options.ini ModelNormalMaps,
+		// ModelSpecular). Set before the first mesh is registered for rendering.
+		ModelNormalMapClass::Set_Enabled(TheGlobalData->m_modelNormalMaps != FALSE);
+		ModelNormalMapClass::Set_Specular(TheGlobalData->m_modelSpecular);
+		fprintf(stderr, "[NORMALMAP] model normal maps %s, specular %.2f\n",
+			TheGlobalData->m_modelNormalMaps ? "on" : "off", TheGlobalData->m_modelSpecular);
+		fflush(stderr);
 
 		// Create and initialize the debug display
 		m_nativeDebugDisplay = NEW W3DDebugDisplay();
@@ -1225,6 +1364,10 @@ void W3DDisplay::init()
 		{
 			// GeneralsX @performance Claude 16/10/2026 Texture loads that stall the main thread, for [PERF] hitch lines.
 			PerfStats::setLoadTotalsSource(readTextureLoadTotals);
+			// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation, for [PERF] hitch lines.
+			lookupPipelineStats();
+			// GeneralsX @performance Claude 17/10/2026 Main thread waits for the GPU, for [PERF] lines.
+			lookupSyncStats();
 			fprintf(stderr, "[PERF] skin cache %s\n", MeshClass::Is_Skin_Cache_Enabled() ? "on" : "off (SkinCache = no)");
 			fflush(stderr);
 		}
@@ -2122,6 +2265,7 @@ void W3DDisplay::recordPerfCounters()
 	counters.skinMeshes = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Renders();
 	counters.skinVertices = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Vertices();
 	counters.skinCacheHits = (UnsignedInt)Debug_Statistics::Get_DX8_Skin_Cache_Hits();
+	counters.normalMapDraws = (UnsignedInt)Debug_Statistics::Get_DX8_Normal_Map_Draws();
 	counters.particles = TheParticleSystemManager ? TheParticleSystemManager->getParticleCount() : 0;
 	counters.particlesOnScreen = TheParticleSystemManager ? TheParticleSystemManager->getOnScreenParticleCount() : 0;
 	PerfStats::setFrameCounters(counters);
@@ -3643,6 +3787,66 @@ Int W3DDisplay::createPreloadedTextures()
 	// Finish the loads that went to the background loader instead.
 	TextureLoader::Flush_Pending_Load_Tasks();
 	return created;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 17/10/2026 Renders the 3D scene of the match behind the load screen, without
+// presenting it. Everything the scene draws is then ready on the GPU when the match starts: managed textures are
+// uploaded, and DXVK has generated the fixed function shaders and created the Vulkan pipelines for the materials,
+// render states and render targets of the scene, its render target passes (water reflection, shadows) and its
+// particles. Doing that for the first time in a match frame stalled it for 100-200 ms. The caller places what
+// should be drawn in front of the camera. Render only: no logic, CRC or replay effect.
+//-------------------------------------------------------------------------------------------------
+Int W3DDisplay::warmUpRender(Int passes)
+{
+	if (TheGlobalData->m_headless || TheTacticalView == nullptr || TheTerrainRenderObject == nullptr
+		|| TheTerrainRenderObject->getMap() == nullptr)
+		return 0;
+	if (DX8Wrapper::_Get_D3D_Device8() == nullptr || DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel() != D3D_OK)
+		return 0;
+
+	W3DView *primaryW3DView = (W3DView *)getFirstView();
+	CameraClass *camera = primaryW3DView ? primaryW3DView->get3DCamera() : nullptr;
+	if (camera == nullptr)
+		return 0;
+
+	// The load screen draws only its interface; the scene renders like a match frame here.
+	const Bool loadScreenRender = TheGlobalData->m_loadScreenRender;
+	TheWritableGlobalData->m_loadScreenRender = FALSE;
+
+	Int rendered = 0;
+	for (Int pass = 0; pass < passes; ++pass)
+	{
+		updateViews();
+
+		if (TheTerrainRenderObject->getShroud())
+			TheTerrainRenderObject->getShroud()->render(camera);
+
+		TheParticleSystemManager->DRAW();
+		if (TheW3DEffectLights)
+			TheW3DEffectLights->update(camera);
+		if (TheWaterRenderObj)
+			TheWaterRenderObj->updateRenderTargetTextures(camera);
+		if (TheW3DProjectedShadowManager)
+			TheW3DProjectedShadowManager->updateRenderTargetTextures();
+		if (TheW3DSkinnedShadowManager)
+			TheW3DSkinnedShadowManager->updateRenderTargetTextures(camera);
+
+		DX8Wrapper::Pillarbox_Begin();
+		if (WW3D::Begin_Render(true, true, Vector3(0.0f, 0.0f, 0.0f), TheWaterTransparency->m_minWaterOpacity) == WW3D_ERROR_OK)
+		{
+			// Not a frame for the temporal upscaler: nothing of it is presented.
+			W3DUpscaler::setSuspended(true);
+			drawViews();
+			W3DUpscaler::setSuspended(false);
+			// End the scene without presenting; the next load screen frame clears the back buffer.
+			WW3D::End_Render(false);
+			++rendered;
+		}
+	}
+
+	TheWritableGlobalData->m_loadScreenRender = loadScreenRender;
+	return rendered;
 }
 
 //-------------------------------------------------------------------------------------------------

@@ -27,6 +27,8 @@
 // Author: Michael S. Booth, November 2000
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
+#include "Common/PerfStats.h"
+
 #include "Common/CRCDebug.h"
 #include "Common/GameState.h"
 #include "Common/PerfTimer.h"
@@ -360,6 +362,8 @@ void AI::update()
 
 	// run player updates
 	{
+		// GeneralsX @performance Claude 17/10/2026 Player (AI) update time for the [PERF] hitch ai line.
+		PERF_STATS_LOGIC(LOGIC_AI_PLAYERS);
 		ThePlayerList->UPDATE();
 	}
 

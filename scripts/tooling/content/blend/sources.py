@@ -119,10 +119,15 @@ UNITS = {
     },
     # M1126 Stryker by cenobyte, CC-BY, as the Microwave Tank: eight named tyres, the rest stays on the hull.
     "microwave": {
-        "model": "AVGXMICRO", "stem": "gxmicro3", "length": 32.0, "yaw": -90.0, "tris": 14000, "split": ".",
+        "model": "AVGXMICRO", "stem": "gxmicro3", "length": 32.0, "yaw": -90.0, "tris": 22000, "split": ".",
         "rules": [{"name": r"^Tyre\d", "bone": "WHEEL#"}],
         "find_wheels": {"zmax": 0.3},
-        "tint": ((180, 154, 110), None, 1.0),
+        # The M1A2 recipe: large forms kept, detail baked from the 122k-face source into the atlas and the
+        # engine normal map, CARC Tan 686A as a fleet vehicle.
+        "cull": 0.18, "planar": 4.0, "plates": 1.0, "hard": 35.0,
+        "procedural": True, "highpoly": 0.45, "relief": 0.3,
+        "uv_angle": 66.0, "uv_small": (0.8, 0.35),
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "rims": {"WHEEL": ("rubber", 0.66)},
         "engine": "front",
     },

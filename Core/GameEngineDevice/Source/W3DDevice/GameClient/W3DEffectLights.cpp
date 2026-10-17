@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <stdio.h>
+#include <string.h>
 
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
@@ -39,6 +40,8 @@
 #include "WW3D2/dx8indexbuffer.h"
 #include "WW3D2/dx8vertexbuffer.h"
 #include "WW3D2/dx8wrapper.h"
+#include "WW3D2/lightenvironment.h"
+#include "WW3D2/robjlist.h"
 #include "WW3D2/texture.h"
 #include "WW3D2/vertmaterial.h"
 #include "WWMath/sphere.h"
@@ -69,14 +72,16 @@ namespace
 	{
 		//  radius intens attack hold   decay  red   green blue  flick prio  low
 		{   0.0f, 0.00f, 0.00f, 0.00f, 0.00f, 1.0f, 1.00f, 1.00f, 0.00f, 0.0f, FALSE }, // KIND_NONE
-		{  40.0f, 0.80f, 0.00f, 0.03f, 0.10f, 1.0f, 0.78f, 0.46f, 0.00f, 0.6f, TRUE  }, // KIND_MUZZLE
-		{  75.0f, 1.00f, 0.02f, 0.04f, 0.40f, 1.0f, 0.62f, 0.30f, 0.00f, 1.0f, TRUE  }, // KIND_IMPACT
-		{ 130.0f, 1.25f, 0.03f, 0.08f, 0.80f, 1.0f, 0.56f, 0.24f, 0.08f, 1.6f, TRUE  }, // KIND_EXPLOSION
-		{ 210.0f, 1.45f, 0.05f, 0.15f, 1.40f, 1.0f, 0.52f, 0.22f, 0.10f, 2.2f, TRUE  }, // KIND_LARGE_EXPLOSION
-		{ 480.0f, 1.90f, 0.15f, 0.60f, 3.50f, 1.0f, 0.80f, 0.60f, 0.05f, 4.0f, TRUE  }, // KIND_SUPERWEAPON
-		{  95.0f, 1.00f, 0.05f, 0.15f, 0.45f, 1.0f, 0.55f, 0.20f, 0.30f, 1.0f, TRUE  }, // KIND_FLAME
-		{  90.0f, 0.85f, 0.00f, 0.00f, 0.00f, 1.0f, 0.50f, 0.18f, 0.22f, 0.9f, FALSE }, // KIND_FIRE
-		{  55.0f, 0.75f, 0.00f, 0.00f, 0.00f, 1.0f, 0.70f, 0.40f, 0.10f, 0.7f, FALSE }, // KIND_EXHAUST
+		// GeneralsX @bugfix Claude 16/10/2026 Smaller and dimmer than before: with every explosion now lit, the old
+		// radii (up to 480) and strengths (up to 1.9) washed whole night scenes yellow. Local pools of light.
+		{  28.0f, 0.70f, 0.00f, 0.03f, 0.10f, 1.0f, 0.78f, 0.46f, 0.00f, 0.6f, TRUE  }, // KIND_MUZZLE
+		{  50.0f, 0.85f, 0.02f, 0.04f, 0.35f, 1.0f, 0.62f, 0.30f, 0.00f, 1.0f, TRUE  }, // KIND_IMPACT
+		{  85.0f, 1.00f, 0.03f, 0.08f, 0.70f, 1.0f, 0.56f, 0.24f, 0.08f, 1.6f, TRUE  }, // KIND_EXPLOSION
+		{ 135.0f, 1.10f, 0.05f, 0.15f, 1.20f, 1.0f, 0.52f, 0.22f, 0.10f, 2.2f, TRUE  }, // KIND_LARGE_EXPLOSION
+		{ 180.0f, 1.25f, 0.15f, 0.60f, 3.00f, 1.0f, 0.80f, 0.60f, 0.05f, 4.0f, TRUE  }, // KIND_SUPERWEAPON
+		{  65.0f, 0.85f, 0.05f, 0.15f, 0.45f, 1.0f, 0.55f, 0.20f, 0.30f, 1.0f, TRUE  }, // KIND_FLAME
+		{  60.0f, 0.75f, 0.00f, 0.00f, 0.00f, 1.0f, 0.50f, 0.18f, 0.22f, 0.9f, FALSE }, // KIND_FIRE
+		{  38.0f, 0.65f, 0.00f, 0.00f, 0.00f, 1.0f, 0.70f, 0.40f, 0.10f, 0.7f, FALSE }, // KIND_EXHAUST
 	};
 
 	const Real s_tints[EffectLights::TINT_COUNT][3] =
@@ -91,8 +96,45 @@ namespace
 
 	const char *const s_modeNames[] = { "Off", "Low", "High" };
 
-	/// Lights and splat geometry stop here: brighter than this only saturates.
-	const Real MAX_INTENSITY = 2.2f;
+	// GeneralsX @bugfix Claude 16/10/2026 Brightness caps against night over-exposure.
+	/// One light (also after merging) stops here: brighter than this only saturates.
+	const Real MAX_INTENSITY = 1.3f;
+	/// All lights of a frame together: above this every light is scaled down, so a big battle cannot tint the screen.
+	const Real MAX_TOTAL_INTENSITY = 4.0f;
+	/// Light a model gets from one effect light at its centre (diffuse, after the day/night scale).
+	const Real MAX_OBJECT_LIGHT = 1.0f;
+	/// Share of an effect light that lights a whole nearby model evenly (WW3D folds a point light's ambient into
+	/// the model's ambient): small, or night buildings turn uniformly yellow.
+	const Real AMBIENT_FRACTION = 0.12f;
+	// GeneralsX @bugfix Claude 17/10/2026 Several flashes at one burning tank each lit the hull up to MAX_OBJECT_LIGHT
+	// and the fixed function lighting adds them up, so night hulls went flat white (fx-night15, fx-night17).
+	/// Light all dynamic lights together give one model at most (brightest channel, at the model's nearest point).
+	const Real MAX_MODEL_DYNAMIC_LIGHT = 0.6f;
+	/// Dynamic lights considered per model.
+	const Int MAX_MODEL_DYNAMIC_LIGHTS = 32;
+	/// Ground light a splat adds at its centre, absolute, per channel.
+	const Real MAX_SPLAT_ADD = 0.3f;
+	/// The ground is brightened at most 1 + this many times at a splat's centre.
+	// GeneralsX @bugfix Claude 17/10/2026 Overlapping splats multiply the ground, so ten lights of a night battle at
+	// 1 + 2 each washed the frame out white (fx-night5). Smaller per splat, and only the strongest splats draw.
+	const Real MAX_SPLAT_RATIO = 0.75f;
+	// GeneralsX @bugfix Claude 17/10/2026 Steady fires on wrecks lit a bright pool under every burning tank for as long
+	// as it burned (fx-day21, fx-night21). Their ground light is a fraction of a flash's.
+	/// Share of a light's strength that reaches the ground splat, per kind (flashes keep their full pool).
+	Real groundShare(Int kind)
+	{
+		switch (kind)
+		{
+			case EffectLights::KIND_FIRE: return 0.3f;
+			case EffectLights::KIND_EXHAUST: return 0.3f;
+			case EffectLights::KIND_FLAME: return 0.6f;
+			default: return 1.0f;
+		}
+	}
+	/// Ground splats per frame at most, the strongest lights first.
+	const Int MAX_SPLATS = 4;
+	/// Largest light radius after size and object scaling, world units (a tank is about 30 across).
+	const Real MAX_RADIUS = 200.0f;
 	/// Lights closer than this fraction of the larger radius become one light.
 	const Real MERGE_FRACTION = 0.5f;
 	/// Splat geometry floats this far above the terrain so it wins the depth test against it and the roads.
@@ -118,14 +160,16 @@ namespace
 			+ 0.2f * WWMath::Sin(t * 41.3f + phase * 3.1f);
 	}
 
-	/// Radial falloff of the ground light, x = distance / radius: bright core, long soft tail, 0 at the radius.
+	/// Radial falloff of the ground light, x = distance / radius: bright core, inverse square like tail, 0 at the
+	/// radius.
+	// GeneralsX @bugfix Claude 16/10/2026 Steeper (1 + 8 x^2 instead of 1 + 3 x^2): a pool, not a wash.
 	Real splatFalloff(Real x)
 	{
 		if (x >= 1.0f)
 			return 0.0f;
 		const Real x2 = x * x;
 		const Real window = 1.0f - x2 * x2;
-		return window * window / (1.0f + 3.0f * x2);
+		return window * window / (1.0f + 8.0f * x2);
 	}
 }
 
@@ -142,8 +186,11 @@ W3DEffectLights::W3DEffectLights() :
 	m_terrainLight(1.0f),
 	m_terrainLightColor(1.0f, 1.0f, 1.0f),
 	m_objectScale(1.0f),
-	m_falloffTexture(nullptr)
+	m_falloffTexture(nullptr),
+	m_burstWatermark(0),
+	m_statsStartMs(0)
 {
+	resetStats();
 	for (Int i = 0; i < MAX_LIGHTS; ++i)
 		m_lights[i] = nullptr;
 	for (Int i = 0; i < MAX_PULSES; ++i)
@@ -231,7 +278,10 @@ void W3DEffectLights::reset()
 	for (Int i = 0; i < MAX_PULSES; ++i)
 		m_pulses[i].active = FALSE;
 	m_particleProfiles.clear();
+	m_burstWatermark = 0;
 	m_numCandidates = 0;
+	resetStats();
+	m_statsStartMs = 0;
 	disableAll();
 	readOptions();
 	createLights();
@@ -249,6 +299,12 @@ void W3DEffectLights::addEffect(const Coord3D *pos, const EffectLights::Profile 
 {
 	if (m_numLights == 0 || !pos || profile.kind <= EffectLights::KIND_NONE || profile.kind >= EffectLights::KIND_COUNT)
 		return;
+	++m_stats.fxEvents[profile.kind];
+	addPulse(pos, profile, objectRadius);
+}
+
+void W3DEffectLights::addPulse(const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius)
+{
 	const KindLook &look = s_kinds[profile.kind];
 	if (look.decay <= 0.0f)
 		return;	// continuous kinds come from particle systems
@@ -257,7 +313,8 @@ void W3DEffectLights::addEffect(const Coord3D *pos, const EffectLights::Profile 
 
 	Real radius = look.radius * profile.sizeScale;
 	if (objectRadius > 0.0f && profile.kind >= EffectLights::KIND_IMPACT && profile.kind <= EffectLights::KIND_LARGE_EXPLOSION)
-		radius = clampReal(objectRadius * 2.5f, radius, look.radius * 2.2f);
+		radius = clampReal(objectRadius * 2.0f, radius, look.radius * 1.6f);
+	radius = clampReal(radius, 5.0f, MAX_RADIUS);
 
 	Vector3 color = profile.hasColor ? Vector3(profile.red, profile.green, profile.blue) : kindColor(profile.kind, profile.tint);
 	const Vector3 where(pos->x, pos->y, pos->z);
@@ -277,18 +334,27 @@ void W3DEffectLights::addEffect(const Coord3D *pos, const EffectLights::Profile 
 			continue;
 		}
 		const KindLook &other = s_kinds[pulse.kind];
-		if (pulse.kind == profile.kind)
+		// GeneralsX @bugfix Claude 16/10/2026 Also across kinds: an FXList and the particle burst it spawned (or
+		// a muzzle flash and the shell hit next to it) are one light, the bigger of the two.
+		const Real limit = 0.35f * (pulse.radius > radius ? pulse.radius : radius);
+		if ((pulse.pos - where).Length2() < limit * limit && pulse.age < other.attack + other.hold + 0.5f * other.decay)
 		{
-			const Real limit = 0.35f * (pulse.radius > radius ? pulse.radius : radius);
-			if ((pulse.pos - where).Length2() < limit * limit && pulse.age < other.attack + other.hold + 0.5f * other.decay)
+			if (pulse.kind == profile.kind)
 			{
-				pulse.intensity = clampReal(pulse.intensity * 1.15f, 0.0f, look.intensity * 1.5f);
+				pulse.intensity = clampReal(pulse.intensity * 1.15f, 0.0f, look.intensity * 1.25f);
 				if (pulse.age > other.attack)
 					pulse.age = other.attack;
-				if (radius > pulse.radius)
-					pulse.radius = radius;
-				return;
 			}
+			else if (look.radius * look.intensity > other.radius * other.intensity)
+			{
+				pulse.kind = profile.kind;
+				pulse.color = color;
+				pulse.intensity = look.intensity > pulse.intensity ? look.intensity : pulse.intensity;
+				pulse.age = 0.0f;
+			}
+			if (radius > pulse.radius)
+				pulse.radius = radius;
+			return;
 		}
 		const Real energy = pulse.intensity * pulse.radius * (1.0f - pulse.age / (other.attack + other.hold + other.decay));
 		if (energy < weakestEnergy)
@@ -391,6 +457,73 @@ void W3DEffectLights::addCandidate(const Vector3 &pos, const Vector3 &color, Rea
 	c.radius = radius;
 	c.intensity = intensity;
 	c.priority = intensity * radius * s_kinds[kind].priority;
+	c.kind = kind;
+	++m_stats.candidates[kind];
+}
+
+const EffectLights::Profile &W3DEffectLights::particleProfile(ParticleSystem *system)
+{
+	const ParticleSystemTemplate *tmpl = system->getTemplate();
+	std::map<const void *, EffectLights::Profile>::iterator found = m_particleProfiles.find(tmpl);
+	if (found == m_particleProfiles.end())
+	{
+		found = m_particleProfiles.insert(std::make_pair((const void *)tmpl, EffectLights::classifyParticleSystem(system))).first;
+		// GeneralsX @bugfix Claude 16/10/2026 With -perf, name the particle systems that give off light.
+		static Int s_logged = 0;
+		if (PerfStats::isEnabled() && found->second.kind != EffectLights::KIND_NONE && s_logged < 200)
+		{
+			++s_logged;
+			fprintf(stderr, "[LIGHTS] particles %s -> %s%s size %.2f\n", tmpl->getName().str(),
+				EffectLights::kindName(found->second.kind), system->m_isOneShot ? " (burst)" : "", found->second.sizeScale);
+			fflush(stderr);
+		}
+	}
+	return found->second;
+}
+
+void W3DEffectLights::resetStats()
+{
+	memset(&m_stats, 0, sizeof(m_stats));
+}
+
+void W3DEffectLights::logStats(UnsignedInt nowMs)
+{
+	if (m_statsStartMs == 0)
+	{
+		m_statsStartMs = nowMs;
+		resetStats();
+		return;
+	}
+	const UnsignedInt elapsed = nowMs - m_statsStartMs;
+	if (elapsed < 5000 || m_stats.frames == 0)
+		return;
+	const double frames = (double)m_stats.frames;
+	char fx[256], bursts[256], cands[256], lit[256];
+	Int nfx = 0, nb = 0, nc = 0, nl = 0;
+	fx[0] = bursts[0] = cands[0] = lit[0] = 0;
+	for (Int k = EffectLights::KIND_MUZZLE; k < EffectLights::KIND_COUNT; ++k)
+	{
+		const char *name = EffectLights::kindName(k);
+		if (m_stats.fxEvents[k])
+			nfx += snprintf(fx + nfx, sizeof(fx) - nfx, " %s=%u", name, m_stats.fxEvents[k]);
+		if (m_stats.bursts[k])
+			nb += snprintf(bursts + nb, sizeof(bursts) - nb, " %s=%u", name, m_stats.bursts[k]);
+		if (m_stats.candidates[k])
+			nc += snprintf(cands + nc, sizeof(cands) - nc, " %s=%.1f", name, m_stats.candidates[k] / frames);
+		if (m_stats.lit[k])
+			nl += snprintf(lit + nl, sizeof(lit) - nl, " %s=%.1f", name, m_stats.lit[k] / frames);
+		if (nfx >= (Int)sizeof(fx)) nfx = (Int)sizeof(fx) - 1;
+		if (nb >= (Int)sizeof(bursts)) nb = (Int)sizeof(bursts) - 1;
+		if (nc >= (Int)sizeof(cands)) nc = (Int)sizeof(cands) - 1;
+		if (nl >= (Int)sizeof(lit)) nl = (Int)sizeof(lit) - 1;
+	}
+	fprintf(stderr, "[LIGHTS] %.1fs frames=%u lit avg=%.1f max=%u candidates avg=%.1f | fx events:%s | particle bursts:%s"
+		" | candidates/frame:%s | lit/frame:%s\n",
+		elapsed * 0.001, m_stats.frames, m_stats.litSum / frames, m_stats.litMax, m_stats.candidateSum / frames,
+		nfx ? fx : " none", nb ? bursts : " none", nc ? cands : " none", nl ? lit : " none");
+	fflush(stderr);
+	m_statsStartMs = nowMs;
+	resetStats();
 }
 
 void W3DEffectLights::collectParticleLights(CameraClass *camera, Real timeSeconds)
@@ -401,28 +534,39 @@ void W3DEffectLights::collectParticleLights(CameraClass *camera, Real timeSecond
 	const Int playerIndex = player ? player->getPlayerIndex() : -1;
 
 	ParticleSystemManager::ParticleSystemList &systems = TheParticleSystemManager->getAllParticleSystems();
+	Int newWatermark = m_burstWatermark;
 	for (ParticleSystemManager::ParticleSystemListIt it = systems.begin(); it != systems.end(); ++it)
 	{
 		ParticleSystem *system = *it;
-		if (!system || system->getMaster() != nullptr)
-			continue;	// slave systems follow their master's particles
+		if (!system || !system->getTemplate())
+			continue;
 		const UnsignedInt count = system->getParticleCount();
 		if (count == 0)
 			continue;
-		const ParticleSystemTemplate *tmpl = system->getTemplate();
-		if (!tmpl)
+		// GeneralsX @bugfix Claude 16/10/2026 Slave systems used to be skipped outright, which lost every fire that
+		// is the slave of a smoke master. A slave counts when its master gives off no light; it sits where the
+		// master is.
+		ParticleSystem *anchor = system->getMaster() ? system->getMaster() : system;
+		if (anchor != system && (!anchor->getTemplate() || particleProfile(anchor).kind != EffectLights::KIND_NONE))
 			continue;
-
-		std::map<const void *, EffectLights::Profile>::iterator found = m_particleProfiles.find(tmpl);
-		if (found == m_particleProfiles.end())
-			found = m_particleProfiles.insert(std::make_pair((const void *)tmpl, EffectLights::classifyParticleSystem(system))).first;
-		const EffectLights::Profile &profile = found->second;
-		if (profile.kind != EffectLights::KIND_FIRE && profile.kind != EffectLights::KIND_EXHAUST)
+		const EffectLights::Profile &profile = particleProfile(system);
+		const Bool burst = profile.kind == EffectLights::KIND_MUZZLE || profile.kind == EffectLights::KIND_IMPACT
+			|| profile.kind == EffectLights::KIND_EXPLOSION;
+		if (!burst && profile.kind != EffectLights::KIND_FIRE && profile.kind != EffectLights::KIND_EXHAUST)
 			continue;
-
+		// GeneralsX @bugfix Claude 16/10/2026 A one-shot burst lights once, when it is first seen with particles
+		// (explosions of death modules and object creation lists do not always go through an FXList).
+		const Int systemID = (Int)system->getSystemID();
+		if (burst)
+		{
+			if (systemID <= m_burstWatermark)
+				continue;
+			if (systemID > newWatermark)
+				newWatermark = systemID;
+		}
 		Coord3D pos;
-		system->getWorldPosition(&pos);
-		const DrawableID drawableID = system->getAttachedDrawable();
+		anchor->getWorldPosition(&pos);
+		const DrawableID drawableID = anchor->getAttachedDrawable();
 		if (drawableID != INVALID_DRAWABLE_ID)
 		{
 			Drawable *draw = TheGameClient->findDrawableByID(drawableID);
@@ -435,6 +579,12 @@ void W3DEffectLights::collectParticleLights(CameraClass *camera, Real timeSecond
 			continue;
 		}
 
+		if (burst)
+		{
+			++m_stats.bursts[profile.kind];
+			addPulse(&pos, profile, 0.0f);
+			continue;
+		}
 		const KindLook &look = s_kinds[profile.kind];
 		const Real radius = look.radius * profile.sizeScale;
 		// fade in with the first particles and out with the last ones
@@ -447,6 +597,7 @@ void W3DEffectLights::collectParticleLights(CameraClass *camera, Real timeSecond
 			: kindColor(profile.kind, profile.tint);
 		addCandidate(Vector3(pos.x, pos.y, pos.z + 0.15f * radius), color, radius, intensity, profile.kind, camera);
 	}
+	m_burstWatermark = newWatermark;
 }
 
 void W3DEffectLights::update(CameraClass *camera)
@@ -525,10 +676,10 @@ void W3DEffectLights::update(CameraClass *camera)
 			{
 				const Real total = light.intensity + cand.intensity;
 				light.color = (light.color * light.intensity + cand.color * cand.intensity) / total;
-				light.intensity = clampReal(light.intensity + 0.4f * cand.intensity, 0.0f, MAX_INTENSITY);
+				light.intensity = clampReal(light.intensity + 0.25f * cand.intensity, 0.0f, MAX_INTENSITY);
 				const Real reach = WWMath::Sqrt(dist2) + cand.radius;
 				if (reach > light.radius)
-					light.radius = reach < 1.3f * larger ? reach : 1.3f * larger;
+					light.radius = reach < 1.15f * larger ? reach : 1.15f * larger;
 				merged = TRUE;
 				break;
 			}
@@ -540,6 +691,18 @@ void W3DEffectLights::update(CameraClass *camera)
 		light.color = cand.color;
 		light.radius = cand.radius;
 		light.intensity = clampReal(cand.intensity, 0.0f, MAX_INTENSITY);
+		light.kind = cand.kind;
+	}
+
+	// cap on the light of all effects together
+	Real totalIntensity = 0.0f;
+	for (Int a = 0; a < m_numActive; ++a)
+		totalIntensity += m_active[a].intensity;
+	if (totalIntensity > MAX_TOTAL_INTENSITY)
+	{
+		const Real scale = MAX_TOTAL_INTENSITY / totalIntensity;
+		for (Int a = 0; a < m_numActive; ++a)
+			m_active[a].intensity *= scale;
 	}
 
 	for (Int i = 0; i < MAX_LIGHTS; ++i)
@@ -553,10 +716,11 @@ void W3DEffectLights::update(CameraClass *camera)
 			continue;
 		}
 		const ActiveLight &active = m_active[i];
-		const Vector3 diffuse = active.color * (active.intensity * m_objectScale);
+		const Real objectLight = active.intensity * m_objectScale;
+		const Vector3 diffuse = active.color * (objectLight < MAX_OBJECT_LIGHT ? objectLight : MAX_OBJECT_LIGHT);
 		light->setEnabled(true);
 		light->Set_Diffuse(diffuse);
-		light->Set_Ambient(diffuse * 0.45f);
+		light->Set_Ambient(diffuse * AMBIENT_FRACTION);
 		// range before position: moving the light refreshes its cached bounding sphere from the range
 		light->Set_Flag(LightClass::FAR_ATTENUATION, true);
 		light->Set_Far_Attenuation_Range(0.25f * active.radius, active.radius);
@@ -572,7 +736,17 @@ void W3DEffectLights::update(CameraClass *camera)
 	}
 
 	if (PerfStats::isEnabled())
+	{
 		PerfStats::setEffectLights((UnsignedInt)m_numActive, countRetailLights(), candidateCount);
+		++m_stats.frames;
+		m_stats.litSum += (UnsignedInt)m_numActive;
+		if ((UnsignedInt)m_numActive > m_stats.litMax)
+			m_stats.litMax = (UnsignedInt)m_numActive;
+		m_stats.candidateSum += candidateCount;
+		for (Int a = 0; a < m_numActive; ++a)
+			++m_stats.lit[m_active[a].kind];
+		logStats(nowMs);
+	}
 }
 
 void W3DEffectLights::ensureFalloffTexture()
@@ -630,19 +804,50 @@ void W3DEffectLights::drawTerrainSplats(WorldHeightMap &map)
 	};
 	Splat splats[MAX_LIGHTS];
 	Int numSplats = 0;
+	// the strongest lights get the splats
+	Bool splatLight[MAX_LIGHTS];
+	for (Int i = 0; i < MAX_LIGHTS; ++i)
+		splatLight[i] = FALSE;
+	for (Int n = 0; n < MAX_SPLATS && n < m_numActive; ++n)
+	{
+		Int best = -1;
+		for (Int i = 0; i < m_numActive; ++i)
+		{
+			if (!splatLight[i] && (best < 0 || m_active[i].intensity > m_active[best].intensity))
+				best = i;
+		}
+		splatLight[best] = TRUE;
+	}
 	const Real terrainScale = 1.0f * m_objectScale;
 	for (Int wantPasses = MAX_SPLAT_PASSES; wantPasses >= 1; --wantPasses)
 	{
 		for (Int i = 0; i < m_numActive; ++i)
 		{
+			if (!splatLight[i])
+				continue;
 			const ActiveLight &light = m_active[i];
-			const Real scale = light.intensity * terrainScale;
-			Vector3 ratio(clampReal(light.color.X * scale / m_terrainLightColor.X, 0.0f, 7.0f),
-				clampReal(light.color.Y * scale / m_terrainLightColor.Y, 0.0f, 7.0f),
-				clampReal(light.color.Z * scale / m_terrainLightColor.Z, 0.0f, 7.0f));
+			const Real scale = light.intensity * terrainScale * groundShare(light.kind);
+			// GeneralsX @bugfix Claude 16/10/2026 Absolute added light and ratio capped: dividing by the dark night
+			// ground light used to brighten it up to 8 times over the whole radius.
+			// GeneralsX @bugfix Claude 17/10/2026 Both caps scale all three channels together. Capping each channel on
+			// its own flattened orange fire light (1, 0.5, 0.18) to yellow, and on blue moonlit ground to yellow-green.
+			Vector3 add(light.color.X * scale, light.color.Y * scale, light.color.Z * scale);
+			Real addMax = add.X > add.Y ? add.X : add.Y;
+			if (add.Z > addMax)
+				addMax = add.Z;
+			if (addMax > MAX_SPLAT_ADD)
+				add *= MAX_SPLAT_ADD / addMax;
+			Vector3 ratio(add.X / m_terrainLightColor.X, add.Y / m_terrainLightColor.Y, add.Z / m_terrainLightColor.Z);
 			Real largest = ratio.X > ratio.Y ? ratio.X : ratio.Y;
 			if (ratio.Z > largest)
 				largest = ratio.Z;
+			if (largest > MAX_SPLAT_RATIO)
+			{
+				ratio *= MAX_SPLAT_RATIO / largest;
+				largest = MAX_SPLAT_RATIO;
+			}
+			if (largest <= 0.0f)
+				continue;
 			const Int passes = largest <= 1.0f ? 1 : (largest <= 3.0f ? 2 : 3);
 			if (passes != wantPasses)
 				continue;
@@ -822,4 +1027,68 @@ void W3DEffectLights::drawTerrainSplats(WorldHeightMap &map)
 	REF_PTR_RELEASE(material);
 	DX8Wrapper::Set_Texture(0, nullptr);
 	ShaderClass::Invalidate();
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 17/10/2026 Dynamic lights of one model, with a cap on their sum.
+// The fixed function point lights fade as 1 / (1 + 6 d^2 / r^2) (DX8Wrapper, enhanced falloff), so the light a
+// model gets is estimated at its point nearest to each light. Lights only change how a model is drawn: no logic or
+// CRC impact.
+//-------------------------------------------------------------------------------------------------
+void W3DEffectLights::addModelDynamicLights(LightEnvironmentClass &env, const SphereClass &bounds, RTS3DScene &scene)
+{
+	W3DDynamicLight *reaching[MAX_MODEL_DYNAMIC_LIGHTS];
+	Int count = 0;
+	Real total = 0.0f;
+
+	RefRenderObjListIterator it(scene.getDynamicLights());
+	for (it.First(); !it.Is_Done() && count < MAX_MODEL_DYNAMIC_LIGHTS; it.Next())
+	{
+		W3DDynamicLight *light = (W3DDynamicLight *)it.Peek_Obj();
+		if (!light->isEnabled())
+			continue;
+		if (light->Get_Type() == LightClass::POINT && !Spheres_Intersect(bounds, light->Get_Bounding_Sphere()))
+			continue;
+		reaching[count++] = light;
+
+		Vector3 diffuse;
+		light->Get_Diffuse(&diffuse);
+		Real peak = diffuse.X > diffuse.Y ? diffuse.X : diffuse.Y;
+		if (diffuse.Z > peak)
+			peak = diffuse.Z;
+		peak *= light->Get_Intensity();
+		if (light->Get_Type() == LightClass::POINT)
+		{
+			double start, end;
+			light->Get_Far_Attenuation_Range(start, end);
+			Real dist = (light->Get_Position() - bounds.Center).Length() - bounds.Radius;
+			if (dist < 0.0f)
+				dist = 0.0f;
+			if (end > 1e-5)
+				peak /= 1.0f + 6.0f * dist * dist / (Real)(end * end);
+		}
+		total += peak;
+	}
+
+	if (total <= MAX_MODEL_DYNAMIC_LIGHT)
+	{
+		for (Int i = 0; i < count; ++i)
+			env.Add_Light(*reaching[i]);
+		return;
+	}
+
+	// LightEnvironmentClass copies the colours, so the lights are dimmed for this model only and restored
+	const Real scale = MAX_MODEL_DYNAMIC_LIGHT / total;
+	for (Int i = 0; i < count; ++i)
+	{
+		W3DDynamicLight *light = reaching[i];
+		Vector3 diffuse, ambient;
+		light->Get_Diffuse(&diffuse);
+		light->Get_Ambient(&ambient);
+		light->Set_Diffuse(diffuse * scale);
+		light->Set_Ambient(ambient * scale);
+		env.Add_Light(*light);
+		light->Set_Diffuse(diffuse);
+		light->Set_Ambient(ambient);
+	}
 }

@@ -47,6 +47,7 @@ namespace
 		UnsignedInt64 skinMeshes;
 		UnsignedInt64 skinVertices;
 		UnsignedInt64 skinCacheHits;
+		UnsignedInt64 normalMapDraws;
 		UnsignedInt64 shadowRebuilds;
 		UnsignedInt64 shadowRebuildTriangles;
 		UnsignedInt64 skinnedShadowUpdates;
@@ -64,6 +65,12 @@ namespace
 		double modelLoadMs;
 		UnsignedInt64 shadersCreated;
 		UnsignedInt64 drawablesCreated;
+		// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation (hitch counters).
+		UnsignedInt64 pipelines;
+		double pipelineMs;
+		// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer.
+		UnsignedInt64 waits[WAIT_KIND_COUNT];
+		double waitMs[WAIT_KIND_COUNT];
 		UnsignedInt hitches;
 		UnsignedInt drawCallsMax;
 		Int particlesMax;
@@ -114,6 +121,36 @@ namespace
 	LoadTotalsSource s_loadTotalsSource = nullptr;
 	UnsignedInt s_lastTextureLoadTotal = 0;
 	double s_lastTextureLoadMsTotal = 0.0;
+	// GeneralsX @performance Claude 17/10/2026 DXVK pipeline creation of the current frame and the running totals.
+	UnsignedInt s_framePipelines = 0;
+	UnsignedInt s_frameFullCompiles = 0;
+	UnsignedInt s_frameFFShaders = 0;
+	double s_framePipelineMs = 0.0;
+	PipelineTotalsSource s_pipelineTotalsSource = nullptr;
+	UnsignedInt s_lastPipelineTotal = 0;
+	UnsignedInt s_lastFullCompileTotal = 0;
+	UnsignedInt s_lastFFShaderTotal = 0;
+	double s_lastPipelineMsTotal = 0.0;
+	// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer in the current frame and the totals.
+	UnsignedInt s_frameWaits[WAIT_KIND_COUNT];
+	double s_frameWaitMs[WAIT_KIND_COUNT];
+	double s_frameSlowestWaitMs = 0.0;
+	char s_frameSlowestWait[96];
+	WaitTotalsSource s_waitTotalsSource = nullptr;
+	WaitTotals s_lastWaitTotals;
+	// GeneralsX @performance Claude 17/10/2026 The current frame loads a map, see markLoadFrame.
+	Bool s_loadFrame = FALSE;
+	// GeneralsX @performance Claude 17/10/2026 Game logic parts and the slowest update module of the current frame.
+	double s_frameLogicMs[LOGIC_PART_COUNT];
+	UnsignedInt s_frameLogicUpdates = 0;
+	double s_frameSlowestUpdateMs = 0.0;
+	char s_frameSlowestThing[64];
+	char s_frameSlowestModule[64];
+	UnsignedInt s_framePaths = 0;
+	Int s_framePathCells = 0;
+	double s_frameSlowestPathMs = 0.0;
+	Int s_frameSlowestPathCells = 0;
+	char s_frameSlowestPathThing[64];
 
 	Window s_interval;
 	Window s_overlay;
@@ -141,6 +178,21 @@ namespace
 		"skinned_shadows_ms",
 		"lights_ms",
 		"water_reflection_ms",
+		"scene_visibility_ms",
+		"scene_terrain_ms",
+		"scene_objects_ms",
+		"scene_translucent_ms",
+		"terrain_base_ms",
+		"terrain_shore_ms",
+		"terrain_blend_ms",
+		"terrain_roads_ms",
+		"terrain_props_ms",
+		"terrain_scorch_ms",
+		"terrain_bridges_ms",
+		"terrain_tracks_ms",
+		"terrain_shroud_ms",
+		"terrain_bibs_ms",
+		"terrain_light_vb_ms",
 	};
 
 	void accumulate(Window &w, double frameMs)
@@ -151,6 +203,13 @@ namespace
 			w.frameMsMax = frameMs;
 		if (frameMs >= HitchThresholdMs)
 			++w.hitches;
+		w.pipelines += s_framePipelines;
+		w.pipelineMs += s_framePipelineMs;
+		for (Int i = 0; i < WAIT_KIND_COUNT; ++i)
+		{
+			w.waits[i] += s_frameWaits[i];
+			w.waitMs[i] += s_frameWaitMs[i];
+		}
 		for (Int i = 0; i < SECTION_COUNT; ++i)
 			w.sectionMs[i] += s_frameSectionMs[i];
 		w.drawCalls += s_frameCounters.drawCalls;
@@ -159,6 +218,7 @@ namespace
 		w.skinMeshes += s_frameCounters.skinMeshes;
 		w.skinVertices += s_frameCounters.skinVertices;
 		w.skinCacheHits += s_frameCounters.skinCacheHits;
+		w.normalMapDraws += s_frameCounters.normalMapDraws;
 		w.shadowRebuilds += s_frameShadowRebuilds;
 		w.shadowRebuildTriangles += s_frameShadowRebuildTriangles;
 		w.skinnedShadowUpdates += s_frameSkinnedShadowUpdates;
@@ -201,7 +261,7 @@ namespace
 			" | logic=%.2f client=%.2f (drawables=%.2f particles=%.2f draw=%.2f: targets=%.2f scene=%.2f"
 			" [meshes=%.2f shadows=%.2f particles=%.2f] present=%.2f water_refl=%.2f)"
 			" | draws=%.0f max=%u tris=%.0fk sorted=%.0fk"
-			" | skins=%.1f skinverts=%.1fk cachehits=%.1f"
+			" | skins=%.1f skinverts=%.1fk cachehits=%.1f normalmapped=%.1f"
 			" | shadowrebuilds=%.1f (%.1fk tris)"
 			" | skinshadows=%.1f updates=%.1f (%.1fk tris) skinshadow_ms=%.2f"
 			" | lights=%.1f max=%u retail=%.1f candidates=%.1f lights_ms=%.2f"
@@ -216,6 +276,7 @@ namespace
 			avg((double)w.drawCalls, n), w.drawCallsMax,
 			avg((double)w.triangles, n) / 1000.0, avg((double)w.sortedTriangles, n) / 1000.0,
 			avg((double)w.skinMeshes, n), avg((double)w.skinVertices, n) / 1000.0, avg((double)w.skinCacheHits, n),
+			avg((double)w.normalMapDraws, n),
 			avg((double)w.shadowRebuilds, n), avg((double)w.shadowRebuildTriangles, n) / 1000.0,
 			avg((double)w.skinnedShadowsDrawn, n), avg((double)w.skinnedShadowUpdates, n),
 			avg((double)w.skinnedShadowUpdateTriangles, n) / 1000.0, avg(w.sectionMs[SECTION_SKINNED_SHADOWS], n),
@@ -231,6 +292,17 @@ namespace
 		fprintf(stderr, " | hitches=%u texloads=%llu (%.0f ms) modelloads=%llu (%.0f ms) shaders=%llu drawables=%llu",
 			w.hitches, (unsigned long long)w.textureLoads, w.textureLoadMs, (unsigned long long)w.modelLoads, w.modelLoadMs,
 			(unsigned long long)w.shadersCreated, (unsigned long long)w.drawablesCreated);
+		// GeneralsX @performance Claude 17/10/2026 DXVK pipelines created for draws over the window.
+		if (s_pipelineTotalsSource != nullptr)
+			fprintf(stderr, " pipelines=%llu (%.0f ms)", (unsigned long long)w.pipelines, w.pipelineMs);
+		// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer, per frame.
+		if (s_waitTotalsSource != nullptr)
+		{
+			fprintf(stderr, " | waits_ms buffer=%.2f texture=%.2f other=%.2f cs=%.2f (per frame %.1f/%.1f/%.1f/%.1f)",
+				avg(w.waitMs[WAIT_BUFFER], n), avg(w.waitMs[WAIT_TEXTURE], n), avg(w.waitMs[WAIT_OTHER], n),
+				avg(w.waitMs[WAIT_CS], n), avg((double)w.waits[WAIT_BUFFER], n), avg((double)w.waits[WAIT_TEXTURE], n),
+				avg((double)w.waits[WAIT_OTHER], n), avg((double)w.waits[WAIT_CS], n));
+		}
 		fprintf(stderr, "\n");
 		fflush(stderr);
 	}
@@ -264,27 +336,73 @@ namespace
 
 	// GeneralsX @performance Claude 16/10/2026 One line for a frame of at least HitchThresholdMs: where the time
 	// went and what was loaded or created in that frame.
-	void printHitch(double frameMs, Bool inMatch, UnsignedInt logicFrame)
+	// GeneralsX @performance Claude 17/10/2026 The same line names a map load frame "load" instead of "hitch".
+	void printHitch(double frameMs, Bool inMatch, UnsignedInt logicFrame, const char *kind)
 	{
 		fprintf(stderr,
-			"[PERF] hitch frame_ms=%.1f %s logic_frame=%u"
+			"[PERF] %s frame_ms=%.1f %s logic_frame=%u"
 			" | logic=%.1f client=%.1f (drawables=%.1f particles=%.1f draw=%.1f: targets=%.1f scene=%.1f"
-			" [meshes=%.1f shadows=%.1f particles=%.1f] present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
+			" [meshes=%.1f shadows=%.1f particles=%.1f vis=%.1f terrain=%.1f objects=%.1f translucent=%.1f]"
+			" present=%.1f water_refl=%.1f lights=%.1f skinshadow=%.1f)"
 			" untracked=%.1f"
 			" | texloads=%u (%.1f ms) modelloads=%u (%.1f ms) shaders=%u drawables=%u"
+			" pipelines=%u (%.1f ms, %u full) ffshaders=%u"
 			" | draws=%u tris=%.0fk particles=%d\n",
-			frameMs, inMatch ? "match" : "shell", logicFrame,
+			kind, frameMs, inMatch ? "match" : "shell", logicFrame,
 			s_frameSectionMs[SECTION_LOGIC], s_frameSectionMs[SECTION_CLIENT],
 			s_frameSectionMs[SECTION_DRAWABLES], s_frameSectionMs[SECTION_PARTICLE_UPDATE],
 			s_frameSectionMs[SECTION_DRAW], s_frameSectionMs[SECTION_RENDER_TARGETS],
 			s_frameSectionMs[SECTION_SCENE], s_frameSectionMs[SECTION_MESH_FLUSH],
 			s_frameSectionMs[SECTION_SHADOWS], s_frameSectionMs[SECTION_PARTICLE_RENDER],
+			s_frameSectionMs[SECTION_SCENE_VISIBILITY], s_frameSectionMs[SECTION_SCENE_TERRAIN],
+			s_frameSectionMs[SECTION_SCENE_OBJECTS], s_frameSectionMs[SECTION_SCENE_TRANSLUCENT],
 			s_frameSectionMs[SECTION_PRESENT], s_frameSectionMs[SECTION_WATER_REFLECTION],
 			s_frameSectionMs[SECTION_EFFECT_LIGHTS], s_frameSectionMs[SECTION_SKINNED_SHADOWS],
 			frameMs - s_frameSectionMs[SECTION_LOGIC] - s_frameSectionMs[SECTION_CLIENT],
 			s_frameTextureLoads, s_frameTextureLoadMs, s_frameModelLoads, s_frameModelLoadMs,
 			s_frameShadersCreated, s_frameDrawablesCreated,
+			s_framePipelines, s_framePipelineMs, s_frameFullCompiles, s_frameFFShaders,
 			s_frameCounters.drawCalls, (double)s_frameCounters.triangles / 1000.0, s_frameCounters.particles);
+		// GeneralsX @performance Claude 17/10/2026 Main thread waits of the renderer and the parts of a slow terrain.
+		if (s_waitTotalsSource != nullptr)
+		{
+			fprintf(stderr,
+				"[PERF] hitch waits logic_frame=%u | buffer=%u (%.1f ms) texture=%u (%.1f ms) other=%u (%.1f ms) cs=%u (%.1f ms)"
+				" | slowest %.1f ms: %s\n",
+				logicFrame, s_frameWaits[WAIT_BUFFER], s_frameWaitMs[WAIT_BUFFER], s_frameWaits[WAIT_TEXTURE],
+				s_frameWaitMs[WAIT_TEXTURE], s_frameWaits[WAIT_OTHER], s_frameWaitMs[WAIT_OTHER], s_frameWaits[WAIT_CS],
+				s_frameWaitMs[WAIT_CS], s_frameSlowestWaitMs, s_frameSlowestWait);
+		}
+		if (s_frameSectionMs[SECTION_SCENE_TERRAIN] >= HitchLogicMs)
+		{
+			fprintf(stderr,
+				"[PERF] hitch terrain logic_frame=%u | base=%.1f shore=%.1f blend=%.1f roads=%.1f props=%.1f scorch=%.1f"
+				" bridges=%.1f tracks=%.1f shroud=%.1f bibs=%.1f | light_vb=%.1f\n",
+				logicFrame, s_frameSectionMs[SECTION_TERRAIN_BASE], s_frameSectionMs[SECTION_TERRAIN_SHORE],
+				s_frameSectionMs[SECTION_TERRAIN_BLEND], s_frameSectionMs[SECTION_TERRAIN_ROADS],
+				s_frameSectionMs[SECTION_TERRAIN_PROPS], s_frameSectionMs[SECTION_TERRAIN_SCORCH],
+				s_frameSectionMs[SECTION_TERRAIN_BRIDGES], s_frameSectionMs[SECTION_TERRAIN_TRACKS],
+				s_frameSectionMs[SECTION_TERRAIN_SHROUD], s_frameSectionMs[SECTION_TERRAIN_BIBS],
+				s_frameSectionMs[SECTION_TERRAIN_LIGHT_VB]);
+		}
+		// GeneralsX @performance Claude 17/10/2026 Where a slow game logic frame went.
+		if (s_frameSectionMs[SECTION_LOGIC] >= HitchLogicMs)
+		{
+			fprintf(stderr,
+				"[PERF] hitch logic logic_frame=%u | scripts=%.1f terrain=%.1f objects=%.1f (%u updates) ai=%.1f partition=%.1f"
+				" other=%.1f | slowest update %.1f ms: %s %s\n",
+				logicFrame, s_frameLogicMs[LOGIC_SCRIPTS], s_frameLogicMs[LOGIC_TERRAIN], s_frameLogicMs[LOGIC_OBJECTS],
+				s_frameLogicUpdates, s_frameLogicMs[LOGIC_AI], s_frameLogicMs[LOGIC_PARTITION],
+				s_frameSectionMs[SECTION_LOGIC] - s_frameLogicMs[LOGIC_SCRIPTS] - s_frameLogicMs[LOGIC_TERRAIN]
+					- s_frameLogicMs[LOGIC_OBJECTS] - s_frameLogicMs[LOGIC_AI] - s_frameLogicMs[LOGIC_PARTITION],
+				s_frameSlowestUpdateMs, s_frameSlowestThing, s_frameSlowestModule);
+			fprintf(stderr,
+				"[PERF] hitch ai logic_frame=%u | zones=%.1f paths=%.1f (%u paths, %d cells, slowest %.1f ms %d cells: %s)"
+				" players=%.1f\n",
+				logicFrame, s_frameLogicMs[LOGIC_AI_ZONES], s_frameLogicMs[LOGIC_AI_PATHS], s_framePaths, s_framePathCells,
+				s_frameSlowestPathMs, s_frameSlowestPathCells, s_frameSlowestPathThing,
+				s_frameLogicMs[LOGIC_AI_PLAYERS]);
+		}
 		fflush(stderr);
 	}
 
@@ -300,6 +418,44 @@ namespace
 		s_frameTextureLoadMs = ms - s_lastTextureLoadMsTotal;
 		s_lastTextureLoadTotal = loads;
 		s_lastTextureLoadMsTotal = ms;
+	}
+
+	// GeneralsX @performance Claude 17/10/2026 Turns the renderer's running wait totals into this frame's counts.
+	void readWaitTotals()
+	{
+		if (s_waitTotalsSource == nullptr)
+			return;
+		WaitTotals totals;
+		memset(&totals, 0, sizeof(totals));
+		s_waitTotalsSource(totals);
+		for (Int i = 0; i < WAIT_KIND_COUNT; ++i)
+		{
+			s_frameWaits[i] = totals.waits[i] - s_lastWaitTotals.waits[i];
+			s_frameWaitMs[i] = totals.waitMs[i] - s_lastWaitTotals.waitMs[i];
+		}
+		s_frameSlowestWaitMs = totals.slowestMs;
+		snprintf(s_frameSlowestWait, sizeof(s_frameSlowestWait), "%s", totals.slowest);
+		s_lastWaitTotals = totals;
+	}
+
+	// GeneralsX @performance Claude 17/10/2026 Turns DXVK's running pipeline totals into this frame's counts.
+	void readPipelineTotals()
+	{
+		if (s_pipelineTotalsSource == nullptr)
+			return;
+		UnsignedInt pipelines = 0;
+		UnsignedInt fullCompiles = 0;
+		UnsignedInt ffShaders = 0;
+		double ms = 0.0;
+		s_pipelineTotalsSource(pipelines, fullCompiles, ffShaders, ms);
+		s_framePipelines = pipelines - s_lastPipelineTotal;
+		s_frameFullCompiles = fullCompiles - s_lastFullCompileTotal;
+		s_frameFFShaders = ffShaders - s_lastFFShaderTotal;
+		s_framePipelineMs = ms - s_lastPipelineMsTotal;
+		s_lastPipelineTotal = pipelines;
+		s_lastFullCompileTotal = fullCompiles;
+		s_lastFFShaderTotal = ffShaders;
+		s_lastPipelineMsTotal = ms;
 	}
 
 	void closeDump(const char *reason)
@@ -448,6 +604,27 @@ void setLoadTotalsSource(LoadTotalsSource source)
 		source(s_lastTextureLoadTotal, s_lastTextureLoadMsTotal);
 }
 
+// GeneralsX @performance Claude 17/10/2026 DXVK pipeline counters and the map load frame.
+void setPipelineTotalsSource(PipelineTotalsSource source)
+{
+	s_pipelineTotalsSource = source;
+	if (source != nullptr)
+		source(s_lastPipelineTotal, s_lastFullCompileTotal, s_lastFFShaderTotal, s_lastPipelineMsTotal);
+}
+
+void setWaitTotalsSource(WaitTotalsSource source)
+{
+	s_waitTotalsSource = source;
+	memset(&s_lastWaitTotals, 0, sizeof(s_lastWaitTotals));
+	if (source != nullptr)
+		source(s_lastWaitTotals);
+}
+
+void markLoadFrame()
+{
+	s_loadFrame = TRUE;
+}
+
 void addModelLoad(double ms)
 {
 	if (!s_enabled)
@@ -528,6 +705,40 @@ void setTextureMemory(UnsignedInt64 bytes, UnsignedInt64 freeBytes)
 	s_textureMemoryKnown = TRUE;
 }
 
+void addLogicTime(LogicPart part, double ms)
+{
+	if (!s_enabled)
+		return;
+	s_frameLogicMs[part] += ms;
+}
+
+Bool isSlowestLogicUpdate(double ms)
+{
+	++s_frameLogicUpdates;
+	return ms > s_frameSlowestUpdateMs;
+}
+
+void setSlowestLogicUpdate(double ms, const char *thing, const char *module)
+{
+	s_frameSlowestUpdateMs = ms;
+	snprintf(s_frameSlowestThing, sizeof(s_frameSlowestThing), "%s", thing != nullptr ? thing : "");
+	snprintf(s_frameSlowestModule, sizeof(s_frameSlowestModule), "%s", module != nullptr ? module : "");
+}
+
+void addPathfind(double ms, Int cells, const char *thing)
+{
+	if (!s_enabled)
+		return;
+	++s_framePaths;
+	s_framePathCells += cells;
+	if (ms > s_frameSlowestPathMs)
+	{
+		s_frameSlowestPathMs = ms;
+		s_frameSlowestPathCells = cells;
+		snprintf(s_frameSlowestPathThing, sizeof(s_frameSlowestPathThing), "%s", thing != nullptr ? thing : "");
+	}
+}
+
 void endFrame(Bool inMatch, UnsignedInt logicFrame)
 {
 	if (!s_enabled)
@@ -542,13 +753,24 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	}
 
 	readLoadTotals();
+	readPipelineTotals();
+	readWaitTotals();
 
-	if (s_lastFrameEndMs >= 0.0)
+	// GeneralsX @performance Claude 17/10/2026 A map load runs inside one main loop iteration behind the load screen.
+	// Print what it loaded and created, and start the summaries after it, so that the match frames stay separate.
+	if (s_loadFrame && s_lastFrameEndMs >= 0.0)
+	{
+		if (s_printEnabled)
+			printHitch(now - s_lastFrameEndMs, inMatch, logicFrame, "load");
+		s_interval.reset(now);
+		s_overlay.reset(now);
+	}
+	else if (s_lastFrameEndMs >= 0.0)
 	{
 		const double frameMs = now - s_lastFrameEndMs;
 
 		if (s_printEnabled && frameMs >= HitchThresholdMs)
-			printHitch(frameMs, inMatch, logicFrame);
+			printHitch(frameMs, inMatch, logicFrame, "hitch");
 
 		if (inMatch && s_dumpRequested)
 		{
@@ -593,6 +815,21 @@ void endFrame(Bool inMatch, UnsignedInt logicFrame)
 	s_frameModelLoadMs = 0.0;
 	s_frameShadersCreated = 0;
 	s_frameDrawablesCreated = 0;
+	s_framePipelines = 0;
+	s_frameFullCompiles = 0;
+	s_frameFFShaders = 0;
+	s_framePipelineMs = 0.0;
+	s_loadFrame = FALSE;
+	memset(s_frameLogicMs, 0, sizeof(s_frameLogicMs));
+	s_frameLogicUpdates = 0;
+	s_frameSlowestUpdateMs = 0.0;
+	s_frameSlowestThing[0] = '\0';
+	s_frameSlowestModule[0] = '\0';
+	s_framePaths = 0;
+	s_framePathCells = 0;
+	s_frameSlowestPathMs = 0.0;
+	s_frameSlowestPathCells = 0;
+	s_frameSlowestPathThing[0] = '\0';
 }
 
 const char *getOverlayText()

@@ -40,7 +40,9 @@ jobs:
   # (default 50) of the presented size, with the DXVK HUD. raw:<path> writes <path>.bgra and <path>.txt
   # (scripts/qa/dxvk_video_to_mp4.py turns them into an mp4); any other value is a command that reads
   # Matroska raw BGRA video with present time stamps on stdin, e.g.
-  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 clip.mp4
+  # ffmpeg -y -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode cfr -r 60 clip.mp4
+  # GeneralsX @bugfix Claude 16/10/2026 Constant 60 fps output placed by the present time stamps: a variable rate mp4 judders
+  # in players that assume a fixed rate. Every presented frame is captured, so a 21 fps battle gives a 21 fps clip.
   # GeneralsX @feature Claude 15/10/2026 DXVK_CAPTURE_VIDEO_START=camtest (patch 0011) starts recording with the first frame
   # of the -camtest flight instead of a fixed time, so A/B clips line up whatever the load time. The game sets the process
   # environment variable DXVK_CAPTURE_VIDEO_SIGNAL to camtest.prepare when the match starts and to camtest when the flight begins.
@@ -61,6 +63,10 @@ jobs:
   # adds frame generation with the SDK's optical flow and frame interpolation: the swap chain presents a generated frame,
   # then the real one, and the interface always comes from the real frame. The game sets both from Options.ini
   # Upscaler = FSR3 / FrameGeneration = yes or -upscaler fsr3 / -framegen on.
+  # GeneralsX @bugfix Claude 17/10/2026 FSR 3 crashed creating its first context (the SDK backend got the device's
+  # vkGetDeviceProcAddr, so vkGetBufferMemoryRequirements2KHR was NULL); frame generation errors now turn it off.
+  # GeneralsX @performance Claude 17/10/2026 FSR 2 / FSR 3: 10-bit output images, sharpening in the composite pass,
+  # DXVK_FSR_TIMING=1 logs the GPU time of each upscaler pass.
   # GeneralsX @feature Claude 16/10/2026 Detailed unit models: built and baked with Blender's Python module (bpy) from
   # scripts/tooling/content/blend, cached on the hash of those scripts so a push that does not touch them reuses the
   # last bake. The Windows job folds them into the content pack (build_content.py --hd).
@@ -162,6 +168,7 @@ jobs:
             -Denable_d3d10=false -Denable_d3d11=false -Denable_dxgi=false build
           ninja -C build src/d3d8/d3d8.dll src/d3d9/d3d9.dll
           x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_UpscalerSubmitFrame
+          x86_64-w64-mingw32-objdump -p build/src/d3d9/d3d9.dll | grep -q GeneralsX_GetSyncStats
           test -f build/src/dxvk/libdxvk_fsr3.a
           mkdir -p ../dxvk-out
           cp build/src/d3d8/d3d8.dll build/src/d3d9/d3d9.dll ../dxvk-out/
@@ -340,6 +347,9 @@ jobs:
           0 to 1, default 0.7), TerrainRelief = yes lights the tile surfaces with the map's sun (needs high
           texture quality) and TerrainSoftBlend = yes gives the edges between terrain layers a natural shape.
           Set all three to no for the original ground.
+          Model normal maps: unit and building textures that come with a <name>_n.dds (or .tga) normal map get
+          per-pixel lighting and a highlight from its gloss. Off by default: ModelNormalMaps = yes in Options.ini turns it on;
+          ModelSpecular = 0 to 2 (default 1) sets the highlight strength. Models without _n maps look as before.
           For testing, set DXVK_CAPTURE_PATH to a .png file to save the game image every DXVK_CAPTURE_INTERVAL seconds (default 10).
           For testing, set DXVK_CAPTURE_VIDEO=raw:C:\cap\clip to record every frame (default: 10 s starting 5 s after launch, at 50% size)
           into clip.bgra and clip.txt (frame size and present times). DXVK_CAPTURE_VIDEO_START, DXVK_CAPTURE_VIDEO_SECONDS and
@@ -350,12 +360,16 @@ jobs:
           sets a building near them on fire and circles the fight for 10 s; add a unit count for both sides together
           (-camtest 10 battle 60) and night for a night match (-camtest 10 battle 60 night). Use it with -skirmish.
           With ffmpeg.exe on PATH, DXVK_CAPTURE_VIDEO can instead be an encoder command that reads the video on stdin:
-          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode passthrough -enc_time_base -1 C:\cap\clip.mp4
+          ffmpeg -y -loglevel error -i - -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -fps_mode cfr -r 60 C:\cap\clip.mp4
           Bug reports: F12 saves a JPG screenshot, Ctrl+F12 or Ctrl+Shift+S a PNG screenshot, and F11 or Ctrl+Shift+R
           starts and stops a video (mp4, at most 1080 lines). Files are named by date and time and go to D:\GeneralsX\bugs,
           or to CapturePath in Options.ini (for example CapturePath = E:\Captures); when that folder cannot be created,
           they go to the bugs folder in the game's user data folder. Video recording needs the d3d8.dll and d3d9.dll above.
-          Pick the game resolution in Options; use the same aspect ratio as the display.
+          Pick the game resolution in Options; use the same aspect ratio as the display. In fullscreen, a Resolution
+          the monitor has no mode for (for example 3440 1440 on a 4K monitor) is rendered at that size in a
+          borderless window and scaled to fit the screen with its aspect ratio kept (black bars), instead of
+          falling back to another resolution. With FSR, RenderScale is a share of that image on screen. The console
+          shows [DISPLAY] lines with the screen, Resolution, back buffer and image sizes.
           GeneralsXContent.big holds the remaster's own models (e.g. a modern tank in place of the USA Crusader);
           delete it to play with the original look. Unit stats and gameplay are unchanged either way.
           FSR without Play-FSR.cmd: in Options > Resolution pick an "(FSR 77%)" to "(FSR 50%)" entry and restart
@@ -364,7 +378,9 @@ jobs:
           -upscaler fsr2 (-upscaler fsr1 or -upscaler off override Options.ini the same way). UpscalerQuality =
           Quality, Balanced, Performance or UltraPerformance picks the render scale (67%, 59%, 50%, 33%) unless
           RenderScale or -renderscale is set. FSR 2 adds detail over several frames. The console and d3d9.log
-          show [FSR2] / FSR2: lines with the active upscaler.
+          show [FSR2] / FSR2: lines with the active upscaler. UpscalerQuality = Native or RenderScale = 100 with
+          Upscaler = FSR2 (or FSR3) runs it as anti-aliasing at full resolution, without upscaling. With FSR 2 or
+          FSR 3, MSAA (AntiAliasing) is not used: they anti-alias the scene themselves.
           FSR 2 smoke, explosions and particles: UpscalerReactiveScale (0 to 1, default 0.9, 0 = off) tells FSR 2
           to trust the current frame where such effects are drawn, so they do not smear or leave trails.
           FSR 2 sharpening: UpscalerSharpness (0 to 1, default 0.5) is FSR 2's own sharpening of the 3D scene;
@@ -387,7 +403,11 @@ jobs:
           DXVK_FSR3_FRAMEGEN=1 turns frame generation on without Options.ini, DXVK_FSR3_FRAMEGEN_PACING=0 shows
           the real frame right after the generated one instead of half a frame later, and DXVK_FSR3_DEBUG=tearlines,
           view or resets shows the FidelityFX debug overlays (tear lines, the interpolation inputs, camera resets).
+          If frame generation fails, an [FSR3] frame generation line says why and the game keeps upscaling
+          without it.
           FidelityFX-SDK-LICENSE.txt is the MIT license of the AMD FidelityFX SDK (FSR 3), built into d3d9.dll.
+          FSR 2 / FSR 3 GPU time: set DXVK_FSR_TIMING=1 in a .cmd file before the game starts; every 300 frames
+          the console and d3d9.log get an [FSR2] (or [FSR3]) GPU time line with the milliseconds of each pass.
           Performance measurement (big battles): Perf.cmd starts the game with the frame profiler. Every 5 seconds
           perf-log.txt gets a [PERF] line: fps, frame time (avg/max), game logic, client update, draw, 3D scene,
           meshes (includes CPU skinning), shadows, particles and present in ms per frame, draw calls, triangles,

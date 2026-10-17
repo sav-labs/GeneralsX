@@ -1,7 +1,7 @@
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -11,11 +11,535 @@
+@@ -11,11 +11,554 @@
  #include <dxvk_present_frag_ms_blit.h>
  #include <dxvk_present_vert.h>
  
@@ -527,8 +527,27 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
 +        ? double(timestamps.back() - timestamps.front()) / 1000000.0 : 0.0;
 +      double fps = seconds > 0.0 ? double(timestamps.size() - 1u) / seconds : 0.0;
 +
++      // Every presented frame is written: the intervals between the time
++      // stamps are the game's own frame times, so a slow or uneven clip
++      // shows up here as long intervals rather than as missing frames.
++      std::vector<uint64_t> intervals;
++
++      for (size_t i = 1u; i < timestamps.size(); i++)
++        intervals.push_back(timestamps[i] - timestamps[i - 1u]);
++
++      std::sort(intervals.begin(), intervals.end());
++
++      uint64_t medianUs = intervals.empty() ? 0u : intervals[intervals.size() / 2u];
++      uint64_t maxUs = intervals.empty() ? 0u : intervals.back();
++      size_t longFrames = 0u;
++
++      for (uint64_t interval : intervals)
++        longFrames += interval > 2u * medianUs ? 1u : 0u;
++
 +      Logger::info(str::format("Swap chain: video capture finished, ", timestamps.size(),
-+        " frames in ", seconds, " s, average ", fps, " fps, ", m_dropped, " dropped, ",
++        " frames in ", seconds, " s, average ", fps, " fps (frame time median ",
++        double(medianUs) / 1000.0, " ms, longest ", double(maxUs) / 1000.0, " ms, ",
++        longFrames, " frames over twice the median), ", m_dropped, " dropped, ",
 +        m_blockedFrames, " frames waited ", m_blockedUs / 1000u, " ms for the writer (longest ",
 +        m_blockedMaxUs / 1000u, " ms); ", result));
 +    }
@@ -537,7 +556,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
    
    DxvkSwapchainBlitter::DxvkSwapchainBlitter(
      const Rc<DxvkDevice>& device,
-@@ -55,12 +579,47 @@
+@@ -55,12 +598,47 @@
          " every ", m_captureInterval.count(), " ms"));
      }
  
@@ -585,7 +604,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      auto vk = m_device->vkd();
  
      for (const auto& p : m_pipelines)
-@@ -121,8 +680,15 @@
+@@ -121,8 +699,15 @@
      if (m_cursorBuffer)
        uploadCursorImage(ctx);
  
@@ -603,7 +622,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
  
      if (m_hud && composite)
        renderHudImage(ctx, dstView->mipLevelExtent(0));
-@@ -237,6 +803,10 @@
+@@ -237,6 +822,10 @@
          m_captureNext = now + m_captureInterval;
        }
      }
@@ -614,7 +633,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
    }
  
  
-@@ -945,6 +1515,373 @@
+@@ -945,6 +1534,373 @@
    }
  
  

@@ -36,6 +36,7 @@
 #endif
 #endif
 
+#include "Common/PerfStats.h"
 #include "Common/AudioAffect.h"
 #include "Common/AudioHandleSpecialValues.h"
 #include "Common/BuildAssistant.h"
@@ -1219,6 +1220,10 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 
 	setLoadingMap( TRUE );
 
+	// GeneralsX @performance Claude 17/10/2026 The load runs inside this main loop iteration behind the load screen;
+	// the frame profiler reports it as a [PERF] load line instead of a match hitch.
+	PerfStats::markLoadFrame();
+
 	if( loadingSaveGame == FALSE )
 	{
 
@@ -2312,6 +2317,13 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 		}
 	}
 
+	// GeneralsX @performance Claude 17/10/2026 Draw the match scene once behind the load screen, so that its first
+	// frames do not compile GPU pipelines or upload textures (GameClient::warmUpRenderer). Part of the preload.
+	if( TheGlobalData->m_preloadAssets && !isInShellGame() && loadingSaveGame == FALSE )
+	{
+		TheGameClient->warmUpRenderer();
+	}
+
 	updateLoadProgress(LOAD_PROGRESS_END);
 
 	if(isInMultiplayerGame() && TheNetwork)
@@ -2594,8 +2606,13 @@ void GameLogic::loadMapINI( AsciiString mapName )
 	// rebuilt here so it always matches the files loaded for this game.
 	{
 		ArtRemap::reset();
+		// GeneralsX @bugfix Claude 17/10/2026 The content folder is optional: the content pack ships no INI
+		// files since the procedural USA art was dropped, and loadFileDirectory's default ExpectFileFound flag
+		// threw INI_CANT_OPEN_FILE on an empty folder, so every skirmish and campaign start crashed with
+		// "Uncaught Exception in GameEngine::update". Load what is there and accept none.
 		INI contentIni;
-		const UnsignedInt contentFiles = contentIni.loadFileDirectory( "Data\\INI\\GeneralsX", INI_LOAD_CREATE_OVERRIDES, nullptr );
+		const UnsignedInt contentFiles = contentIni.loadFileDirectory( "Data\\INI\\GeneralsX", INI_LOAD_CREATE_OVERRIDES, nullptr,
+			INI::LoadFlags_SearchSubDirs );
 		if (contentFiles > 0) {
 			fprintf(stderr, "[Content] Loaded %u GeneralsX content INI file(s)\n", contentFiles);
 			fflush(stderr);
@@ -3953,6 +3970,7 @@ void GameLogic::update()
 
 	// update (execute) scripts
 	{
+		PERF_STATS_LOGIC(LOGIC_SCRIPTS);
 		TheScriptEngine->UPDATE();
 	}
 
@@ -3965,6 +3983,7 @@ void GameLogic::update()
 	// Note - TerrainLogic update needs to happen after ScriptEngine update, but before object updates.  jba.
 	// This way changes in bridges are noted in the script engine before being cleared in TerrainLogic->update
 	{
+		PERF_STATS_LOGIC(LOGIC_TERRAIN);
 		TheTerrainLogic->UPDATE();
 	}
 
@@ -4050,6 +4069,9 @@ void GameLogic::update()
 #endif
 
 	{
+		// GeneralsX @performance Claude 17/10/2026 Object update time, and the slowest module call of the frame
+		// for the [PERF] hitch logic line. Only reads clocks: the updates and their order are unchanged.
+		PERF_STATS_LOGIC(LOGIC_OBJECTS);
 		while (!m_sleepyUpdates.empty())
 		{
 			UpdateModulePtr u = peekSleepyUpdate();
@@ -4085,10 +4107,22 @@ void GameLogic::update()
 				//DEBUG_LOG(("calling update %08lx (%d %d)...",update,update->friend_getNextCallFrame(),update->friend_getNextCallPhase()));
 				m_curUpdateModule = u;
 
+				const double perfStart = PerfStats::isEnabled() ? PerfStats::nowMs() : 0.0;
 				sleepLen = u->update();
 				DEBUG_ASSERTCRASH(sleepLen > 0, ("you may not return 0 from update"));
 				if (sleepLen < 1)
 					sleepLen = UPDATE_SLEEP_NONE;
+				if (PerfStats::isEnabled())
+				{
+					const double perfMs = PerfStats::nowMs() - perfStart;
+					if (PerfStats::isSlowestLogicUpdate(perfMs))
+					{
+						const Object *perfObj = u->friend_getObject();
+						PerfStats::setSlowestLogicUpdate(perfMs,
+							perfObj != nullptr ? perfObj->getTemplate()->getName().str() : "",
+							TheNameKeyGenerator->keyToName(u->getModuleNameKey()).str());
+					}
+				}
 
 				m_curUpdateModule = nullptr;
 
@@ -4104,6 +4138,7 @@ void GameLogic::update()
 
 	// update the Artificial Intelligence system
 	{
+		PERF_STATS_LOGIC(LOGIC_AI);
 		TheAI->UPDATE();
 	}
 
@@ -4114,6 +4149,7 @@ void GameLogic::update()
 
 	// update partition info
 	{
+		PERF_STATS_LOGIC(LOGIC_PARTITION);
 		ThePartitionManager->UPDATE();
 	}
 

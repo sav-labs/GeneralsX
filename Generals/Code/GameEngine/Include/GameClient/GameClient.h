@@ -147,6 +147,10 @@ public:
 	// GeneralsX @performance Claude 16/10/2026 The map load preload (GlobalData m_preloadAssets): every time of day
 	// with m_preloadEverything, then the GPU textures of the loaded assets, with a [PRELOAD] line on stderr.
 	void preloadMatchAssets();
+	// GeneralsX @performance Claude 17/10/2026 At the end of a map load, behind the load screen: renders the match scene
+	// with one model of every kind of thing on the map and in the preload, and one particle system of every kind,
+	// in front of the starting camera, without presenting it. Logs a [WARMUP] line on stderr.
+	void warmUpRenderer();
 
 	virtual Drawable *getDrawableList() { return m_drawableList; }
 

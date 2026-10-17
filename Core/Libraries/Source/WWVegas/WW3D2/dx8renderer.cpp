@@ -46,6 +46,7 @@
 #include "dx8vertexbuffer.h"
 #include "dx8indexbuffer.h"
 #include "dx8fvf.h"
+#include "modelnormalmap.h"
 #include "dx8caps.h"
 #include "dx8rendererdebugger.h"
 #include "WWDebug/wwdebug.h"
@@ -60,6 +61,7 @@
 #include "camera.h"
 #include "stripoptimizer.h"
 #include "meshgeometry.h"
+#include "htree.h"
 
 /*
 ** Global Instance of the DX8MeshRender
@@ -433,7 +435,8 @@ DX8FVFCategoryContainer::DX8FVFCategoryContainer(unsigned FVF_,bool sorting_)
 	passes(MAX_PASSES),
 	uv_coordinate_channels(0),
 	AnythingToRender(false),
-	AnyDelayedPassesToRender(false)
+	AnyDelayedPassesToRender(false),
+	tangent_channel(false)
 {
 	if ((FVF&D3DFVF_TEX1)==D3DFVF_TEX1) uv_coordinate_channels=1;
 	if ((FVF&D3DFVF_TEX2)==D3DFVF_TEX2) uv_coordinate_channels=2;
@@ -743,7 +746,7 @@ unsigned DX8FVFCategoryContainer::Define_FVF(MeshModelClass* mmc,bool enable_lig
 
 // ----------------------------------------------------------------------------
 
-DX8RigidFVFCategoryContainer::DX8RigidFVFCategoryContainer(unsigned FVF,bool sorting_)
+DX8RigidFVFCategoryContainer::DX8RigidFVFCategoryContainer(unsigned FVF,bool sorting_,bool tangent_channel_)
 	:
 	DX8FVFCategoryContainer(FVF,sorting_),
 	vertex_buffer(nullptr),
@@ -751,6 +754,7 @@ DX8RigidFVFCategoryContainer::DX8RigidFVFCategoryContainer(unsigned FVF,bool sor
 	delayed_matpass_head(nullptr),
 	delayed_matpass_tail(nullptr)
 {
+	tangent_channel=tangent_channel_;
 }
 
 // ----------------------------------------------------------------------------
@@ -1088,6 +1092,12 @@ void DX8RigidFVFCategoryContainer::Add_Mesh(MeshModelClass* mmc_)
 		uvcount = 8;
 	}
 
+	// GeneralsX @feature Claude 16/10/2026 The last set of a tangent channel container holds packed tangents.
+	if (tangent_channel && uvcount > 0) {
+		--uvcount;
+		ModelNormalMapClass::Write_Rigid_Tangents(mmc_,(unsigned char*) l.Get_Vertex_Array(),fi.Get_FVF_Size(),fi.Get_Tex_Offset(uvcount));
+	}
+
 	for (int j=0; j<uvcount; j++) {
 		unsigned char *vb=(unsigned char*) l.Get_Vertex_Array();
 		const Vector2*uvs=split_table.Get_UV_Array(j);
@@ -1369,6 +1379,16 @@ void DX8SkinFVFCategoryContainer::Render()
 				const Vector2* uv1=mmc->Get_UV_Array_By_Index(1);
 				const unsigned* diffuse=mmc->Get_Color_Array(0,false);
 
+				// GeneralsX @feature Claude 16/10/2026 Normal mapped skins carry their tangent, rotated by the
+				// vertex's bone like the normal, packed in the (unused) second UV set.
+				const Vector4* tangents=ModelNormalMapClass::Is_Enabled() ? ModelNormalMapClass::Peek_Skin_Tangents(mmc) : nullptr;
+				const HTreeClass* tangent_htree=nullptr;
+				const uint16* tangent_bones=nullptr;
+				if (tangents) {
+					tangent_htree=mesh->Get_Container() ? mesh->Get_Container()->Get_HTree() : nullptr;
+					tangent_bones=mmc->Get_Vertex_Bone_Links();
+				}
+
 				VertexFormatXYZNDUV2* verts=dest_verts+vertex_offset;
 
 				for (int v=0;v<mesh_vertex_count;++v) {
@@ -1403,6 +1423,13 @@ void DX8SkinFVFCategoryContainer::Render()
 					else {
 						verts[v].u2=0.0f;
 						verts[v].v2=0.0f;
+					}
+					if (tangents) {
+						Vector3 tangent(tangents[v].X,tangents[v].Y,tangents[v].Z);
+						if (tangent_htree && tangent_bones) {
+							Matrix3D::Rotate_Vector(tangent_htree->Get_Transform(tangent_bones[v]),Vector3(tangents[v].X,tangents[v].Y,tangents[v].Z),&tangent);
+						}
+						ModelNormalMapClass::Pack_Tangent(*norm,tangent,tangents[v].W,verts[v].u2,verts[v].v2);
 					}
 
 					loc++;
@@ -1695,6 +1722,18 @@ unsigned DX8TextureCategoryClass::Add_Mesh(
 
 // ----------------------------------------------------------------------------
 
+// GeneralsX @feature Claude 16/10/2026 Draws one polygon renderer, with the model normal map shaders when the
+// mesh has a normal map and a tangent channel and the current state can be reproduced by them.
+static void Render_Polygon_Renderer(DX8PolygonRendererClass* renderer,MeshClass* mesh,TextureClass* normal_map)
+{
+	if (normal_map && ModelNormalMapClass::Begin(normal_map)) {
+		renderer->Render(mesh->Get_Base_Vertex_Offset());
+		ModelNormalMapClass::End();
+		return;
+	}
+	renderer->Render(mesh->Get_Base_Vertex_Offset());
+}
+
 void DX8TextureCategoryClass::Render()
 {
 	#ifdef WWDEBUG
@@ -1739,6 +1778,18 @@ void DX8TextureCategoryClass::Render()
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,D3DBLEND_DESTCOLOR);
 	}
 
+
+	// GeneralsX @feature Claude 16/10/2026 Normal map of the base texture, for plain modulated single stage
+	// texturing (what the normal map shaders reproduce). Null keeps the fixed function path.
+	TextureClass* category_normal_map=nullptr;
+	if (ModelNormalMapClass::Is_Enabled() && Peek_Texture(0) && !Peek_Texture(1)
+		&& theShader.Get_Texturing()==ShaderClass::TEXTURING_ENABLE
+		&& theShader.Get_Primary_Gradient()==ShaderClass::GRADIENT_MODULATE
+		&& theShader.Get_Secondary_Gradient()==ShaderClass::SECONDARY_GRADIENT_DISABLE
+		&& theShader.Get_Post_Detail_Color_Func()==ShaderClass::DETAILCOLOR_DISABLE
+		&& theShader.Get_Post_Detail_Alpha_Func()==ShaderClass::DETAILALPHA_DISABLE) {
+		category_normal_map=ModelNormalMapClass::Peek_Normal_Map(Peek_Texture(0),nullptr);
+	}
 
 	bool renderTasksRemaining=false;
 
@@ -1891,6 +1942,11 @@ void DX8TextureCategoryClass::Render()
 		if ((!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT)) && WW3D::Is_Sorting_Enabled()) {
 			renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 		} else {
+			TextureClass* normal_map=nullptr;
+			if (category_normal_map && (container->Has_Tangent_Channel()
+				|| (mesh->Peek_Model()->Get_Flag(MeshModelClass::SKIN) && ModelNormalMapClass::Peek_Skin_Tangents(mesh->Peek_Model())))) {
+				normal_map=category_normal_map;
+			}
 			//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material
 			//if necessary
 			if (mesh->Get_Alpha_Override() != 1.0 || (mesh->Get_User_Data() && *(int *)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE))
@@ -1927,7 +1983,7 @@ void DX8TextureCategoryClass::Render()
 					DX8Wrapper::Apply_Render_State_Changes();
 					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
 
-					renderer->Render(mesh->Get_Base_Vertex_Offset());
+					Render_Polygon_Renderer(renderer,mesh,normal_map);
 
 					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,0x60);
 					vmaterial->Set_Opacity(oldOpacity);	//restore previous value
@@ -1935,7 +1991,7 @@ void DX8TextureCategoryClass::Render()
 					DX8Wrapper::Set_Shader(theShader);	//restore previous value
 				}
 				else
-					renderer->Render(mesh->Get_Base_Vertex_Offset());
+					Render_Polygon_Renderer(renderer,mesh,normal_map);
 
 				if (oldMapper)	//did we override the uv offset?
 				{	oldMapper->Set_LastUsedSyncTime(oldUVOffsetSyncTime);
@@ -1945,7 +2001,7 @@ void DX8TextureCategoryClass::Render()
 				DX8Wrapper::Set_Material(vmaterial);	//restore previous material.
 			}
 			else
-				renderer->Render(mesh->Get_Base_Vertex_Offset());
+				Render_Polygon_Renderer(renderer,mesh,normal_map);
 		}
 //--------------------------------------------------------------------
 		if (mesh->Get_ObjectScale() != 1.0f)
@@ -2020,6 +2076,8 @@ void DX8MeshRendererClass::Shutdown()
 	Clear_Pending_Delete_Lists();
 	_TempVertexBuffer.Clear();	//free memory
 	_TempNormalBuffer.Clear();
+	// GeneralsX @feature Claude 16/10/2026 Release the model normal map shaders with the device.
+	ModelNormalMapClass::Shutdown();
 }
 
 // ----------------------------------------------------------------------------
@@ -2036,7 +2094,7 @@ void DX8MeshRendererClass::Clear_Pending_Delete_Lists()
 
 // ----------------------------------------------------------------------------
 
-static void Add_Rigid_Mesh_To_Container(FVFCategoryList* container_list,unsigned fvf,MeshModelClass* mmc)
+static void Add_Rigid_Mesh_To_Container(FVFCategoryList* container_list,unsigned fvf,MeshModelClass* mmc,bool tangent_channel)
 {
 	WWASSERT(container_list);
 	DX8FVFCategoryContainer * container = nullptr;
@@ -2052,7 +2110,7 @@ static void Add_Rigid_Mesh_To_Container(FVFCategoryList* container_list,unsigned
 		it.Next();
 	}
 
-	container=W3DNEW DX8RigidFVFCategoryContainer(fvf,sorting);
+	container=W3DNEW DX8RigidFVFCategoryContainer(fvf,sorting,tangent_channel);
 	container_list->Add_Tail(container);
 	container->Add_Mesh(mmc);
 }
@@ -2061,6 +2119,9 @@ static void Add_Rigid_Mesh_To_Container(FVFCategoryList* container_list,unsigned
 
 void DX8MeshRendererClass::Unregister_Mesh_Type(MeshModelClass* mmc)
 {
+	// GeneralsX @feature Claude 16/10/2026 Drop the skin tangents kept for this mesh model.
+	ModelNormalMapClass::Forget_Mesh(mmc);
+
 	while (DX8PolygonRendererClass* n=mmc->PolygonRendererList.Remove_Head()) {
 		delete n;
 	}
@@ -2120,6 +2181,13 @@ void DX8MeshRendererClass::Register_Mesh_Type(MeshModelClass* mmc)
 
 			unsigned fvf=DX8FVFCategoryContainer::Define_FVF(mmc,enable_lighting);
 
+			// GeneralsX @feature Claude 16/10/2026 Meshes with a normal map get a tangent channel (one more UV set)
+			// and their own containers; every other mesh keeps its vertex format.
+			const bool tangent_channel=(fvf!=dynamic_fvf_type) && ModelNormalMapClass::Mesh_Wants_Tangents(mmc);
+			if (tangent_channel) {
+				fvf=ModelNormalMapClass::Add_Tangent_Channel(fvf);
+			}
+
 			/*
 			** Search for an existing FVF Category Container that matches this mesh
 			*/
@@ -2128,9 +2196,9 @@ void DX8MeshRendererClass::Register_Mesh_Type(MeshModelClass* mmc)
 				FVFCategoryList * list=texture_category_container_lists_rigid[i];
 				WWASSERT(list);
 				DX8FVFCategoryContainer * container=list->Peek_Head();
-				if (container && container->Get_FVF()!=fvf) continue;
+				if (container && (container->Get_FVF()!=fvf || container->Has_Tangent_Channel()!=tangent_channel)) continue;
 
-				Add_Rigid_Mesh_To_Container(list,fvf,mmc);
+				Add_Rigid_Mesh_To_Container(list,fvf,mmc,tangent_channel);
 				break;
 			}
 
@@ -2142,7 +2210,7 @@ void DX8MeshRendererClass::Register_Mesh_Type(MeshModelClass* mmc)
 				*/
 				FVFCategoryList * new_fvf_category = W3DNEW FVFCategoryList();
 				texture_category_container_lists_rigid.Add(new_fvf_category);
-				Add_Rigid_Mesh_To_Container(new_fvf_category,fvf,mmc);
+				Add_Rigid_Mesh_To_Container(new_fvf_category,fvf,mmc,tangent_channel);
 			}
 
 			/*

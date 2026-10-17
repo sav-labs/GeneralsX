@@ -1,0 +1,185 @@
+GeneralsX: pipeline creation counters for the game's frame hitch report.
+The exported GeneralsX_GetPipelineStats returns running totals of the
+pipeline instances the context created for draws (fast-linked from
+pipeline libraries, or compiled completely when the state cannot use
+them), the time spent creating them, and the fixed function shaders the
+D3D9 device generated.
+
+diff --git a/src/d3d9/d3d9.def b/src/d3d9/d3d9.def
+--- a/src/d3d9/d3d9.def
++++ b/src/d3d9/d3d9.def
+@@ -22,6 +22,7 @@
+   Direct3DCreate9Ex @38
+ 
+   GeneralsX_UpscalerSubmitFrame
++  GeneralsX_GetPipelineStats
+ 
+   DXVK_RegisterAnnotation @28257 NONAME
+   DXVK_UnRegisterAnnotation @28258 NONAME
+diff --git a/src/d3d9/d3d9_fixed_function.cpp b/src/d3d9/d3d9_fixed_function.cpp
+--- a/src/d3d9/d3d9_fixed_function.cpp
++++ b/src/d3d9/d3d9_fixed_function.cpp
+@@ -2622,6 +2622,10 @@
+   }
+ 
+ 
++  // GeneralsX: fixed function shaders generated, see GeneralsX_GetPipelineStats
++  std::atomic<uint32_t> g_ffShadersCreated = { 0u };
++
++
+   D3D9FFShader D3D9FFShaderModuleSet::GetShaderModule(
+           D3D9DeviceEx*         pDevice,
+     const D3D9FFShaderKeyVS&    ShaderKey) {
+@@ -2633,6 +2637,8 @@
+     D3D9FFShader shader(
+       pDevice, ShaderKey);
+ 
++    g_ffShadersCreated += 1u;
++
+     m_vsModules.insert({ShaderKey, shader});
+ 
+     return shader;
+@@ -2650,6 +2656,8 @@
+     D3D9FFShader shader(
+       pDevice, ShaderKey);
+ 
++    g_ffShadersCreated += 1u;
++
+     m_fsModules.insert({ShaderKey, shader});
+ 
+     return shader;
+diff --git a/src/d3d9/d3d9_fixed_function.h b/src/d3d9/d3d9_fixed_function.h
+--- a/src/d3d9/d3d9_fixed_function.h
++++ b/src/d3d9/d3d9_fixed_function.h
+@@ -8,6 +8,7 @@
+ 
+ #include "../dxso/dxso_isgn.h"
+ 
++#include <atomic>
+ #include <unordered_map>
+ 
+ namespace dxvk {
+@@ -245,6 +246,11 @@
+   };
+ 
+ 
++  /**
++   * \brief GeneralsX: fixed function shaders generated so far
++   */
++  extern std::atomic<uint32_t> g_ffShadersCreated;
++
+   class D3D9FFShaderModuleSet : public RcObject {
+ 
+   public:
+diff --git a/src/d3d9/d3d9_main.cpp b/src/d3d9/d3d9_main.cpp
+--- a/src/d3d9/d3d9_main.cpp
++++ b/src/d3d9/d3d9_main.cpp
+@@ -4,6 +4,9 @@
+ #include "d3d9_shader_validator.h"
+ 
+ #include "d3d9_annotation.h"
++#include "d3d9_fixed_function.h"
++
++#include "../dxvk/dxvk_graphics.h"
+ 
+ class D3DFE_PROCESSVERTICES;
+ using PSGPERRORID = UINT;
+@@ -43,6 +46,32 @@
+     return dxvk::D3D9DeviceEx::SubmitUpscalerFrame(pFrame) ? TRUE : FALSE;
+   }
+ 
++  // GeneralsX: pipeline creation totals for the game's frame hitch report.
++  // The layout is shared with the game (W3DDisplay.cpp) and checked with
++  // the size field: size, pipelines created for draws, of those compiled
++  // without pipeline libraries, fixed function shaders generated, and the
++  // time spent creating the pipelines in microseconds.
++  struct GeneralsXPipelineStats {
++    uint32_t size;
++    uint32_t pipelines;
++    uint32_t fullCompiles;
++    uint32_t ffShaders;
++    uint64_t pipelineUs;
++  };
++
++  DLLEXPORT BOOL __stdcall GeneralsX_GetPipelineStats(void* pStats) {
++    auto stats = reinterpret_cast<GeneralsXPipelineStats*>(pStats);
++
++    if (!stats || stats->size != sizeof(GeneralsXPipelineStats))
++      return FALSE;
++
++    stats->pipelines    = uint32_t(dxvk::g_drawPipelineStats.created.load());
++    stats->fullCompiles = uint32_t(dxvk::g_drawPipelineStats.fullCompiles.load());
++    stats->ffShaders    = uint32_t(dxvk::g_ffShadersCreated.load());
++    stats->pipelineUs   = dxvk::g_drawPipelineStats.timeUs.load();
++    return TRUE;
++  }
++
+   DLLEXPORT int __stdcall D3DPERF_BeginEvent(D3DCOLOR col, LPCWSTR wszName) {
+     return dxvk::D3D9GlobalAnnotationList::Instance().BeginEvent(col, wszName);
+   }
+diff --git a/src/dxvk/dxvk_graphics.cpp b/src/dxvk/dxvk_graphics.cpp
+--- a/src/dxvk/dxvk_graphics.cpp
++++ b/src/dxvk/dxvk_graphics.cpp
+@@ -9,6 +9,8 @@
+ 
+ namespace dxvk {
+ 
++  DxvkDrawPipelineStats g_drawPipelineStats;
++
+   VkPrimitiveTopology determineGsInputTopology(
+           VkPrimitiveTopology            shader,
+           VkPrimitiveTopology            state) {
+@@ -1059,7 +1061,18 @@
+         // Keep pipeline object locked, at worst we're going to stall
+         // a state cache worker and the current thread needs priority.
+         bool canCreateBasePipeline = this->canCreateBasePipeline(state);
++
++        // GeneralsX: count and time pipelines created for a draw
++        auto createStart = dxvk::high_resolution_clock::now();
+         instance = this->createInstance(state, canCreateBasePipeline);
++        auto createUs = std::chrono::duration_cast<std::chrono::microseconds>(
++          dxvk::high_resolution_clock::now() - createStart).count();
++
++        g_drawPipelineStats.created += 1u;
++        g_drawPipelineStats.timeUs += uint64_t(createUs);
++
++        if (!canCreateBasePipeline)
++          g_drawPipelineStats.fullCompiles += 1u;
+ 
+         // Unlock here since we may dispatch the pipeline to a worker,
+         // which will then acquire it to increment the use counter.
+diff --git a/src/dxvk/dxvk_graphics.h b/src/dxvk/dxvk_graphics.h
+--- a/src/dxvk/dxvk_graphics.h
++++ b/src/dxvk/dxvk_graphics.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <atomic>
+ #include <mutex>
+ 
+ #include "../util/sync/sync_list.h"
+@@ -458,6 +459,24 @@
+    * recompile the graphics pipeline against a given
+    * pipeline state vector.
+    */
++  /**
++   * \brief GeneralsX: pipelines created while drawing
++   *
++   * Running totals of the pipeline instances the context had to create
++   * for a draw, on the thread that records the draw. Creating one means
++   * fast-linking pipeline libraries (and compiling a library that was not
++   * ready yet), or compiling the complete pipeline when the state cannot
++   * use libraries. The game reads them through GeneralsX_GetPipelineStats
++   * to name pipeline compilation in its frame hitch reports.
++   */
++  struct DxvkDrawPipelineStats {
++    std::atomic<uint64_t> created      = { 0u };
++    std::atomic<uint64_t> fullCompiles = { 0u };
++    std::atomic<uint64_t> timeUs       = { 0u };
++  };
++
++  extern DxvkDrawPipelineStats g_drawPipelineStats;
++
+   class DxvkGraphicsPipeline {
+     
+   public:

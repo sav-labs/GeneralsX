@@ -42,6 +42,9 @@
 #include <map>
 
 class CameraClass;
+class LightEnvironmentClass;
+class SphereClass;
+class ParticleSystem;
 class RTS3DScene;
 class TextureClass;
 class W3DDynamicLight;
@@ -74,6 +77,12 @@ public:
 
 	Int getMode() const { return m_mode; }
 
+	// GeneralsX @bugfix Claude 17/10/2026 Night hulls washed out white next to hits and muzzle flashes.
+	/// Adds the enabled dynamic lights of the scene (effect lights and retail LightPulse lights) that reach a model
+	/// to its light environment. Their light at the model together stays below MAX_MODEL_DYNAMIC_LIGHT: when several
+	/// flashes overlap on one model, all of them are scaled down for that model.
+	static void addModelDynamicLights(LightEnvironmentClass &env, const SphereClass &bounds, RTS3DScene &scene);
+
 private:
 	enum
 	{
@@ -103,6 +112,7 @@ private:
 		Real radius;
 		Real intensity;     ///< current strength, 1 = a typical explosion at its peak
 		Real priority;
+		Int kind;           ///< EffectLights::Kind, for the -perf summary
 	};
 
 	/// What the lights of this frame are, kept for the terrain splat pass.
@@ -112,8 +122,25 @@ private:
 		Vector3 color;
 		Real radius;
 		Real intensity;
+		Int kind;
 	};
 
+	// GeneralsX @bugfix Claude 16/10/2026 -perf summary of what the effect lights see and light, per kind.
+	struct Stats
+	{
+		UnsignedInt frames;
+		UnsignedInt litSum;
+		UnsignedInt litMax;
+		UnsignedInt candidateSum;
+		UnsignedInt fxEvents[EffectLights::KIND_COUNT];     ///< addEffect calls from FXLists
+		UnsignedInt bursts[EffectLights::KIND_COUNT];       ///< one-shot particle bursts turned into pulses
+		UnsignedInt candidates[EffectLights::KIND_COUNT];   ///< candidates per kind, summed over the frames
+		UnsignedInt lit[EffectLights::KIND_COUNT];          ///< lit lights per kind, summed over the frames
+	};
+
+	void resetStats();
+	void logStats(UnsignedInt nowMs);
+	void addPulse(const Coord3D *pos, const EffectLights::Profile &profile, Real objectRadius);
 	void createLights();
 	void releaseLights();
 	void readOptions();
@@ -123,6 +150,7 @@ private:
 	Real pulseEnvelope(const Pulse &pulse, Real *radiusScale) const;
 	void collectParticleLights(CameraClass *camera, Real timeSeconds);
 	void addCandidate(const Vector3 &pos, const Vector3 &color, Real radius, Real intensity, Int kind, CameraClass *camera);
+	const EffectLights::Profile &particleProfile(ParticleSystem *system);
 	Vector3 kindColor(Int kind, Int tint) const;
 	void computeTerrainLight();
 	UnsignedInt countRetailLights() const;
@@ -150,6 +178,10 @@ private:
 
 	/// Particle system templates already classified (fire, exhaust or nothing).
 	std::map<const void *, EffectLights::Profile> m_particleProfiles;
+	/// Highest particle system id already checked for a one-shot burst light.
+	Int m_burstWatermark;
+	Stats m_stats;
+	UnsignedInt m_statsStartMs;
 };
 
 extern W3DEffectLights *TheW3DEffectLights;

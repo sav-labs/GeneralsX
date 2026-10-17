@@ -1114,6 +1114,9 @@ Int OptionPreferences::getUpscalerQualityScale() const
 		return UPSCALER_PERFORMANCE_SCALE;
 	if (quality.compareNoCase("UltraPerformance") == 0)
 		return UPSCALER_ULTRA_PERFORMANCE_SCALE;
+	// GeneralsX @feature Claude 16/10/2026 Native: FSR 2 / FSR 3 as anti-aliasing at the output size
+	if (quality.compareNoCase("Native") == 0)
+		return UPSCALER_NATIVE_SCALE;
 	return UPSCALER_QUALITY_SCALE;
 }
 
@@ -1124,7 +1127,8 @@ AsciiString OptionPreferences::getUpscalerQualityName() const
 		return AsciiString("Quality");
 
 	const char *name = it->second.str();
-	if (stricmp(name, "Balanced") == 0 || stricmp(name, "Performance") == 0 || stricmp(name, "UltraPerformance") == 0)
+	if (stricmp(name, "Balanced") == 0 || stricmp(name, "Performance") == 0 || stricmp(name, "UltraPerformance") == 0
+		|| stricmp(name, "Native") == 0)
 		return it->second;
 	return AsciiString("Quality");
 }
@@ -1235,6 +1239,35 @@ Bool OptionPreferences::getTerrainSoftBlendEnabled() const
 		return TRUE;
 
 	return stricmp(it->second.str(), "no") != 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini ModelNormalMaps uses <texture>_n.dds/.tga normal and gloss
+// maps on unit and building models that have them.
+// GeneralsX @bugfix Claude 17/10/2026 Off unless set to "yes" until the renderer is verified on hardware.
+Bool OptionPreferences::getModelNormalMapsEnabled() const
+{
+	OptionPreferences::const_iterator it = find("ModelNormalMaps");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
+// GeneralsX @feature Claude 16/10/2026 Options.ini ModelSpecular scales the highlight from the gloss of the
+// model normal maps: 0 none, 1 default, 2 strongest.
+Real OptionPreferences::getModelSpecular() const
+{
+	OptionPreferences::const_iterator it = find("ModelSpecular");
+	if (it == end())
+		return 1.0f;
+
+	Real strength = (Real)atof(it->second.str());
+	if (strength < 0.0f)
+		strength = 0.0f;
+	if (strength > 2.0f)
+		strength = 2.0f;
+
+	return strength;
 }
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
@@ -1439,6 +1472,36 @@ Bool OptionPreferences::getRenderScaleResolution(Int scale, Int displayWidth, In
 	*xres = width;
 	*yres = height;
 	return TRUE;
+}
+
+// GeneralsX @bugfix Claude 16/10/2026 Whether Options.ini has a valid Resolution entry
+Bool OptionPreferences::hasResolution() const
+{
+	OptionPreferences::const_iterator it = find("Resolution");
+	if (it == end())
+		return FALSE;
+
+	Int xres, yres;
+	return sscanf(it->second.str(), "%d%d", &xres, &yres) == 2 && xres > 0 && yres > 0;
+}
+
+// GeneralsX @bugfix Claude 16/10/2026 Same rounding as DxvkSwapchainBlitter::fitAspectRatio (DXVK patch 0001) and
+// Win32Mouse::getUpscaledImageRect, so the engine, DXVK and the mouse agree on the image on screen.
+void OptionPreferences::fitToDisplay(Int width, Int height, Int displayWidth, Int displayHeight, Int *fitWidth, Int *fitHeight)
+{
+	*fitWidth = displayWidth;
+	*fitHeight = displayHeight;
+	if (width <= 0 || height <= 0 || displayWidth <= 0 || displayHeight <= 0)
+		return;
+
+	const Int64 dw = displayWidth;
+	const Int64 dh = displayHeight;
+	const Int64 sw = width;
+	const Int64 sh = height;
+	if (dw * sh > dh * sw)
+		*fitWidth = (Int)((sw * dh + sh / 2) / sh);
+	else
+		*fitHeight = (Int)((sh * dw + sw / 2) / sw);
 }
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini DynamicLights: short coloured lights from explosions, burning
