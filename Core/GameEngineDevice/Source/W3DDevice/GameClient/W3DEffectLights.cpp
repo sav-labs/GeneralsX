@@ -76,7 +76,7 @@ namespace
 		{  50.0f, 0.85f, 0.02f, 0.04f, 0.35f, 1.0f, 0.62f, 0.30f, 0.00f, 1.0f, TRUE  }, // KIND_IMPACT
 		{  85.0f, 1.00f, 0.03f, 0.08f, 0.70f, 1.0f, 0.56f, 0.24f, 0.08f, 1.6f, TRUE  }, // KIND_EXPLOSION
 		{ 135.0f, 1.10f, 0.05f, 0.15f, 1.20f, 1.0f, 0.52f, 0.22f, 0.10f, 2.2f, TRUE  }, // KIND_LARGE_EXPLOSION
-		{ 280.0f, 1.25f, 0.15f, 0.60f, 3.00f, 1.0f, 0.80f, 0.60f, 0.05f, 4.0f, TRUE  }, // KIND_SUPERWEAPON
+		{ 180.0f, 1.25f, 0.15f, 0.60f, 3.00f, 1.0f, 0.80f, 0.60f, 0.05f, 4.0f, TRUE  }, // KIND_SUPERWEAPON
 		{  65.0f, 0.85f, 0.05f, 0.15f, 0.45f, 1.0f, 0.55f, 0.20f, 0.30f, 1.0f, TRUE  }, // KIND_FLAME
 		{  60.0f, 0.75f, 0.00f, 0.00f, 0.00f, 1.0f, 0.50f, 0.18f, 0.22f, 0.9f, FALSE }, // KIND_FIRE
 		{  38.0f, 0.65f, 0.00f, 0.00f, 0.00f, 1.0f, 0.70f, 0.40f, 0.10f, 0.7f, FALSE }, // KIND_EXHAUST
@@ -98,18 +98,22 @@ namespace
 	/// One light (also after merging) stops here: brighter than this only saturates.
 	const Real MAX_INTENSITY = 1.3f;
 	/// All lights of a frame together: above this every light is scaled down, so a big battle cannot tint the screen.
-	const Real MAX_TOTAL_INTENSITY = 6.0f;
+	const Real MAX_TOTAL_INTENSITY = 4.0f;
 	/// Light a model gets from one effect light at its centre (diffuse, after the day/night scale).
 	const Real MAX_OBJECT_LIGHT = 1.0f;
 	/// Share of an effect light that lights a whole nearby model evenly (WW3D folds a point light's ambient into
 	/// the model's ambient): small, or night buildings turn uniformly yellow.
 	const Real AMBIENT_FRACTION = 0.12f;
 	/// Ground light a splat adds at its centre, absolute, per channel.
-	const Real MAX_SPLAT_ADD = 0.5f;
-	/// The ground is brightened at most 1 + this many times at a splat's centre (twice the sun at night is plenty).
-	const Real MAX_SPLAT_RATIO = 2.0f;
+	const Real MAX_SPLAT_ADD = 0.3f;
+	/// The ground is brightened at most 1 + this many times at a splat's centre.
+	// GeneralsX @bugfix Claude 17/10/2026 Overlapping splats multiply the ground, so ten lights of a night battle at
+	// 1 + 2 each washed the frame out white (fx-night5). Smaller per splat, and only the strongest splats draw.
+	const Real MAX_SPLAT_RATIO = 0.75f;
+	/// Ground splats per frame at most, the strongest lights first.
+	const Int MAX_SPLATS = 4;
 	/// Largest light radius after size and object scaling, world units (a tank is about 30 across).
-	const Real MAX_RADIUS = 300.0f;
+	const Real MAX_RADIUS = 200.0f;
 	/// Lights closer than this fraction of the larger radius become one light.
 	const Real MERGE_FRACTION = 0.5f;
 	/// Splat geometry floats this far above the terrain so it wins the depth test against it and the roads.
@@ -779,11 +783,27 @@ void W3DEffectLights::drawTerrainSplats(WorldHeightMap &map)
 	};
 	Splat splats[MAX_LIGHTS];
 	Int numSplats = 0;
+	// the strongest lights get the splats
+	Bool splatLight[MAX_LIGHTS];
+	for (Int i = 0; i < MAX_LIGHTS; ++i)
+		splatLight[i] = FALSE;
+	for (Int n = 0; n < MAX_SPLATS && n < m_numActive; ++n)
+	{
+		Int best = -1;
+		for (Int i = 0; i < m_numActive; ++i)
+		{
+			if (!splatLight[i] && (best < 0 || m_active[i].intensity > m_active[best].intensity))
+				best = i;
+		}
+		splatLight[best] = TRUE;
+	}
 	const Real terrainScale = 1.0f * m_objectScale;
 	for (Int wantPasses = MAX_SPLAT_PASSES; wantPasses >= 1; --wantPasses)
 	{
 		for (Int i = 0; i < m_numActive; ++i)
 		{
+			if (!splatLight[i])
+				continue;
 			const ActiveLight &light = m_active[i];
 			const Real scale = light.intensity * terrainScale;
 			// GeneralsX @bugfix Claude 16/10/2026 Absolute added light and ratio capped: dividing by the dark night
