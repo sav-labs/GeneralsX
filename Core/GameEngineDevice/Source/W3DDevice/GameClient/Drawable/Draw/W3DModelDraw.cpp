@@ -3799,7 +3799,8 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		Object *obj = getDrawable()->getObject();
 		const Coord3D* pos = getDrawable()->getPosition();
 
-		if ( m_fullyObscuredByShroud || obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE )
+		// GeneralsX @bugfix Claude 17/10/2026 A drawable without an object (preload, renderer warm-up) has no status.
+		if ( m_fullyObscuredByShroud || ( obj && obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE ) )
 		{
 				m_trackRenderObject->addCapEdgeToTrack(pos->x, pos->y);
 		}

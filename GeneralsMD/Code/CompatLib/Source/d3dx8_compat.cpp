@@ -91,16 +91,31 @@ D3DXLoadSurfaceFromSurface(
 	}
 
 	D3DLOCKED_RECT srcRect;
-	pSrcSurface->LockRect(&srcRect, NULL, 0);
+	if (FAILED(pSrcSurface->LockRect(&srcRect, NULL, D3DLOCK_READONLY)))
+		return D3DERR_INVALIDCALL;
 
 	D3DLOCKED_RECT destRect;
-	pDestSurface->LockRect(&destRect, NULL, 0);
+	if (FAILED(pDestSurface->LockRect(&destRect, NULL, 0)))
+	{
+		pSrcSurface->UnlockRect();
+		return D3DERR_INVALIDCALL;
+	}
 
 	// Fast path: No scaling needs to be done if the dimensions are the same
 	if (descDest.Width == descSrc.Width && descDest.Height == descSrc.Height)
 	{
-		// Copy the data directly
-		memcpy(destRect.pBits, srcRect.pBits, srcRect.Pitch * descSrc.Height);
+		// GeneralsX @bugfix Claude 17/10/2026 Copy row by row. The pitch of a block compressed (DXT) surface is the
+		// size of one row of 4x4 blocks, so Pitch * Height read four times the surface and crashed at the end of
+		// its memory (house colour remaps of HD pack textures, W3DAssetManager::Remap_Palette). The two surfaces can
+		// also have different pitches.
+		const bool compressed = descSrc.Format == D3DFMT_DXT1 || descSrc.Format == D3DFMT_DXT2
+			|| descSrc.Format == D3DFMT_DXT3 || descSrc.Format == D3DFMT_DXT4 || descSrc.Format == D3DFMT_DXT5;
+		const UINT rows = compressed ? (descSrc.Height + 3) / 4 : descSrc.Height;
+		const UINT rowBytes = (UINT)(srcRect.Pitch < destRect.Pitch ? srcRect.Pitch : destRect.Pitch);
+		const unsigned char *src = (const unsigned char *)srcRect.pBits;
+		unsigned char *dst = (unsigned char *)destRect.pBits;
+		for (UINT row = 0; row < rows; ++row)
+			memcpy(dst + row * destRect.Pitch, src + row * srcRect.Pitch, rowBytes);
 		pDestSurface->UnlockRect();
 		pSrcSurface->UnlockRect();
 		return D3D_OK;
