@@ -5,10 +5,17 @@ the D3D9 device copies render target 0 there, and at present FSR 2's
 ffxFsr2ContextGenerateReactiveMask compares that copy with the scene
 colour of render state 252. DXVK_FSR2_REACTIVE_SCALE (default 0.9, 0 is
 off) and DXVK_FSR2_REACTIVE_THRESHOLD (default 0.05) tune the mask,
-DXVK_FSR2_SHARPNESS turns on FSR 2's own RCAS pass instead of the swap
-chain's, and DXVK_FSR2_DEBUG=reactive shows the mask. The SPIR-V
-reflection of the FSR 2 passes now leaves out resources a pass never
-reads, which the backend would otherwise bind empty.
+DXVK_FSR2_SHARPNESS sharpens the scene with RCAS instead of the swap
+chain's FSR 1.0 RCAS, and DXVK_FSR2_DEBUG=reactive shows the mask. The
+SPIR-V reflection of the FSR 2 passes now leaves out resources a pass
+never reads, which the backend would otherwise bind empty.
+
+Output-size traffic, which dominates on integrated GPUs: the upscaled and
+composited images are 10-bit UNORM where the device can store and filter
+it (16-bit float otherwise), the composite pass applies the RCAS of
+DXVK_FSR2_SHARPNESS itself (same mapping as FSR 2) instead of FSR 2's own
+RCAS pass, and it reads the EASU image only where the interface is.
+DXVK_FSR_TIMING=1 logs the GPU time of each pass every 300 frames.
 
 diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
 --- a/src/d3d9/d3d9_device.cpp
@@ -233,10 +240,142 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
  #include <dxvk_fsr2_prepare.h>
  #include <dxvk_fsr2_composite.h>
  
-@@ -17,6 +22,67 @@
+@@ -17,6 +22,199 @@
    std::atomic<bool> DxvkFsr2::s_temporalActive = { false };
  
  
++  DxvkUpscalerTimer::DxvkUpscalerTimer(
++    const Rc<DxvkDevice>&             device,
++          std::string                 tag,
++          std::vector<std::string>    passes)
++  : m_device(device), m_tag(std::move(tag)), m_passes(std::move(passes)),
++    m_sums(m_passes.size(), 0.0) {
++    auto vk = m_device->vkd();
++
++    VkQueryPoolCreateInfo info = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
++    info.queryType = VK_QUERY_TYPE_TIMESTAMP;
++    info.queryCount = Slots * uint32_t(m_passes.size() + 1u);
++
++    VkResult vr = vk->vkCreateQueryPool(vk->device(), &info, nullptr, &m_pool);
++
++    if (vr != VK_SUCCESS) {
++      Logger::warn(str::format(m_tag, " cannot create a timestamp query pool: ", vr));
++      m_pool = VK_NULL_HANDLE;
++    }
++
++    m_msPerTick = m_device->properties().core.properties.limits.timestampPeriod / 1000000.0f;
++
++    Logger::info(str::format(m_tag, " DXVK_FSR_TIMING: logging the GPU time of each pass every ", LogInterval, " frames"));
++  }
++
++
++  DxvkUpscalerTimer::~DxvkUpscalerTimer() {
++    auto vk = m_device->vkd();
++    vk->vkDestroyQueryPool(vk->device(), m_pool, nullptr);
++  }
++
++
++  bool DxvkUpscalerTimer::isEnabled() {
++    static const bool s_enabled = env::getEnvVar("DXVK_FSR_TIMING") == "1";
++    return s_enabled;
++  }
++
++
++  void DxvkUpscalerTimer::begin(const DxvkContextObjects& ctx) {
++    if (!m_pool)
++      return;
++
++    m_slot = (m_slot + 1u) % Slots;
++
++    // Results of the frame that last used the slot, several frames ago
++    if (m_slotMarks[m_slot])
++      collect(m_slot);
++
++    uint32_t stride = uint32_t(m_passes.size() + 1u);
++
++    ctx.cmd->cmdResetQueryPool(DxvkCmdBuffer::ExecBuffer, m_pool, m_slot * stride, stride);
++    ctx.cmd->cmdWriteTimestamp(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, m_pool, m_slot * stride);
++
++    m_marks = 0u;
++    m_open = true;
++  }
++
++
++  void DxvkUpscalerTimer::mark(const DxvkContextObjects& ctx) {
++    if (!m_open || m_marks >= m_passes.size())
++      return;
++
++    uint32_t stride = uint32_t(m_passes.size() + 1u);
++
++    m_marks += 1u;
++    ctx.cmd->cmdWriteTimestamp(DxvkCmdBuffer::ExecBuffer,
++      VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, m_pool, m_slot * stride + m_marks);
++  }
++
++
++  void DxvkUpscalerTimer::end() {
++    if (!m_open)
++      return;
++
++    m_slotMarks[m_slot] = m_marks;
++    m_open = false;
++  }
++
++
++  void DxvkUpscalerTimer::collect(uint32_t slot) {
++    auto vk = m_device->vkd();
++
++    uint32_t stride = uint32_t(m_passes.size() + 1u);
++    uint32_t count = m_slotMarks[slot] + 1u;
++    m_slotMarks[slot] = 0u;
++
++    std::vector<uint64_t> ticks(count, 0u);
++
++    VkResult vr = vk->vkGetQueryPoolResults(vk->device(), m_pool, slot * stride, count,
++      sizeof(uint64_t) * count, ticks.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
++
++    // Not done yet: drop the sample rather than stall the frame
++    if (vr != VK_SUCCESS)
++      return;
++
++    for (uint32_t i = 1u; i < count; i++)
++      m_sums[i - 1u] += double(ticks[i] - ticks[i - 1u]) * m_msPerTick;
++
++    m_total += double(ticks[count - 1u] - ticks[0]) * m_msPerTick;
++
++    if (++m_samples < LogInterval)
++      return;
++
++    std::string line = str::format(m_tag, " GPU time over ", m_samples, " frames:");
++
++    for (size_t i = 0; i < m_passes.size(); i++) {
++      line += str::format(i ? ", " : " ", m_passes[i], " ", m_sums[i] / double(m_samples), " ms");
++      m_sums[i] = 0.0;
++    }
++
++    line += str::format(", total ", m_total / double(m_samples), " ms");
++    Logger::info(line);
++
++    m_total = 0.0;
++    m_samples = 0u;
++  }
++
++
++  VkFormat DxvkFsr2::pickOutputFormat(const Rc<DxvkDevice>& device) {
++    VkFormatFeatureFlags2 required = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT
++      | VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT
++      | VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT
++      | VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
++
++    VkFormatFeatureFlags2 features = device->getFormatFeatures(VK_FORMAT_A2B10G10R10_UNORM_PACK32).optimal;
++
++    return (features & required) == required
++      ? VK_FORMAT_A2B10G10R10_UNORM_PACK32
++      : VK_FORMAT_R16G16B16A16_SFLOAT;
++  }
++
++
 +  // GeneralsX: settings of the reactive mask and of FSR 2's own RCAS pass.
 +  // The game sets them from Options.ini, see WinMain.cpp applyRenderScale.
 +  //
@@ -301,11 +440,16 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
    DxvkFsr2::DxvkFsr2(const Rc<DxvkDevice>& device)
    : m_device(device) {
      if (!isAvailable()) {
-@@ -24,6 +90,18 @@
+@@ -24,6 +222,24 @@
        return;
      }
  
 +    m_settings = getSettings();
++    m_outputFormat = pickOutputFormat(m_device);
++
++    if (DxvkUpscalerTimer::isEnabled())
++      m_timer = std::make_unique<DxvkUpscalerTimer>(m_device, "[FSR2]",
++        std::vector<std::string> { "prepare", "reactive mask", "FSR 2", "composite" });
 +
 +    Logger::info(str::format("[FSR2] reactive mask ",
 +      m_settings.reactiveScale > 0.0f
@@ -315,16 +459,26 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
 +      m_settings.sharpness > 0.0f
 +        ? str::format(m_settings.sharpness)
 +        : std::string("off (FSR 1.0 RCAS sharpens)"),
++      ", output ", m_outputFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? "10-bit" : "16-bit float",
 +      m_settings.debugReactive ? ", debug view of the reactive mask" : ""));
 +
      createPipelines();
  
      DxvkSamplerKey samplerKey = { };
-@@ -111,10 +189,17 @@
+@@ -109,12 +325,37 @@
  
+     ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
+ 
++    // GeneralsX: per-pass GPU time with DXVK_FSR_TIMING=1
++    if (m_timer)
++      m_timer->begin(ctx);
++
      preparePass(ctx, inputs);
  
 -    bool success = dispatchFsr2(ctx, inputs);
++    if (m_timer)
++      m_timer->mark(ctx);
++
 +    // GeneralsX: reactive mask from the scene before and after its
 +    // alpha-blended effects
 +    bool useReactive = m_settings.reactiveScale > 0.0f
@@ -332,15 +486,26 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
 +      && inputs.opaqueColor->mipLevelExtent(0u) == colorExtent
 +      && generateReactive(ctx, inputs);
 +
++    if (m_timer)
++      m_timer->mark(ctx);
++
 +    bool success = dispatchFsr2(ctx, inputs, useReactive);
++
++    if (m_timer)
++      m_timer->mark(ctx);
  
      if (success)
 -      compositePass(ctx, inputs, finalView, finalRect, spatialView);
 +      compositePass(ctx, inputs, finalView, finalRect, spatialView, useReactive);
++
++    if (m_timer) {
++      m_timer->mark(ctx);
++      m_timer->end();
++    }
  
      // DXVK does not know about the compute reads above, so make sure that
      // later writes to the back buffer and the scene copies wait for them.
-@@ -136,6 +221,11 @@
+@@ -136,6 +377,11 @@
      ctx.cmd->track(m_motionImage, DxvkAccess::Write);
      ctx.cmd->track(m_outputImage, DxvkAccess::Write);
      ctx.cmd->track(m_compositeImage, DxvkAccess::Write);
@@ -352,7 +517,7 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      ctx.cmd->track(m_pointSampler);
      ctx.cmd->track(m_linearSampler);
  
-@@ -151,7 +241,8 @@
+@@ -151,7 +397,8 @@
          renderExtent.width, "x", renderExtent.height, " to ", extent.width, "x", extent.height,
          ", jitter ", inputs.jitter[0], " ", inputs.jitter[1],
          ", near ", inputs.cameraNear, ", far ", inputs.cameraFar,
@@ -362,7 +527,7 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      }
  
      return m_compositeView;
-@@ -249,13 +340,14 @@
+@@ -249,13 +496,14 @@
      }};
  
      // Composite pass: FSR 2 output, EASU output, final and scene images,
@@ -379,16 +544,22 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      }};
  
      auto createLayouts = [&] (const VkDescriptorSetLayoutBinding* bindings, uint32_t count,
-@@ -380,6 +472,8 @@
+@@ -378,8 +626,12 @@
+   void DxvkFsr2::createImages(VkExtent2D renderExtent, VkExtent2D displayExtent) {
+     m_depthImage     = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR2 depth",       m_depthView);
      m_motionImage    = createImage(renderExtent,  VK_FORMAT_R16G16_SFLOAT,       "FSR2 motion",      m_motionView);
-     m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 output",      m_outputView);
-     m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 composite",   m_compositeView);
+-    m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 output",      m_outputView);
+-    m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR2 composite",   m_compositeView);
++    // GeneralsX: 10-bit output and composite images where supported, they
++    // dominate the memory traffic at output size
++    m_outputImage    = createImage(displayExtent, m_outputFormat,                "FSR2 output",      m_outputView);
++    m_compositeImage = createImage(displayExtent, m_outputFormat,                "FSR2 composite",   m_compositeView);
 +    // GeneralsX: FSR 2's reactive mask shader writes it as r32f
 +    m_reactiveImage  = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR2 reactive",    m_reactiveView);
    }
  
  
-@@ -480,10 +574,83 @@
+@@ -480,10 +732,83 @@
    }
  
  
@@ -473,10 +644,12 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      // FSR 2 writes every output pixel; the composite pass of the previous
      // frame may still read the image.
      VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
-@@ -518,15 +685,24 @@
+@@ -517,16 +842,27 @@
+     desc.motionVectors = ffxGetTextureResourceVK(context, m_motionImage->handle(), m_motionView->handle(),
        m_renderExtent.width, m_renderExtent.height, VK_FORMAT_R16G16_SFLOAT, L"FSR2 motion", FFX_RESOURCE_STATE_COMPUTE_READ);
      desc.output = ffxGetTextureResourceVK(context, m_outputImage->handle(), m_outputView->handle(),
-       m_displayExtent.width, m_displayExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT, L"FSR2 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+-      m_displayExtent.width, m_displayExtent.height, VK_FORMAT_R16G16B16A16_SFLOAT, L"FSR2 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
++      m_displayExtent.width, m_displayExtent.height, m_outputFormat, L"FSR2 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 +
 +    // GeneralsX: generateReactive left the mask in GENERAL layout; FSR 2
 +    // moves it to SHADER_READ_ONLY_OPTIMAL, where the debug view reads it.
@@ -491,17 +664,18 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      desc.motionVectorScale.y = float(m_renderExtent.height);
      desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
 -    // The swap chain blitter sharpens the composited image with RCAS
--    desc.enableSharpening = false;
++    // GeneralsX: DXVK_FSR2_SHARPNESS is applied by the composite pass with
++    // the same RCAS and the same mapping, so FSR 2 skips its own RCAS pass
++    // and the extra image it writes and reads at output size. Without it,
++    // the swap chain blitter sharpens the composited image with the FSR 1.0
++    // RCAS pass instead, never both.
+     desc.enableSharpening = false;
 -    desc.sharpness = 0.0f;
-+    // GeneralsX: FSR 2's own RCAS pass with DXVK_FSR2_SHARPNESS. Without
-+    // it, the swap chain blitter sharpens the composited image with the
-+    // FSR 1.0 RCAS pass instead, never both.
-+    desc.enableSharpening = m_settings.sharpness > 0.0f;
 +    desc.sharpness = m_settings.sharpness;
      desc.frameTimeDelta = std::clamp(inputs.frameTimeMs, 1.0f, 200.0f);
      desc.preExposure = 1.0f;
      desc.reset = inputs.reset || !m_havePrev;
-@@ -555,7 +731,8 @@
+@@ -555,7 +891,8 @@
      const DxvkTemporalUpscaleInputs&  inputs,
      const Rc<DxvkImageView>&          finalView,
            VkRect2D                    finalRect,
@@ -511,7 +685,7 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      // The last FSR 2 pass wrote the output image in GENERAL layout. The
      // composite image is fully overwritten; the previous frame's final
      // blit may still read it.
-@@ -612,12 +789,23 @@
+@@ -612,12 +949,23 @@
      outInfo.imageView = m_compositeView->handle();
      outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
  
@@ -536,7 +710,7 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
      }};
  
      ctx.cmd->updateDescriptorSets(writes.size(), writes.data());
-@@ -628,6 +816,13 @@
+@@ -628,6 +976,15 @@
      push.inputExtent[0] = finalRect.extent.width;
      push.inputExtent[1] = finalRect.extent.height;
      push.threshold = 1.5f / 255.0f;
@@ -544,6 +718,8 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
 +    // sharpen the composited image, so the interface pixels taken from the
 +    // EASU image get the FSR 1.0 RCAS pass here. Negative: no sharpening.
 +    push.spatialSharpness = sharpensOutput() ? m_spatialSharpness : -1.0f;
++    // GeneralsX: RCAS of the FSR 2 output in place of FSR 2's own pass
++    push.sceneSharpness = sharpensOutput() ? sceneRcasStops(m_settings.sharpness) : -1.0f;
 +    // 0: normal, 1: reactive mask over a grey frame, 2: the debug view
 +    // without a mask this frame
 +    push.debugMode = m_settings.debugReactive ? (useReactive ? 1u : 2u) : 0u;
@@ -553,7 +729,17 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
 diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
 --- a/src/dxvk/dxvk_fsr2.h
 +++ b/src/dxvk/dxvk_fsr2.h
-@@ -25,6 +25,10 @@
+@@ -1,7 +1,9 @@
+ #pragma once
+ 
++#include <array>
+ #include <atomic>
+ #include <memory>
++#include <string>
+ #include <vector>
+ 
+ #include "../util/util_matrix.h"
+@@ -25,6 +27,10 @@
      /// Scene depth at render size, depth aspect view in the image's
      /// default layout.
      Rc<DxvkImageView> depth;
@@ -564,7 +750,78 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
      /// Sub-pixel jitter the game applied to its projection, in render
      /// pixels, with y pointing down the image
      float     jitter[2] = { 0.0f, 0.0f };
-@@ -82,6 +86,35 @@
+@@ -46,6 +52,70 @@
+ 
+ 
+   /**
++   * \brief GeneralsX: GPU time of the temporal upscaler passes
++   *
++   * With DXVK_FSR_TIMING=1, writes a timestamp before the first and after
++   * each pass of a frame and logs the average time of every pass over 300
++   * frames. Results are read without waiting, several frames later.
++   */
++  class DxvkUpscalerTimer {
++
++  public:
++
++    DxvkUpscalerTimer(
++      const Rc<DxvkDevice>&             device,
++            std::string                 tag,
++            std::vector<std::string>    passes);
++
++    ~DxvkUpscalerTimer();
++
++    /**
++     * \brief Whether DXVK_FSR_TIMING asks for pass timings
++     */
++    static bool isEnabled();
++
++    /**
++     * \brief Starts the timestamps of a frame
++     */
++    void begin(const DxvkContextObjects& ctx);
++
++    /**
++     * \brief Ends the next pass of the frame
++     */
++    void mark(const DxvkContextObjects& ctx);
++
++    /**
++     * \brief Ends the frame
++     */
++    void end();
++
++  private:
++
++    static constexpr uint32_t Slots = 8u;
++    static constexpr uint32_t LogInterval = 300u;
++
++    Rc<DxvkDevice>            m_device;
++    std::string               m_tag;
++    std::vector<std::string>  m_passes;
++
++    VkQueryPool               m_pool = VK_NULL_HANDLE;
++    float                     m_msPerTick = 0.0f;
++
++    uint32_t                  m_slot = 0u;
++    uint32_t                  m_marks = 0u;
++    bool                      m_open = false;
++    std::array<uint32_t, Slots> m_slotMarks = { };
++
++    std::vector<double>       m_sums;
++    double                    m_total = 0.0;
++    uint32_t                  m_samples = 0u;
++
++    void collect(uint32_t slot);
++
++  };
++
++
++  /**
+    * \brief GeneralsX: AMD FidelityFX FSR 2 temporal upscaler
+    *
+    * Runs in the swap chain blitter at present. Generates camera motion
+@@ -82,6 +152,57 @@
      }
  
      /**
@@ -586,6 +843,28 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
 +    }
 +
 +    /**
++     * \brief RCAS sharpness of the scene in stops, as FSR 2 maps it
++     *
++     * The composite pass sharpens the upscaled scene with it while it
++     * reads the image anyway, instead of a separate FSR 2 RCAS pass at
++     * the output size. Negative: no sharpening.
++     * \param [in] sharpness DXVK_FSR2_SHARPNESS, 0 to 1
++     */
++    static float sceneRcasStops(float sharpness) {
++      return sharpness > 0.0f ? 2.0f - 2.0f * sharpness : -1.0f;
++    }
++
++    /**
++     * \brief Format of the upscaled and composited images
++     *
++     * 10 bits per channel are plenty for the game's 8-bit colour and
++     * take half the memory traffic of 16-bit floats at the output size,
++     * which matters on integrated GPUs. Falls back to 16-bit floats if
++     * the device cannot store or filter the 10-bit format.
++     */
++    static VkFormat pickOutputFormat(const Rc<DxvkDevice>& device);
++
++    /**
 +     * \brief Sets the FSR 1.0 RCAS sharpness of the interface
 +     *
 +     * While FSR 2 sharpens the scene, the composite pass sharpens the
@@ -600,14 +879,14 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
       * \brief Upscales one frame
       *
       * \param [in] ctx Context objects
-@@ -118,9 +151,26 @@
+@@ -118,10 +239,29 @@
        float     invOutputExtent[2];
        uint32_t  inputExtent[2];
        float     threshold;
 -      float     reserved[3];
 +      float     spatialSharpness;
 +      uint32_t  debugMode;
-+      uint32_t  reserved;
++      float     sceneSharpness;
 +    };
 +
 +    /// GeneralsX: reactive mask and sharpening settings from the
@@ -626,9 +905,12 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
 +    bool                    m_reactiveLogged = false;
 +
      Rc<DxvkDevice>          m_device;
++    VkFormat                m_outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
++    std::unique_ptr<DxvkUpscalerTimer> m_timer;
  
      bool                    m_failed = false;
-@@ -150,6 +200,8 @@
+     bool                    m_contextValid = false;
+@@ -150,6 +290,8 @@
      Rc<DxvkImageView>       m_outputView;
      Rc<DxvkImage>           m_compositeImage;
      Rc<DxvkImageView>       m_compositeView;
@@ -637,7 +919,7 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
  
      Matrix4                 m_prevViewProj;
      bool                    m_havePrev = false;
-@@ -180,16 +232,22 @@
+@@ -180,16 +322,22 @@
        const DxvkContextObjects&         ctx,
        const DxvkTemporalUpscaleInputs&  inputs);
  
@@ -665,7 +947,7 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -853,8 +853,10 @@
+@@ -874,8 +874,10 @@
      // GeneralsX: FSR 2 needs the scene inputs of this frame at the size of
      // the back buffer. The game jitters its projection while FSR 2 is
      // active, which it reads back through GeneralsX_UpscalerSubmitFrame.
@@ -677,7 +959,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
  
      bool fsr2Usable = m_fsr2Enabled && useFsr && m_fsr2 && !m_fsr2->failed();
      DxvkFsr2::setTemporalActive(fsr2Usable);
-@@ -925,6 +927,9 @@
+@@ -946,6 +948,9 @@
        m_fsrResolveView = nullptr;
      }
  
@@ -687,7 +969,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      if (useFsr) {
        Rc<DxvkImageView> finalView = blitView;
        VkRect2D finalRect = blitRect;
-@@ -940,16 +945,24 @@
+@@ -961,16 +966,24 @@
          Rc<DxvkImageView> temporalView = m_fsr2->render(ctx, m_fsr2Inputs,
            finalView, finalRect, m_fsrView, dstRect.extent);
  
@@ -714,7 +996,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      m_fsr2Inputs = DxvkTemporalUpscaleInputs();
  
      // Post-processing runs in the RCAS pass, which reads its source 1:1,
-@@ -1310,7 +1323,7 @@
+@@ -1331,7 +1344,7 @@
      args.cursorOffset = m_cursorRect.offset;
      args.cursorExtent = m_cursorRect.extent;
      args.dstExtent = dstRect.extent;
@@ -800,10 +1082,14 @@ diff --git a/src/dxvk/shaders/dxvk_fsr2_composite.comp b/src/dxvk/shaders/dxvk_f
  // GeneralsX: composites the FSR 2 output of the 3D scene with the final
  // image. Pixels where the final image differs from the scene copy taken
  // before the interface was drawn belong to the interface; they come from
-@@ -13,14 +15,36 @@
+@@ -12,15 +14,51 @@
+ layout(set = 0, binding = 1) uniform sampler2D s_spatial;
  layout(set = 0, binding = 2) uniform sampler2D s_final;
  layout(set = 0, binding = 3) uniform sampler2D s_scene;
- layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D o_color;
+-layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D o_color;
++// GeneralsX: the image is 10-bit UNORM or 16-bit float, whichever the
++// device supports, so the store has no format qualifier
++layout(set = 0, binding = 4) writeonly uniform image2D o_color;
 +layout(set = 0, binding = 5) uniform sampler2D s_reactive;
  
  layout(push_constant)
@@ -817,15 +1103,27 @@ diff --git a/src/dxvk/shaders/dxvk_fsr2_composite.comp b/src/dxvk/shaders/dxvk_f
 +  float spatial_sharpness;
 +  // 0: normal, 1: reactive mask debug view, 2: debug view without a mask
 +  uint  debug_mode;
++  // GeneralsX: RCAS sharpness in stops for the FSR 2 output, negative for
++  // none. Replaces FSR 2's own RCAS pass, which would write and read
++  // another image at output size.
++  float scene_sharpness;
  };
  
-+// GeneralsX: FSR 1.0 RCAS on the EASU image, which is at output size
++// GeneralsX: FSR 1.0 RCAS on the FSR 2 output or the EASU image, both at
++// output size
 +#define A_GPU 1
 +#define A_GLSL 1
 +#include "ffx_a.h"
 +
 +#define FSR_RCAS_F 1
++bool g_rcas_scene = false;
++
 +AF4 FsrRcasLoadF(ASU2 p) {
++  if (g_rcas_scene) {
++    ivec2 hi = textureSize(s_fsr2, 0) - 1;
++    return texelFetch(s_fsr2, clamp(ivec2(p), ivec2(0), hi), 0);
++  }
++
 +  ivec2 hi = textureSize(s_spatial, 0) - 1;
 +  return texelFetch(s_spatial, clamp(ivec2(p), ivec2(0), hi), 0);
 +}
@@ -837,20 +1135,38 @@ diff --git a/src/dxvk/shaders/dxvk_fsr2_composite.comp b/src/dxvk/shaders/dxvk_f
  float interfaceWeight(ivec2 coord) {
    coord = clamp(coord, ivec2(0), ivec2(input_extent) - 1);
  
-@@ -53,7 +77,32 @@
+@@ -52,8 +90,49 @@
+ 
    float ui = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
  
-   vec4 temporal = textureLod(s_fsr2, uv, 0.0f);
+-  vec4 temporal = textureLod(s_fsr2, uv, 0.0f);
 -  vec4 spatial = textureLod(s_spatial, uv, 0.0f);
-+  vec3 spatial = textureLod(s_spatial, uv, 0.0f).rgb;
++  // The FSR 2 output has the size of this image
++  vec3 scene;
 +
-+  if (spatial_sharpness >= 0.0f && ui > 0.0f) {
++  if (scene_sharpness >= 0.0f) {
 +    AU4 con;
-+    FsrRcasCon(con, AF1(spatial_sharpness));
-+    FsrRcasF(spatial.r, spatial.g, spatial.b, AU2(coord), con);
++    FsrRcasCon(con, AF1(scene_sharpness));
++    g_rcas_scene = true;
++    FsrRcasF(scene.r, scene.g, scene.b, AU2(coord), con);
++    g_rcas_scene = false;
++  } else {
++    scene = texelFetch(s_fsr2, coord, 0).rgb;
 +  }
 +
-+  vec3 scene = temporal.rgb;
++  // GeneralsX: the EASU image is only read where the interface is, which
++  // saves a read of a full image at output size on most of the screen
++  vec3 spatial = vec3(0.0f);
++
++  if (ui > 0.0f) {
++    spatial = textureLod(s_spatial, uv, 0.0f).rgb;
++
++    if (spatial_sharpness >= 0.0f) {
++      AU4 con;
++      FsrRcasCon(con, AF1(spatial_sharpness));
++      FsrRcasF(spatial.r, spatial.g, spatial.b, AU2(coord), con);
++    }
++  }
 +
 +  // GeneralsX: DXVK_FSR2_DEBUG=reactive, the reactive mask in red over a
 +  // darkened grey copy of the scene. Blue tint: no mask this frame. The

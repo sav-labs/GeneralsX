@@ -10,7 +10,14 @@ image and never runs through the temporal upscaler. A shim hides device
 extensions the backend would otherwise use (fp16 permutations are not
 compiled) and defers the image view destruction of the backend until the
 command list that used the views has completed. Log lines start with
-[FSR3]; if FSR 3 fails, FSR 2 takes over, then FSR 1.0.
+[FSR3]; if FSR 3 fails, FSR 2 takes over, then FSR 1.0. The backend
+gets the shim's vkGetDeviceProcAddr: with the device's own lookup,
+vkGetBufferMemoryRequirements2KHR is NULL (DXVK uses the core function)
+and the backend crashes creating its first context. The shim also hides
+debug utils and AMD buffer marker functions DXVK does not enable, the
+FSR 3 shaders are built with glslang -Os so that passes do not reference
+descriptors the backend leaves unwritten, and sharpening, output format
+and DXVK_FSR_TIMING work as for FSR 2.
 
 diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
 --- a/src/dxvk/dxvk_fsr2.cpp
@@ -21,7 +28,7 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
  
  #include <algorithm>
  #include <cctype>
-@@ -79,7 +80,8 @@ namespace dxvk {
+@@ -211,7 +212,8 @@
  
  
    bool DxvkFsr2::isReactiveWanted() {
@@ -34,7 +41,7 @@ diff --git a/src/dxvk/dxvk_fsr2.cpp b/src/dxvk/dxvk_fsr2.cpp
 diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
 --- a/src/dxvk/dxvk_fsr2.h
 +++ b/src/dxvk/dxvk_fsr2.h
-@@ -62,6 +62,17 @@ namespace dxvk {
+@@ -128,6 +128,17 @@
  
    public:
  
@@ -52,7 +59,7 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
      DxvkFsr2(const Rc<DxvkDevice>& device);
  
      ~DxvkFsr2();
-@@ -89,7 +100,7 @@ namespace dxvk {
+@@ -155,7 +166,7 @@
       * \brief Whether the D3D9 device should copy the opaque scene
       *
       * True when DXVK_FSR2_REACTIVE_SCALE is above zero or the reactive
@@ -61,8 +68,8 @@ diff --git a/src/dxvk/dxvk_fsr2.h b/src/dxvk/dxvk_fsr2.h
       */
      static bool isReactiveWanted();
  
-@@ -156,17 +167,6 @@ namespace dxvk {
-       uint32_t  reserved;
+@@ -244,17 +255,6 @@
+       float     sceneSharpness;
      };
  
 -    /// GeneralsX: reactive mask and sharpening settings from the
@@ -83,7 +90,7 @@ diff --git a/src/dxvk/dxvk_fsr3.cpp b/src/dxvk/dxvk_fsr3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/src/dxvk/dxvk_fsr3.cpp
-@@ -0,0 +1,986 @@
+@@ -0,0 +1,1019 @@
 +#include "dxvk_fsr3.h"
 +
 +#include <algorithm>
@@ -197,6 +204,12 @@ new file mode 100644
 +    }
 +
 +    m_settings = DxvkFsr2::getSettings();
++    m_outputFormat = DxvkFsr2::pickOutputFormat(m_device);
++
++    // GeneralsX: per-pass GPU time with DXVK_FSR_TIMING=1
++    if (DxvkUpscalerTimer::isEnabled())
++      m_timer = std::make_unique<DxvkUpscalerTimer>(m_device, "[FSR3]",
++        std::vector<std::string> { "prepare", "reactive mask", "FSR 3", "composite" });
 +
 +    Logger::info(str::format("[FSR3] reactive mask ",
 +      m_settings.reactiveScale > 0.0f
@@ -206,6 +219,7 @@ new file mode 100644
 +      m_settings.sharpness > 0.0f
 +        ? str::format(m_settings.sharpness)
 +        : std::string("off (FSR 1.0 RCAS sharpens)"),
++      ", output ", m_outputFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? "10-bit" : "16-bit float",
 +      m_settings.debugReactive ? ", debug view of the reactive mask" : ""));
 +
 +    createPipelines();
@@ -293,7 +307,13 @@ new file mode 100644
 +
 +    ctx.cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
 +
++    if (m_timer)
++      m_timer->begin(ctx);
++
 +    preparePass(ctx, inputs);
++
++    if (m_timer)
++      m_timer->mark(ctx);
 +
 +    // Reactive mask from the scene before and after its alpha-blended
 +    // effects, as with FSR 2
@@ -302,11 +322,22 @@ new file mode 100644
 +      && inputs.opaqueColor->mipLevelExtent(0u) == colorExtent
 +      && generateReactive(ctx, inputs);
 +
++    if (m_timer)
++      m_timer->mark(ctx);
++
 +    bool success = dispatchUpscaler(ctx, inputs, useReactive);
++
++    if (m_timer)
++      m_timer->mark(ctx);
 +
 +    if (success) {
 +      compositePass(ctx, inputs, m_outputView, finalView, finalRect,
 +        spatialView, m_compositeView, useReactive);
++    }
++
++    if (m_timer) {
++      m_timer->mark(ctx);
++      m_timer->end();
 +    }
 +
 +    // DXVK does not know about the compute reads above, so make sure that
@@ -391,7 +422,11 @@ new file mode 100644
 +    VkDeviceContext deviceContext = { };
 +    deviceContext.vkDevice         = m_device->handle();
 +    deviceContext.vkPhysicalDevice = adapter;
-+    deviceContext.vkDeviceProcAddr = getDeviceProcAddr;
++    // GeneralsX: the shim's lookup, not the device's. The backend calls
++    // vkGetBufferMemoryRequirements2KHR while it creates its first context,
++    // which the device lookup returns as NULL since DXVK uses the core
++    // function: a crash on the first frame with -upscaler fsr3.
++    deviceContext.vkDeviceProcAddr = &dxvk_fsr3_vkGetDeviceProcAddr;
 +
 +    FfxErrorCode error = ffxGetInterfaceVK(&state->backend, ffxGetDeviceVK(&deviceContext),
 +      state->scratch.data(), state->scratch.size(), Fsr3MaxContexts);
@@ -647,8 +682,10 @@ new file mode 100644
 +  void DxvkFsr3::createImages(VkExtent2D renderExtent, VkExtent2D displayExtent) {
 +    m_depthImage     = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR3 depth",     m_depthView);
 +    m_motionImage    = createImage(renderExtent,  VK_FORMAT_R16G16_SFLOAT,       "FSR3 motion",    m_motionView);
-+    m_outputImage    = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 output",    m_outputView);
-+    m_compositeImage = createImage(displayExtent, VK_FORMAT_R16G16B16A16_SFLOAT, "FSR3 composite", m_compositeView);
++    // GeneralsX: 10-bit output and composite images where supported, as
++    // for FSR 2
++    m_outputImage    = createImage(displayExtent, m_outputFormat,                "FSR3 output",    m_outputView);
++    m_compositeImage = createImage(displayExtent, m_outputFormat,                "FSR3 composite", m_compositeView);
 +    m_reactiveImage  = createImage(renderExtent,  VK_FORMAT_R32_SFLOAT,          "FSR3 reactive",  m_reactiveView);
 +  }
 +
@@ -854,7 +891,7 @@ new file mode 100644
 +      m_renderExtent, false, L"FSR3 depth", FFX_RESOURCE_STATE_COMPUTE_READ);
 +    desc.motionVectors = getFfxImage(m_motionImage, VK_FORMAT_R16G16_SFLOAT,
 +      m_renderExtent, false, L"FSR3 motion", FFX_RESOURCE_STATE_COMPUTE_READ);
-+    desc.output = getFfxImage(m_outputImage, VK_FORMAT_R16G16B16A16_SFLOAT,
++    desc.output = getFfxImage(m_outputImage, m_outputFormat,
 +      m_displayExtent, true, L"FSR3 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 +
 +    // generateReactive left the mask in GENERAL layout, and the backend
@@ -875,9 +912,10 @@ new file mode 100644
 +    desc.motionVectorScale.y = float(m_renderExtent.height);
 +    desc.renderSize = { m_renderExtent.width, m_renderExtent.height };
 +    desc.upscaleSize = { m_displayExtent.width, m_displayExtent.height };
-+    // The upscaler's own RCAS pass with DXVK_FSR2_SHARPNESS, as for FSR 2;
-+    // without it the swap chain sharpens with FSR 1.0 RCAS, never both
-+    desc.enableSharpening = m_settings.sharpness > 0.0f;
++    // GeneralsX: DXVK_FSR2_SHARPNESS is applied by the composite pass, as
++    // for FSR 2, so the upscaler skips its own RCAS pass; without it the
++    // swap chain sharpens with FSR 1.0 RCAS, never both
++    desc.enableSharpening = false;
 +    desc.sharpness = m_settings.sharpness;
 +    desc.frameTimeDelta = std::clamp(inputs.frameTimeMs, 1.0f, 200.0f);
 +    desc.preExposure = 1.0f;
@@ -1001,6 +1039,8 @@ new file mode 100644
 +    // composited image, so the interface pixels taken from the EASU image
 +    // get the FSR 1.0 RCAS pass here. Negative: no sharpening.
 +    push.spatialSharpness = sharpensOutput() ? m_spatialSharpness : -1.0f;
++    // GeneralsX: RCAS of the upscaled scene in place of the upscaler's own
++    push.sceneSharpness = sharpensOutput() ? DxvkFsr2::sceneRcasStops(m_settings.sharpness) : -1.0f;
 +    // 0: normal, 1: reactive mask over a grey frame, 2: the debug view
 +    // without a mask this frame
 +    push.debugMode = m_settings.debugReactive ? (useReactive ? 1u : 2u) : 0u;
@@ -1074,7 +1114,7 @@ diff --git a/src/dxvk/dxvk_fsr3.h b/src/dxvk/dxvk_fsr3.h
 new file mode 100644
 --- /dev/null
 +++ b/src/dxvk/dxvk_fsr3.h
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,186 @@
 +#pragma once
 +
 +#include <memory>
@@ -1164,7 +1204,7 @@ new file mode 100644
 +      float     threshold;
 +      float     spatialSharpness;
 +      uint32_t  debugMode;
-+      uint32_t  reserved;
++      float     sceneSharpness;
 +    };
 +
 +    DxvkFsr2::Settings      m_settings;
@@ -1172,6 +1212,8 @@ new file mode 100644
 +    bool                    m_reactiveLogged = false;
 +
 +    Rc<DxvkDevice>          m_device;
++    VkFormat                m_outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
++    std::unique_ptr<DxvkUpscalerTimer> m_timer;
 +
 +    bool                    m_failed = false;
 +    std::unique_ptr<FfxState> m_ffx;
@@ -1262,7 +1304,7 @@ new file mode 100644
 diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitter.cpp
 --- a/src/dxvk/dxvk_swapchain_blitter.cpp
 +++ b/src/dxvk/dxvk_swapchain_blitter.cpp
-@@ -619,6 +619,18 @@ namespace dxvk {
+@@ -638,6 +638,18 @@
        upscaler = "fsr2";
      }
  
@@ -1281,7 +1323,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      if (upscaler == "fsr2") {
        if (DxvkFsr2::isAvailable()) {
          m_fsr2Enabled = true;
-@@ -635,6 +647,9 @@ namespace dxvk {
+@@ -654,6 +666,9 @@
      if (m_fsr2Enabled)
        Logger::info("Swap chain: FSR 2 temporal upscaling enabled");
  
@@ -1291,13 +1333,15 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      // DXVK_CAPTURE_PATH saves the presented image as a PNG file every
      // DXVK_CAPTURE_INTERVAL seconds (default 10), replacing the file.
      m_capturePath = env::getEnvVar("DXVK_CAPTURE_PATH");
-@@ -850,31 +865,46 @@ namespace dxvk {
+@@ -867,33 +882,48 @@
+     // GeneralsX: FSR 2 also runs when the game renders at the output size
+     // (RenderScale 100), as native anti-aliasing; EASU is then a 1:1 pass.
      bool useFsr = m_fsrEnabled
 -      && (dstRect.extent != srcRect.extent || m_fsr2Enabled)
 +      && (dstRect.extent != srcRect.extent || m_fsr2Enabled || m_fsr3Enabled)
        && dstRect.extent.width >= srcRect.extent.width
        && dstRect.extent.height >= srcRect.extent.height;
-
+ 
      // GeneralsX: FSR 2 needs the scene inputs of this frame at the size of
      // the back buffer. The game jitters its projection while FSR 2 is
      // active, which it reads back through GeneralsX_UpscalerSubmitFrame.
@@ -1344,7 +1388,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
       && srcView->image()->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
       && srcView->image()->info().colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
        renderFxaa(ctx, srcView, srcRect);
-@@ -891,11 +921,13 @@ namespace dxvk {
+@@ -912,11 +942,13 @@
  
      if (useFsr != m_presentLogFsr
       || useFsr2 != m_presentLogFsr2
@@ -1358,7 +1402,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
        m_presentLogSamples = srcSamples;
        m_presentLogSrc = srcRect.extent;
        m_presentLogDst = dstRect.extent;
-@@ -908,7 +940,8 @@ namespace dxvk {
+@@ -929,7 +961,8 @@
          " ", msaa, " to ", dstRect.extent.width, "x", dstRect.extent.height,
          useFsr ? (srcSamples != VK_SAMPLE_COUNT_1_BIT ? ", FSR 1.0 active (MSAA resolved before EASU)" : ", FSR 1.0 active")
                 : (m_fsrEnabled ? ", FSR 1.0 enabled but inactive (no upscale)" : ", FSR 1.0 off"),
@@ -1368,7 +1412,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.cpp b/src/dxvk/dxvk_swapchain_blitt
      }
  
      // EASU and the post-processing passes read single-sampled texels, so a
-@@ -941,7 +974,17 @@ namespace dxvk {
+@@ -962,7 +995,17 @@
  
        // GeneralsX: FSR 2 upscales the scene, and the EASU image fills in
        // wherever the interface was drawn over it
@@ -1398,7 +1442,7 @@ diff --git a/src/dxvk/dxvk_swapchain_blitter.h b/src/dxvk/dxvk_swapchain_blitter
  
  namespace dxvk {
  
-@@ -306,6 +307,13 @@ namespace dxvk {
+@@ -306,6 +307,13 @@
      DxvkTemporalUpscaleInputs  m_fsr2Inputs;
      bool                       m_presentLogFsr2 = false;
  
@@ -1441,7 +1485,7 @@ diff --git a/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.cpp b/src/dxvk/fsr3/dxvk_fsr3_ffx_
 new file mode 100644
 --- /dev/null
 +++ b/src/dxvk/fsr3/dxvk_fsr3_ffx_shim.cpp
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,215 @@
 +// GeneralsX: Vulkan functions for the FidelityFX SDK Vulkan backend, see
 +// dxvk_fsr3_ffx_shim.h. The function table is set by DxvkFsr3 before it
 +// creates the SDK backend interface.
@@ -1610,6 +1654,17 @@ new file mode 100644
 +  }
 +
 +
++  // Functions of extensions DXVK does not enable on its device. Drivers
++  // may still return them; calling them is invalid, so the backend gets
++  // NULL and skips its debug labels, object names and breadcrumb markers.
++  static bool dxvkFsr3HiddenFunction(const char* name) {
++    return !std::strcmp(name, "vkCmdBeginDebugUtilsLabelEXT")
++        || !std::strcmp(name, "vkCmdEndDebugUtilsLabelEXT")
++        || !std::strcmp(name, "vkSetDebugUtilsObjectNameEXT")
++        || !std::strcmp(name, "vkCmdWriteBufferMarkerAMD")
++        || !std::strcmp(name, "vkCmdWriteBufferMarker2AMD");
++  }
++
 +  // The backend asks for some core Vulkan 1.1+ functions by their KHR
 +  // names, such as vkGetBufferMemoryRequirements2KHR. DXVK's device does
 +  // not enable those extensions, so look up the core name instead.
@@ -1618,6 +1673,9 @@ new file mode 100644
 +    const char*                             pName) {
 +    if (!std::strcmp(pName, "vkDestroyImageView"))
 +      return reinterpret_cast<PFN_vkVoidFunction>(&dxvk_fsr3_vkDestroyImageView);
++
++    if (dxvkFsr3HiddenFunction(pName))
++      return nullptr;
 +
 +    PFN_vkVoidFunction fn = g_dxvkFsr3Vk.getDeviceProcAddr(device, pName);
 +
@@ -1681,7 +1739,7 @@ diff --git a/src/dxvk/fsr3/dxvk_fsr3_ffx_table.h b/src/dxvk/fsr3/dxvk_fsr3_ffx_t
 new file mode 100644
 --- /dev/null
 +++ b/src/dxvk/fsr3/dxvk_fsr3_ffx_table.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,52 @@
 +#pragma once
 +
 +// GeneralsX: Vulkan functions used by the FidelityFX SDK backend shim.
@@ -1702,6 +1760,22 @@ new file mode 100644
 +};
 +
 +extern DxvkFsr3VkTable g_dxvkFsr3Vk;
++
++/**
++ * \brief Device function lookup of the shim
++ *
++ * GeneralsX: must be the backend's VkDeviceContext::vkDeviceProcAddr.
++ * It maps the KHR names of core functions, keeps released image views
++ * alive and hides functions of extensions DXVK does not enable. The plain
++ * device lookup returns NULL for vkGetBufferMemoryRequirements2KHR, which
++ * the backend then calls while it creates its first context.
++ */
++#ifdef __cplusplus
++extern "C"
++#endif
++VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL dxvk_fsr3_vkGetDeviceProcAddr(
++        VkDevice                          device,
++  const char*                             pName);
 +
 +#ifdef __cplusplus
 +#include <vector>
@@ -2226,7 +2300,7 @@ new file mode 100644
 diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
 --- a/src/dxvk/meson.build
 +++ b/src/dxvk/meson.build
-@@ -93,6 +93,7 @@ dxvk_src = [
+@@ -93,6 +93,7 @@
    'dxvk_fence.cpp',
    'dxvk_format.cpp',
    'dxvk_fsr2.cpp',
@@ -2234,7 +2308,7 @@ diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
    'dxvk_framebuffer.cpp',
    'dxvk_gpu_event.cpp',
    'dxvk_gpu_query.cpp',
-@@ -222,11 +223,181 @@ if fs.is_file(fsr2_api_dir / 'ffx_fsr2.cpp')
+@@ -222,11 +223,187 @@
    dxvk_fsr2_libs += [ dxvk_fsr2_lib ]
  endif
  
@@ -2251,8 +2325,14 @@ diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
 +  fsr3_gpu_dir = meson.current_source_dir() / fsr3_sdk_dir / 'include' / 'FidelityFX' / 'gpu'
 +  fsr3_vk_shader_dir = fsr3_sdk_dir / 'src' / 'backends' / 'vk' / 'shaders'
 +
++  # GeneralsX: -Os runs the SPIR-V optimizer, which removes resources a
++  # pass declares but only reads in dead code, such as the optical flow
++  # confidence of the frame interpolation's vector field pass. The backend
++  # does not bind those, and a shader that still references an unwritten
++  # descriptor is invalid. Names stay, so the run-time reflection works.
 +  fsr3_glsl_args = [
 +    '--quiet',
++    '-Os',
 +    '--target-env', 'vulkan1.2',
 +    '-S', 'comp',
 +    '-I' + fsr3_gpu_dir,

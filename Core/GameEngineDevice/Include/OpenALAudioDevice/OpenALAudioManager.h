@@ -245,5 +245,6 @@ protected:
 
 	ALCdevice *m_alcDevice = nullptr;
 	ALCcontext *m_alcContext = nullptr;
+	Bool m_deviceReady = false; ///< GeneralsX @performance Claude 17/10/2026 output device and context are usable
 	OpenALAudioStream* m_binkAudio = nullptr;
 };

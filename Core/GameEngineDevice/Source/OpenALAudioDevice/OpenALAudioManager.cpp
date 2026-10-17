@@ -1567,6 +1567,7 @@ void OpenALAudioManager::openDevice(void)
 		setOn(false, AudioAffect_All);
 		return;
 	}
+	m_deviceReady = true;
 
 #ifdef AL_EXT_debug
 	if (alcIsExtensionPresent(m_alcDevice, "ALC_EXT_debug")) {
@@ -1610,6 +1611,7 @@ void OpenALAudioManager::closeDevice(void)
 	if (m_alcDevice) {
 		AudioDiagnostics::logSummary("shutdown");
 	}
+	m_deviceReady = false;
 	unselectProvider();
 	alcMakeContextCurrent(nullptr);
 
@@ -2411,6 +2413,18 @@ void OpenALAudioManager::removeAllDisabledAudio()
 void OpenALAudioManager::processRequestList(void)
 {
 	std::list<AudioRequest*>::iterator it;
+	// GeneralsX @performance Claude 17/10/2026 Without an output device every play request loaded and decoded its
+	// file on the main thread for nothing. Drop the requests instead (MiniAudio parity).
+	if (!m_deviceReady) {
+		for (it = m_audioRequests.begin(); it != m_audioRequests.end(); ++it) {
+			if (*it) {
+				deleteInstance(*it);
+			}
+		}
+		m_audioRequests.clear();
+		return;
+	}
+
 	for (it = m_audioRequests.begin(); it != m_audioRequests.end(); /* empty */) {
 		AudioRequest* req = (*it);
 		if (req == NULL) {

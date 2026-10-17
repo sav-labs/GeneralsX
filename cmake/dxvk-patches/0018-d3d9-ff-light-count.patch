@@ -1,0 +1,59 @@
+GeneralsX: lit fixed function vertex shaders always process four lights,
+or eight when more are enabled, instead of exactly the enabled lights.
+The game lights each object with one to four lights, and explosions,
+muzzle flashes and fires add point lights that change that count from
+draw to draw, so every new count of every material generated a new vertex
+shader and Vulkan pipelines in the middle of a battle. The slots beyond
+the enabled lights hold black directional lights, which add nothing.
+
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -33,6 +33,10 @@
+ 
+ namespace dxvk {
+ 
++  // GeneralsX: light count of lit fixed function vertex shaders when at most
++  // this many lights are enabled, see UpdateFixedFunctionVS.
++  static constexpr uint32_t FFLightCountBucket = 4u;
++
+   D3D9DeviceEx::D3D9DeviceEx(
+           D3D9InterfaceEx*       pParent,
+           D3D9Adapter*           pAdapter,
+@@ -7888,6 +7892,15 @@
+         }
+       }
+ 
++      // GeneralsX: lit fixed function shaders always process four lights,
++      // or eight when more are enabled. The game lights each object with
++      // one to four lights, and explosions and other effect lights change
++      // that count from draw to draw: with the exact count in the key every
++      // new count compiled a new vertex shader and pipelines in the middle
++      // of a battle. Unused slots hold black lights, which add nothing.
++      if (key.Data.Contents.UseLighting)
++        lightCount = lightCount <= FFLightCountBucket ? FFLightCountBucket : caps::MaxEnabledLights;
++
+       key.Data.Contents.LightCount = lightCount;
+ 
+       for (uint32_t i = 0; i < caps::MaxTextureBlendStages; i++) {
+@@ -7986,6 +7999,20 @@
+         data->Lights[lightIdx++] = D3D9Light(m_state.lights[idx].value(), m_state.transforms[GetTransformIndex(D3DTS_VIEW)]);
+       }
+ 
++      // GeneralsX: black directional lights in the slots the shader
++      // processes beyond the enabled lights, see FFLightCountBucket.
++      if (lightIdx < caps::MaxEnabledLights) {
++        D3DLIGHT9 unused = { };
++        unused.Type         = D3DLIGHT_DIRECTIONAL;
++        unused.Direction    = { 0.0f, 0.0f, 1.0f };
++        unused.Attenuation0 = 1.0f;
++
++        D3D9Light unusedLight(unused, m_state.transforms[GetTransformIndex(D3DTS_VIEW)]);
++
++        while (lightIdx < caps::MaxEnabledLights)
++          data->Lights[lightIdx++] = unusedLight;
++      }
++
+       data->Material = m_state.material;
+       data->TweenFactor = bit::cast<float>(m_state.renderStates[D3DRS_TWEENFACTOR]);
+     }

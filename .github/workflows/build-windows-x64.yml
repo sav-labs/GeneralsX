@@ -63,6 +63,10 @@ jobs:
   # adds frame generation with the SDK's optical flow and frame interpolation: the swap chain presents a generated frame,
   # then the real one, and the interface always comes from the real frame. The game sets both from Options.ini
   # Upscaler = FSR3 / FrameGeneration = yes or -upscaler fsr3 / -framegen on.
+  # GeneralsX @bugfix Claude 17/10/2026 FSR 3 crashed creating its first context (the SDK backend got the device's
+  # vkGetDeviceProcAddr, so vkGetBufferMemoryRequirements2KHR was NULL); frame generation errors now turn it off.
+  # GeneralsX @performance Claude 17/10/2026 FSR 2 / FSR 3: 10-bit output images, sharpening in the composite pass,
+  # DXVK_FSR_TIMING=1 logs the GPU time of each upscaler pass.
   dxvk-fsr:
     name: DXVK with FSR (Win64)
     runs-on: ubuntu-24.04
@@ -334,7 +338,11 @@ jobs:
           DXVK_FSR3_FRAMEGEN=1 turns frame generation on without Options.ini, DXVK_FSR3_FRAMEGEN_PACING=0 shows
           the real frame right after the generated one instead of half a frame later, and DXVK_FSR3_DEBUG=tearlines,
           view or resets shows the FidelityFX debug overlays (tear lines, the interpolation inputs, camera resets).
+          If frame generation fails, an [FSR3] frame generation line says why and the game keeps upscaling
+          without it.
           FidelityFX-SDK-LICENSE.txt is the MIT license of the AMD FidelityFX SDK (FSR 3), built into d3d9.dll.
+          FSR 2 / FSR 3 GPU time: set DXVK_FSR_TIMING=1 in a .cmd file before the game starts; every 300 frames
+          the console and d3d9.log get an [FSR2] (or [FSR3]) GPU time line with the milliseconds of each pass.
           Performance measurement (big battles): Perf.cmd starts the game with the frame profiler. Every 5 seconds
           perf-log.txt gets a [PERF] line: fps, frame time (avg/max), game logic, client update, draw, 3D scene,
           meshes (includes CPU skinning), shadows, particles and present in ms per frame, draw calls, triangles,
