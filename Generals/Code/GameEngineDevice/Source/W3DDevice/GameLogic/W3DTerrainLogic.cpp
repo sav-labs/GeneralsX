@@ -166,6 +166,10 @@ Bool W3DTerrainLogic::loadMap( AsciiString filename , Bool query )
 		return FALSE;
 
 	// Map file now contains lighting & time of day info.
+	// GeneralsX @tweak Claude 17/10/2026 -camtest night loads the map at night, the way a night map loads, so the
+	// objects, the preload and the renderer warm-up start in the night state instead of switching mid-match.
+	if( TheGlobalData->m_cameraTestNight )
+		TheWritableGlobalData->m_timeOfDay = TIME_OF_DAY_NIGHT;
 	if( TheWritableGlobalData->setTimeOfDay( TheGlobalData->m_timeOfDay ) )
 		TheGameClient->setTimeOfDay( TheGlobalData->m_timeOfDay );
 
