@@ -86,12 +86,18 @@ SYSTEMS = {
         Gravity=0.02, VelocityDamping=(0.85, 0.85),
         VelocityType="SPHERICAL", VelSpherical=(0.6, 1.2),
         VolumeType="SPHERE", VolSphereRadius=12.0),
-    # Dust ring racing out along the ground.
+    # Dust ring racing out along the ground, fast at first and slowing as it thins.
     "GXTankBlastShockwave": system(
         ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
-        Lifetime=(24, 24), Size=(12, 12), SizeRate=(10, 10), SizeRateDamping=(0.86, 0.86),
-        Alpha=[(0.9, 0.9, 0), (0.0, 0.0, 24)],
-        Color=[((200, 182, 150), 0)],
+        Lifetime=(22, 22), Size=(10, 10), SizeRate=(14, 14), SizeRateDamping=(0.84, 0.84),
+        Alpha=[(1.0, 1.0, 0), (0.7, 0.7, 8), (0.0, 0.0, 22)],
+        Color=[((215, 196, 160), 0)],
+        BurstCount=(1, 1)),
+    # Hot pressure front: a short orange ring just ahead of the dust.
+    "GXTankBlastHeatRing": system(
+        Shader="ADDITIVE", ParticleName="gxfx_ring.tga", IsGroundAligned="Yes", AngleZ=(0, 6.28),
+        Lifetime=(9, 9), Size=(8, 8), SizeRate=(16, 16), SizeRateDamping=(0.82, 0.82),
+        Color=[((200, 120, 50), 0), ((90, 40, 10), 5), ((0, 0, 0), 9)],
         BurstCount=(1, 1)),
     # Brown dust thrown up and outwards around the hull.
     "GXTankBlastDust": system(
@@ -110,6 +116,19 @@ SYSTEMS = {
         BurstCount=(40, 40), Gravity=-0.12, VelocityDamping=(0.95, 0.97),
         VelocityType="OUTWARD", VelOutward=(1.5, 5.0), VelOutwardOther=(1.5, 5.5),
         VolumeType="CYLINDER", VolCylinderRadius=4.0, VolCylinderLength=4.0),
+    # Hot metal sparks streaking outwards and arcing down.
+    "GXTankBlastSparks": system(
+        Shader="ADDITIVE", ParticleName="gxfx_streak.tga", IsParticleUpTowardsEmitter="Yes",
+        Lifetime=(12, 26), Size=(3.0, 5.0), SizeRate=(-0.1, -0.1),
+        Color=[((255, 240, 200), 0), ((255, 140, 40), 10), ((0, 0, 0), 26)],
+        BurstCount=(36, 36), Gravity=-0.18, VelocityDamping=(0.93, 0.95),
+        VelocityType="OUTWARD", VelOutward=(3.0, 7.0), VelOutwardOther=(1.5, 5.0),
+        VolumeType="CYLINDER", VolCylinderRadius=2.0, VolCylinderLength=3.0),
+    # A whole baked spark shower over the hull, for the dense glow the single streaks lack.
+    "GXTankBlastSparkBurst": system(
+        Shader="ADDITIVE", ParticleName="gxfx_sparks.tga", FlipbookGrid=8, AngleZ=(-0.4, 0.4),
+        Lifetime=(30, 30), Size=(34, 40), Color=[((255, 255, 255), 0)],
+        BurstCount=(2, 2), VolumeType="SPHERE", VolSphereRadius=3.0),
     # Thick black smoke that rolls up from the fireball.
     "GXTankBlastSmoke": system(
         ParticleName="gxfx_smoke.tga", FlipbookGrid=8, AngleZ=(-0.12, 0.12),
@@ -395,8 +414,11 @@ FXLISTS = {
             ("GXTankBlastFireball", (0, 0, 8)),
             ("GXTankBlastSecondary", (0, 0, 8)),
             ("GXTankBlastShockwave", (0, 0, 1)),
+            ("GXTankBlastHeatRing", (0, 0, 1)),
             ("GXTankBlastDust", (0, 0, 2)),
             ("GXTankBlastEmbers", (0, 0, 6)),
+            ("GXTankBlastSparks", (0, 0, 5)),
+            ("GXTankBlastSparkBurst", (0, 0, 6)),
             ("GXTankBlastSmoke", (0, 0, 12)),
             ("GXWreckFire", (0, 0, 6)),
             ("GXWreckSmoke", (0, 0, 12)),

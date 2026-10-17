@@ -230,6 +230,18 @@ def spark(size=64):
     return np.dstack([rgb, np.clip(i, 0, 1)])
 
 
+def streak(size=128):
+    """Thin additive spark streak along the sprite's up axis; with IsParticleUpTowardsEmitter it
+    points away from the blast, so a burst reads as hot metal flying outwards."""
+    u, v = _grid(size)
+    w = np.exp(-(u / 0.07) ** 2) + 0.25 * np.exp(-(u / 0.2) ** 2)
+    length = np.clip(1.0 - np.abs(v) / 0.95, 0, 1) ** 0.6
+    i = np.clip(w * length, 0, None)
+    rgb = _ramp(np.clip(i, 0, 1), [(0.0, (0.0, 0.0, 0.0)), (0.35, (1.0, 0.42, 0.06)), (0.75, (1.0, 0.8, 0.45)),
+                                   (1.0, (1.0, 0.97, 0.88))])
+    return np.dstack([rgb, np.clip(i, 0, 1)])
+
+
 def shockwave(size=512, seed=505):
     """Ground-aligned dust ring; alpha blended, brightest at the leading edge."""
     noise = Noise3(seed)
@@ -278,6 +290,7 @@ TEXTURES = {
     **{name: (None, grid) for name, (_, grid) in BAKED.items()},
     "gxfx_flash.tga": (flash, 1),
     "gxfx_spark.tga": (spark, 1),
+    "gxfx_streak.tga": (streak, 1),
     "gxfx_ring.tga": (shockwave, 1),
 }
 
