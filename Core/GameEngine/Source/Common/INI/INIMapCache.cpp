@@ -63,6 +63,7 @@ class MapMetaDataReader
 public:
 	Region3D m_extent;
 	Int m_numPlayers;
+	Int m_presetArmyObjects = -1;
 	Bool m_isMultiplayer;
 	AsciiString m_asciiDisplayName;
 	AsciiString m_asciiNameLookupTag;
@@ -107,6 +108,7 @@ const FieldParse MapMetaDataReader::m_mapFieldParseTable[] =
 	{ "extentMin",							INI::parseCoord3D,	nullptr, offsetof( MapMetaDataReader, m_extent.lo ) },
 	{ "extentMax",							INI::parseCoord3D,	nullptr, offsetof( MapMetaDataReader, m_extent.hi ) },
 	{ "numPlayers",							INI::parseInt,			nullptr,	offsetof( MapMetaDataReader, m_numPlayers ) },
+	{ "presetArmyObjects",			INI::parseInt,			nullptr,	offsetof( MapMetaDataReader, m_presetArmyObjects ) },
 	{ "fileSize",								INI::parseUnsignedInt,	nullptr,	offsetof( MapMetaDataReader, m_filesize ) },
 	{ "fileCRC",								INI::parseUnsignedInt,	nullptr,	offsetof( MapMetaDataReader, m_CRC ) },
 	{ "timestampLo",						INI::parseInt,			nullptr,	offsetof( MapMetaDataReader, m_timestamp.m_lowTimeStamp ) },
@@ -152,6 +154,7 @@ void INI::parseMapCacheDefinition( INI* ini )
 	md.m_doesExist = TRUE;
 	md.m_isMultiplayer = mdr.m_isMultiplayer != 0;
 	md.m_numPlayers = mdr.m_numPlayers;
+	md.m_presetArmyObjects = mdr.m_presetArmyObjects;
 	md.m_filesize = mdr.m_filesize;
 	md.m_CRC = mdr.m_CRC;
 	md.m_timestamp = mdr.m_timestamp;
