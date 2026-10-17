@@ -3794,9 +3794,12 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		m_renderObject->Set_Transform(mtx);
 	}
 
-	if (m_trackRenderObject)
+	// GeneralsX @bugfix Claude 17/10/2026 Only units leave tread tracks. A drawable without an object (preload,
+	// renderer warm-up) has no status or layer, which the track code reads (TerrainTracksRenderObjClass).
+	Object *trackObj = getDrawable()->getObject();
+	if (m_trackRenderObject && trackObj)
 	{
-		Object *obj = getDrawable()->getObject();
+		Object *obj = trackObj;
 		const Coord3D* pos = getDrawable()->getPosition();
 
 		// GeneralsX @bugfix Claude 17/10/2026 A drawable without an object (preload, renderer warm-up) has no status.

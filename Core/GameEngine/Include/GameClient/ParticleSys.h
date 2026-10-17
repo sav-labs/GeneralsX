@@ -900,6 +900,13 @@ public:
 
 	virtual void preloadAssets( TimeOfDay timeOfDay );
 
+	// GeneralsX @performance Claude 17/10/2026 Renderer warm-up behind the load screen (GameClient::warmUpRenderer).
+	/// Creates one emitting particle system for each way particles are drawn (shader and particle type) at the given
+	/// position and adds them to the list. Client side only, no logic effect.
+	Int createWarmUpSystems( const Coord3D *pos, ParticleSystemList &systems );
+	/// Deletes the systems made by createWarmUpSystems and their particles at once.
+	void destroyWarmUpSystems( ParticleSystemList &systems );
+
 	// these are only for use by particle systems to link and unlink themselves
 	void friend_addParticleSystem( ParticleSystem *particleSystemToAdd );
 	void friend_removeParticleSystem( ParticleSystem *particleSystemToRemove );

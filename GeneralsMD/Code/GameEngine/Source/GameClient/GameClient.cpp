@@ -30,6 +30,8 @@
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include <stdexcept>
 #include <cstdio>
+#include <set>
+#include <vector>
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 #include "GameClient/GameClient.h"
 
@@ -58,6 +60,7 @@
 #include "GameClient/Display.h"
 #include "GameClient/DisplayStringManager.h"
 #include "GameClient/Drawable.h"
+#include "Common/DrawModule.h"
 #include "GameClient/DrawGroupInfo.h"
 #include "GameClient/Eva.h"
 #include "GameClient/GameWindowManager.h"
@@ -88,6 +91,7 @@
 #include "GameClient/WindowXlat.h"
 #include "Common/PerfStats.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/TerrainLogic.h"
 #include "GameLogic/GhostObject.h"
 #include "GameLogic/Object.h"
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
@@ -1166,6 +1170,107 @@ void GameClient::preloadMatchAssets()
 	fprintf( stderr, "[PRELOAD] %s: models %.0f ms, %d textures created in %.0f ms, total %.0f ms\n",
 		TheGlobalData->m_preloadEverything ? "everything" : "match assets",
 		modelsDoneMs - startMs, textures, doneMs - modelsDoneMs, doneMs - startMs );
+	fflush( stderr );
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 17/10/2026 True when every draw module of the drawable draws a model (W3DModelDraw
+// and its kinds). Other draw modules (trees, ropes, lasers, debris) keep state outside the drawable and are not
+// part of the renderer warm-up.
+//-------------------------------------------------------------------------------------------------
+static Bool drawsOnlyModels( Drawable *draw )
+{
+	DrawModule **modules = draw->getDrawModules();
+	if( modules == nullptr || *modules == nullptr )
+		return FALSE;
+
+	for( DrawModule **dm = modules; *dm; ++dm )
+	{
+		if( (*dm)->getObjectDrawInterface() == nullptr )
+			return FALSE;
+	}
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 17/10/2026 Renderer warm-up, see GameClient.h. The first match frames used to stall
+// for 100-200 ms whenever something was drawn for the first time: DXVK generated fixed function shaders and created
+// Vulkan pipelines for new materials and render states, and uploaded managed textures, in the middle of a frame. The
+// warm-up draws all of it once while the load screen is up. It creates temporary client drawables (no objects, like
+// the preload) and particle systems, renders the scene twice without presenting it and deletes them again, all while
+// the map is still loading, so ambient sounds do not start. Client side only: game logic, CRCs and replays are
+// unaffected.
+//-------------------------------------------------------------------------------------------------
+void GameClient::warmUpRenderer()
+{
+	if( TheGlobalData->m_headless || TheDisplay == nullptr || TheTacticalView == nullptr || TheTerrainLogic == nullptr )
+		return;
+
+	const double startMs = PerfStats::nowMs();
+
+	// One of every kind of thing on the map, then the preloaded faction things of the sides in the match.
+	std::vector<const ThingTemplate *> templates;
+	std::set<const ThingTemplate *> seen;
+	for( Drawable *draw = firstDrawable(); draw; draw = draw->getNextDrawable() )
+	{
+		const ThingTemplate *tTemplate = draw->getTemplate();
+		if( tTemplate != nullptr && seen.insert( tTemplate ).second )
+			templates.push_back( tTemplate );
+	}
+	for( const ThingTemplate *tTemplate = TheThingFactory->firstTemplate();
+			 tTemplate;
+			 tTemplate = tTemplate->friend_getNextTemplate() )
+	{
+		if( tTemplate->isKindOf( KINDOF_PRELOAD ) == FALSE && !TheGlobalData->m_preloadEverything )
+			continue;
+		if( !TheGlobalData->m_preloadEverything && !isSideInMatch( tTemplate->getDefaultOwningSide() ) )
+			continue;
+		if( seen.insert( tTemplate ).second )
+			templates.push_back( tTemplate );
+	}
+
+	// Drawables in a tight grid around the point the starting camera looks at, all inside its view.
+	const Coord3D &pivot = TheTacticalView->getPosition();
+	const Real spacing = 8.0f;
+	Int columns = 1;
+	while( columns * columns < (Int)templates.size() )
+		++columns;
+
+	std::vector<Drawable *> drawables;
+	for( size_t i = 0; i < templates.size(); ++i )
+	{
+		Drawable *draw = TheThingFactory->newDrawable( templates[i] );
+		if( draw == nullptr )
+			continue;
+		if( !drawsOnlyModels( draw ) )
+		{
+			destroyDrawable( draw );
+			continue;
+		}
+
+		Coord3D pos;
+		pos.x = pivot.x + ( (Real)( (Int)i % columns ) - 0.5f * (Real)columns ) * spacing;
+		pos.y = pivot.y + ( (Real)( (Int)i / columns ) - 0.5f * (Real)columns ) * spacing;
+		pos.z = TheTerrainLogic->getGroundHeight( pos.x, pos.y );
+		draw->setPosition( &pos );
+		drawables.push_back( draw );
+	}
+
+	// One emitting particle system of every kind, a little above the ground at the same point.
+	Coord3D particlePos = pivot;
+	particlePos.z = TheTerrainLogic->getGroundHeight( pivot.x, pivot.y ) + 10.0f;
+	ParticleSystemManager::ParticleSystemList particleSystems;
+	const Int particleKinds = TheParticleSystemManager->createWarmUpSystems( &particlePos, particleSystems );
+
+	// Twice: the first pass also creates what the scene makes on first sight (shadows, render targets).
+	const Int passes = TheDisplay->warmUpRender( 2 );
+
+	TheParticleSystemManager->destroyWarmUpSystems( particleSystems );
+	for( size_t i = 0; i < drawables.size(); ++i )
+		destroyDrawable( drawables[i] );
+
+	fprintf( stderr, "[WARMUP] renderer: %d models of %d kinds of things, %d kinds of particles, %d scene passes in %.0f ms\n",
+		(Int)drawables.size(), (Int)templates.size(), particleKinds, passes, PerfStats::nowMs() - startMs );
 	fflush( stderr );
 }
 
