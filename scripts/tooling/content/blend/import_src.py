@@ -1116,6 +1116,16 @@ def normal_map(spec, size=1024):
         img.pixels.foreach_get(a)
         return a.reshape(img.size[1], img.size[0], 4)[::-1]
     nrm, gloss, ao = pixels(baked["tangent"]), pixels(baked["gloss"]), pixels(baked["ao"])
+    # GeneralsX @bugfix Claude 18/10/2026 The tangent bake clears un-covered texels to black (0,0,0) and the
+    # high-poly bake leaves flat areas without detail; a real tangent-space normal always has Z (blue) >= 0.5,
+    # so any texel below that is unbaked or an artifact. Left as-is the engine draws those texels black (the
+    # normal points away from the light), which turned the detailed vehicles' turrets and flat hull plates
+    # black under ModelNormalMaps = yes. Replace them with the neutral normal so they light like flat surfaces.
+    nrm = nrm.copy()
+    invalid = nrm[..., 2] < 0.5
+    nrm[invalid, 0] = 0.5
+    nrm[invalid, 1] = 0.5
+    nrm[invalid, 2] = 1.0
     rgba = np.empty(nrm.shape, np.float32)
     rgba[..., :3] = nrm[..., :3]
     rgba[..., 3] = gloss[..., 0] * np.clip(0.35 + ao[..., 0], 0, 1)
