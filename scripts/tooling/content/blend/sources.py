@@ -100,7 +100,11 @@ UNITS = {
     # M109A6 Paladin by MirzaArrafiERV_45, CC-BY. Named objects: cannon and cradle, turret with its
     # stowage, numbered wheels (1 and 10 the drive sprockets at the front, 9 and 18 the idlers), tracks.
     "paladin": {
-        "model": "AVGXPAL", "stem": "gxpal3", "length": 42.0, "yaw": 90.0, "tris": 12000, "split": None,
+        "model": "AVGXPAL", "stem": "gxpal3", "length": 42.0, "yaw": 90.0, "tris": 16000, "split": None,
+        # The M1A2 recipe: large forms kept, detail baked from the source into the atlas and the engine
+        # normal map, CARC Tan 686A as a fleet vehicle.
+        "cull": 0.2, "planar": 4.0, "plates": 1.5, "procedural": True, "highpoly": 0.5, "relief": 0.3,
+        "hard": 35.0, "uv_angle": 66.0, "uv_small": (1.0, 0.35),
         "parents": {"BARREL": "TURRET01"},
         # The retail Paladin's Draw module turns Turret01, recoils Barrel and fires from TurretMS.
         "muzzles": {"TURRETMS": "BARREL", "TURRETFX": "BARREL"},
@@ -112,7 +116,7 @@ UNITS = {
             {"name": r"^wheel(9|18)__", "bone": "IDLER#"},
             {"name": r"^wheel\d+__", "bone": "WHEEL#"},
         ],
-        "tint": ((180, 154, 110), None, 1.0),
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "rims": {"WHEEL": ("rubber", 0.8), "SPROCKET": ("metal", 0.82)},
         "track": {"links": 3.5, "sprocket": 0.88},
         "damage": {"droop": 5.0},
@@ -151,21 +155,27 @@ UNITS = {
     # missile with a slogan, spare damaged doors and bonnet and tyre valves: excluded. The pod turns
     # on TURRET (the retail Draw module's turret) and launches from its rear end.
     "tomahawk": {
-        "model": "AVGXMLRS", "stem": "gxmlrs3", "length": 32.0, "yaw": -90.0, "tris": 14000, "split": ".",
+        "model": "AVGXMLRS", "stem": "gxmlrs3", "length": 32.0, "yaw": -90.0, "tris": 15000, "split": ".",
+        # The M1A2 recipe: large forms kept, detail baked into the atlas and the engine normal map, CARC Tan.
+        "cull": 0.18, "planar": 4.0, "plates": 1.0, "procedural": True, "highpoly": 0.45, "relief": 0.3,
+        "hard": 35.0, "uv_angle": 66.0, "uv_small": (0.8, 0.35),
         "exclude": r"missle|^Default_2|_dam_|Nippel",
         "rules": [
             {"name": r"^Tire_low|^Disc", "bone": "WHEEL#"},
             {"box": (-17.0, 3.5, -6.0, 6.0, 6.0, 14.0), "bone": "TURRET"},
         ],
         "muzzles": {"WEAPONA": ("TURRET", "rear")},
-        "tint": ((180, 154, 110), None, 1.0),
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "rims": {"WHEEL": ("rubber", 0.6)},
         "engine": "front",
     },
     # M1097 Avenger by scout., CC-BY: Stinger pods either side of a turret drum on a HMMWV. The retail
     # Draw module turns TURRET01 and elevates TURRETEL01.
     "avenger": {
-        "model": "AVGXAVNG", "stem": "gxavng3", "length": 23.0, "yaw": 90.0, "tris": 14000, "split": ".",
+        "model": "AVGXAVNG", "stem": "gxavng3", "length": 23.0, "yaw": 90.0, "tris": 15000, "split": ".",
+        # The M1A2 recipe: large forms kept, detail baked into the atlas and the engine normal map, CARC Tan.
+        "cull": 0.18, "planar": 4.0, "plates": 1.0, "procedural": True, "highpoly": 0.45, "relief": 0.3,
+        "hard": 35.0, "uv_angle": 66.0, "uv_small": (0.8, 0.35),
         "parents": {"TURRETEL01": "TURRET01"}, "pivots": {"TURRETEL01": "centre"},
         "muzzles": {"TURRETFX01": "TURRETEL01", "TURRETFX02": "TURRETEL01"},
         "rules": [
@@ -176,7 +186,7 @@ UNITS = {
         ],
         "tires": True,
         "finishes": [(r"Glass", "glass")],
-        "tint": ((180, 154, 110), None, 1.0),
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "rims": {"TIRE": ("rubber", 0.62)},
         "engine": "front",
     },
