@@ -819,6 +819,19 @@ void Player::initFromDict(const Dict* d)
 		if (!skirmish)
 			forceHuman = true;
 
+		// GeneralsX @build Claude 18/10/2026 Diagnostic for the "skirmish AI stands idle" report (GLA on GX maps):
+		// log the player side, every imported skirmish side and its resolved side, and whether the slot fell back
+		// to forceHuman. Visible in release via stderr per the AGENTS console-logging rule.
+		fprintf(stderr, "[SKIRMISH_DIAG] initFromDict side='%s' numSkirmishSides=%d matched=%d forceHuman=%d\n",
+			getSide().str(), TheSidesList->getNumSkirmishSides(), (int)skirmish, (int)forceHuman);
+		for (Int dIdx = 0; dIdx < TheSidesList->getNumSkirmishSides(); ++dIdx) {
+			AsciiString dFaction = TheSidesList->getSkirmishSideInfo(dIdx)->getDict()->getAsciiString(TheKey_playerFaction);
+			const PlayerTemplate* dpt = ThePlayerTemplateStore->findPlayerTemplate(NAMEKEY(dFaction));
+			fprintf(stderr, "[SKIRMISH_DIAG]   skirmishSide[%d] faction='%s' resolvedSide='%s'\n",
+				dIdx, dFaction.str(), dpt ? dpt->getSide().str() : "<null>");
+		}
+		fflush(stderr);
+
 	}
 
 	if (d->getBool(TheKey_playerIsHuman) || forceHuman)

@@ -600,6 +600,18 @@ void SidesList::prepareForMP_or_Skirmish()
 
 
 	}
+
+	// GeneralsX @build Claude 18/10/2026 Diagnostic for the "skirmish AI stands idle" report: log whether the map
+	// carried its own skirmish scripts and how many skirmish sides exist after the SkirmishScripts.scb import.
+	// Visible in release via stderr per the AGENTS console-logging rule.
+	fprintf(stderr, "[SKIRMISH_DIAG] prepareForMP_or_Skirmish done: gotScripts=%d numSkirmishSides=%d\n",
+		(int)gotScripts, m_numSkirmishSides);
+	for (Int k = 0; k < m_numSkirmishSides; ++k) {
+		fprintf(stderr, "[SKIRMISH_DIAG]   side[%d] faction='%s' name='%s'\n", k,
+			m_skirmishSides[k].getDict()->getAsciiString(TheKey_playerFaction).str(),
+			m_skirmishSides[k].getDict()->getAsciiString(TheKey_playerName).str());
+	}
+	fflush(stderr);
 }
 
 
