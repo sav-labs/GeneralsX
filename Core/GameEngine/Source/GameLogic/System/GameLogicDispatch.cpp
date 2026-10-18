@@ -929,7 +929,11 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 		}
 
 		TheFramePacer->setLogicTimeScaleFps(tickRate);
-		TheFramePacer->enableLogicTimeScale(tickRate < TheFramePacer->getFramesPerSecondLimit());
+		// GeneralsX @bugfix Claude 18/10/2026 Decouple logic from render for the single-player match so the catch-up
+		// loop paces the simulation at the configured rate even when the render rate falls below it (a heavy battle)
+		// or the game speed is above it. The old "tickRate < render cap" gate disabled decoupling whenever the speed
+		// had raised the render cap to match the tick rate, which left a fast match stuck at the render rate.
+		TheFramePacer->enableLogicTimeScale(TRUE);
 
 		fprintf(stderr, "[SKIRMISH] Simulation tick rate configured: %d Hz (base: %d Hz)\n", tickRate, LOGICFRAMES_PER_SECOND);
 		fflush(stderr);
@@ -937,7 +941,9 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 	else
 	{
 		TheFramePacer->setLogicTimeScaleFps(gameSpeedFps);
-		TheFramePacer->enableLogicTimeScale(gameSpeedFps < TheFramePacer->getFramesPerSecondLimit());
+		// GeneralsX @bugfix Claude 18/10/2026 Decouple logic from render for the single-player match (see above), so
+		// the catch-up loop holds the configured simulation rate regardless of the achieved render rate.
+		TheFramePacer->enableLogicTimeScale(TRUE);
 	}
 
 	// prepare for new game
