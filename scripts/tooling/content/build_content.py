@@ -283,9 +283,11 @@ def collect(root):
 # GeneralsX @feature Claude 16/10/2026 Reviewed detailed models (blend/build_src.py) replace retail models one unit at a
 # time: the pack carries only the models present in the --hd folder, their textures and _n.dds normal maps, and an
 # ArtRemap that draws them where the retail INI names the retail model. Logic keeps reading the retail model's bones.
+# GeneralsX @bugfix Claude 18/10/2026 Abrams (AVGXMBT) temporarily unshipped: in-game it renders black on the large
+# upper surfaces (turret, gun, hull deck) under the engine normal-map path, a fault the cloud geometry check does not
+# catch. Held out of main until a clean in-game frame confirms the fix; the maps and engine changes from #53 stay.
+# Re-add the entry (and the other vehicles) once the normal-map/material cause is fixed and verified by a frame.
 HD_REMAP = {
-    "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
-    "AVGXMBT_D": ("AVLeopard_D", None),
 }
 
 
