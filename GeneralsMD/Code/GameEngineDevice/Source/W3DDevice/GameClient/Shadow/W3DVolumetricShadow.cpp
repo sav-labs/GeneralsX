@@ -732,10 +732,29 @@ Int W3DShadowGeometry::initFromHLOD(RenderObjClass *robj)
 
 	m_numTotalsVerts=0;
 
+	// GeneralsX @feature Claude 16/10/2026 Detailed content models carry simple closed shadow casters named
+	// SHADOW* inside their visible hull; when a model has them, only they build the shadow volume, so thousands of
+	// small parts neither exceed the vertex and silhouette limits nor cost silhouette work every frame.
+	Bool hasShadowCasters = FALSE;
+	for (i = 0; i < hlod->Get_Lod_Model_Count(top); i++)
+	{
+		RenderObjClass *model = hlod->Peek_Lod_Model(top,i);
+		const char *meshName = (model && model->Get_Name()) ? strchr(model->Get_Name(), '.') : nullptr;
+		if (meshName != nullptr && _strnicmp(meshName + 1, "SHADOW", 6) == 0)
+			hasShadowCasters = TRUE;
+	}
+
 	for (i = 0; i < hlod->Get_Lod_Model_Count(top); i++)
 	{
 		if (hlod->Peek_Lod_Model(top,i) && hlod->Peek_Lod_Model(top,i)->Class_ID() == RenderObjClass::CLASSID_MESH)
 		{
+			if (hasShadowCasters)
+			{
+				const char *meshName = hlod->Peek_Lod_Model(top,i)->Get_Name() ? strchr(hlod->Peek_Lod_Model(top,i)->Get_Name(), '.') : nullptr;
+				if (meshName == nullptr || _strnicmp(meshName + 1, "SHADOW", 6) != 0)
+					continue;
+			}
+
 			DEBUG_ASSERTCRASH(m_meshCount < MAX_SHADOW_CASTER_MESHES, ("Too many shadow sub-meshes"));
 
 			geomMesh->m_mesh = (MeshClass *)hlod->Peek_Lod_Model(top,i);

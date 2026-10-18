@@ -76,6 +76,29 @@ def camo_atlas(size, seed, palette):
     return Image.fromarray(arr, "RGB")
 
 
+def infantry_atlas(size, seed, palette, gear, skin=(196, 150, 118), dark=(46, 46, 44)):
+    """Soldier atlas. V from the bottom: 0-0.125 dark (boots, gloves, weapons), 0.125-0.25 skin,
+    0.25-0.5 gear (vests, pouches, helmets) with webbing rows, 0.5-1 the uniform's camouflage in
+    small blotches."""
+    rng = np.random.default_rng(seed)
+    n1 = fbm(size, rng, base=10)
+    n2 = fbm(size, rng, base=10)
+    grain = fbm(size, rng, octaves=6, base=32)
+    rgb = np.broadcast_to(np.array(palette[0], float), (size, size, 3)).copy()
+    rgb[n1 > 0.55] = palette[1]
+    rgb[(n2 > 0.6) & (n1 <= 0.55)] = palette[2]
+    rgb *= (0.88 + 0.24 * grain)[..., None]
+    h = size // 8
+    rgb[size - 2 * h:size - h] = np.array(skin, float) * (0.94 + 0.12 * grain[size - 2 * h:size - h])[..., None]
+    rgb[size - h:] = np.array(dark, float) * (0.85 + 0.3 * grain[size - h:])[..., None]
+    gear_rows = slice(size // 2, size - 2 * h)
+    g = np.array(gear, float) * (0.86 + 0.24 * grain[gear_rows])[..., None]
+    stripes = (np.arange(g.shape[0]) // max(1, size // 64)) % 2 == 0
+    g[stripes] *= 0.9
+    rgb[gear_rows] = g
+    return to_image(rgb)
+
+
 def tread(width, height, links, seed):
     """Track links along U so W3DTankDraw can scroll them."""
     rng = np.random.default_rng(seed)

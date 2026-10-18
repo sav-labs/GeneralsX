@@ -1,0 +1,12 @@
+# Candidates to download for a closer look (sketchfab.py probe): a uid per line, or "q: <query>" for the
+# best PBR-textured search hits. Results go to the model-candidates prerelease as probe_<uid>.glb.
+q: M1A2 SEP Abrams
+q: M1 Abrams game ready
+q: Abrams 4K PBR
+q: M1A1 Abrams PBR
+q: military barracks
+q: military command center building
+q: military power plant
+q: military hangar
+q: military warehouse depot
+q: military base building
