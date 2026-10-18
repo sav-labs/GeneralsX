@@ -787,7 +787,7 @@ new file mode 100644
 index 0000000..801d7d7
 --- /dev/null
 +++ b/src/d3d9/shaders/d3d9_ssao_frag.frag
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,85 @@
 +#version 450
 +
 +#extension GL_GOOGLE_include_directive : enable
@@ -799,7 +799,9 @@ index 0000000..801d7d7
 +
 +layout(location = 0) out float o_visibility;
 +
-+const int   SAMPLE_COUNT = 12;
++// GeneralsX @performance Claude 18/10/2026 8 samples instead of 12: ambient occlusion is the most expensive
++// post pass in battle, and the 4x4 interleaved rotation plus the apply-pass blur hide the lower sample count.
++const int   SAMPLE_COUNT = 8;
 +const float GOLDEN_ANGLE = 2.39996323f;
 +
 +vec3 pick_tangent(vec3 p, vec3 a, vec3 b) {
