@@ -192,6 +192,26 @@ Int parseFrameGeneration(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 18/10/2026 -modelNormalMaps on|off overrides Options.ini ModelNormalMaps, so a
+// test build can be framed with the feature on and off without editing the shared Options.ini. Render only.
+Int parseModelNormalMaps(char *args[], int num)
+{
+	if (num > 1)
+	{
+		if (stricmp(args[1], "on") == 0 || stricmp(args[1], "yes") == 0 || stricmp(args[1], "1") == 0)
+			TheWritableGlobalData->m_modelNormalMaps = TRUE;
+		else if (stricmp(args[1], "off") == 0 || stricmp(args[1], "no") == 0 || stricmp(args[1], "0") == 0)
+			TheWritableGlobalData->m_modelNormalMaps = FALSE;
+		else
+		{
+			fprintf(stderr, "[NORMALMAP] unknown -modelNormalMaps value '%s', expected on or off\n", args[1]);
+			fflush(stderr);
+		}
+		return 2;
+	}
+	return 1;
+}
+
 //=============================================================================
 //=============================================================================
 Int parseNoMusic(char *args[], int)
@@ -1415,6 +1435,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-renderscale", parseRenderScale },
 	{ "-upscaler", parseUpscaler },
 	{ "-framegen", parseFrameGeneration },
+	{ "-modelNormalMaps", parseModelNormalMaps },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
