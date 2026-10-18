@@ -33,6 +33,10 @@
 // in front of the local start position and attack-move through each other, one structure near the fight is damaged to
 // 30% health so it burns and smokes, and the camera orbits the middle of the battle line at a medium-low height. "night"
 // switches the match to night when it starts. Like the convoy, this changes the match and only happens with -camtest.
+// GeneralsX @feature Claude 18/10/2026 Infantry flight (-camtest [seconds] infantry [units]): the same facing columns,
+// but both sides are filled with their infantry squad instead of vehicles, no helicopters or support units, in a tight
+// open-ground formation, and the orbit holds lower and closer so the small infantry fills the frame. Daytime unless
+// "night" is also given. It reuses the battle spawn and orbit, so it too needs an enemy player and only runs with -camtest.
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
@@ -126,6 +130,13 @@ constexpr const Real CameraTestBattleOrbitSpeed = DEG_TO_RADF(8.0f);	///< Camera
 constexpr const Real CameraTestBattleEndHeightScale = 0.8f;		///< Final camera height as a fraction of the minimum zoom height
 constexpr const Real CameraTestBattlePitch = DEG_TO_RADF(30.0f);	///< Final pitch, lower than the default 37.5
 
+// GeneralsX @feature Claude 18/10/2026 Infantry flight. Squads stand in a tight open-ground formation, no helicopters or
+// support rows, and the camera orbits lower and closer so the small infantry fills the frame.
+constexpr const Real CameraTestInfantryGap = 130.0f;				///< Distance between the two infantry fronts at spawn
+constexpr const Real CameraTestInfantryRowSpacing = 24.0f;
+constexpr const Real CameraTestInfantryColumnSpacing = 24.0f;
+constexpr const Real CameraTestInfantryHeightScale = 0.5f;		///< Infantry orbit height as a fraction of the battle height
+
 // GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
 // DXVK reads the process environment on every present while it waits: the prepare value starts the encoder when the
 // match starts, the event value starts recording with the first frame of the flight. It only affects rendering tools.
@@ -136,6 +147,7 @@ constexpr const char *CameraTestCaptureStart = "camtest";
 /// Templates of one side: a main battle tank, a fast vehicle and a helicopter (empty when there is none).
 // GeneralsX @feature Claude 16/10/2026 Plus the artillery and rocket units the battle flight puts in its rear rows
 // (retail template names; a name the game does not know is skipped, America has the Tomahawk for both).
+// GeneralsX @feature Claude 18/10/2026 "infantry" holds the squad template the infantry flight fills both columns with.
 struct CameraTestSideUnits
 {
 	const char *baseSide;
@@ -144,13 +156,14 @@ struct CameraTestSideUnits
 	const char *air;
 	const char *artillery;
 	const char *rocket;
+	const char *infantry;
 };
 
 const CameraTestSideUnits CameraTestSides[] =
 {
-	{ "America", "AmericaTankCrusader", "AmericaVehicleHumvee", "AmericaVehicleComanche", "AmericaVehicleTomahawk", "" },
-	{ "China", "ChinaTankBattleMaster", "ChinaTankGattling", "ChinaVehicleHelix", "ChinaVehicleInfernoCannon", "ChinaVehicleNukeLauncher" },
-	{ "GLA", "GLATankScorpion", "GLAVehicleTechnical", "", "GLAVehicleScudLauncher", "GLAVehicleRocketBuggy" },
+	{ "America", "AmericaTankCrusader", "AmericaVehicleHumvee", "AmericaVehicleComanche", "AmericaVehicleTomahawk", "", "AmericaInfantryRanger" },
+	{ "China", "ChinaTankBattleMaster", "ChinaTankGattling", "ChinaVehicleHelix", "ChinaVehicleInfernoCannon", "ChinaVehicleNukeLauncher", "ChinaInfantryRedguard" },
+	{ "GLA", "GLATankScorpion", "GLAVehicleTechnical", "", "GLAVehicleScudLauncher", "GLAVehicleRocketBuggy", "GLAInfantryRebel" },
 };
 
 struct CameraTestState
@@ -629,12 +642,21 @@ Int spawnCameraTestBattleColumn(Player *player, const Coord2D &center, const Coo
 	if (team == nullptr)
 		return 0;
 
+	// GeneralsX @feature Claude 18/10/2026 Infantry mode fills both front and rear rows with the side's infantry squad,
+	// drops the helicopters and support units, and packs the formation tighter so the squads read as a close line.
+	const Bool isInfantry = TheGlobalData->m_cameraTestInfantry;
 	const CameraTestSideUnits &side = getCameraTestSideUnits(player);
-	const ThingTemplate *tank = findCameraTestTemplate(side.tank, side.fast, CameraTestSides[0].tank);
-	const ThingTemplate *fast = findCameraTestTemplate(side.fast, side.tank, CameraTestSides[0].fast);
-	const ThingTemplate *air = findCameraTestTemplate(side.air, nullptr, nullptr);
-	const ThingTemplate *artillery = findCameraTestTemplate(side.artillery, side.rocket, nullptr);
-	const ThingTemplate *rocket = findCameraTestTemplate(side.rocket, side.artillery, nullptr);
+	const ThingTemplate *infantry = isInfantry
+		? findCameraTestTemplate(side.infantry, CameraTestSides[0].infantry, nullptr) : nullptr;
+	const ThingTemplate *tank = isInfantry ? infantry : findCameraTestTemplate(side.tank, side.fast, CameraTestSides[0].tank);
+	const ThingTemplate *fast = isInfantry ? infantry : findCameraTestTemplate(side.fast, side.tank, CameraTestSides[0].fast);
+	const ThingTemplate *air = isInfantry ? nullptr : findCameraTestTemplate(side.air, nullptr, nullptr);
+	const ThingTemplate *artillery = isInfantry ? nullptr : findCameraTestTemplate(side.artillery, side.rocket, nullptr);
+	const ThingTemplate *rocket = isInfantry ? nullptr : findCameraTestTemplate(side.rocket, side.artillery, nullptr);
+
+	const Real gap = isInfantry ? CameraTestInfantryGap : CameraTestBattleGap;
+	const Real rowSpacing = isInfantry ? CameraTestInfantryRowSpacing : CameraTestBattleRowSpacing;
+	const Real colSpacing = isInfantry ? CameraTestInfantryColumnSpacing : CameraTestBattleColumnSpacing;
 
 	const CameraTestBattleLayout layout = getCameraTestBattleLayout(getCameraTestBattlePerSide(), air != nullptr);
 	const Int support = artillery != nullptr ? layout.ground * CameraTestBattleSupportPercent / 100 : 0;
@@ -646,8 +668,8 @@ Int spawnCameraTestBattleColumn(Player *player, const Coord2D &center, const Coo
 	const Real angle = toEnemy.toAngle();
 
 	Coord2D frontRow;
-	frontRow.x = center.x - toEnemy.x * CameraTestBattleGap * 0.5f;
-	frontRow.y = center.y - toEnemy.y * CameraTestBattleGap * 0.5f;
+	frontRow.x = center.x - toEnemy.x * gap * 0.5f;
+	frontRow.y = center.y - toEnemy.y * gap * 0.5f;
 
 	Int count = 0;
 	Int counts[5] = { 0, 0, 0, 0, 0 };	// tank, fast, artillery, rocket, air
@@ -655,7 +677,7 @@ Int spawnCameraTestBattleColumn(Player *player, const Coord2D &center, const Coo
 	{
 		const Int row = i / layout.width;
 		const Int inRow = min(layout.width, layout.ground - row * layout.width);
-		const Real lateral = ((Real)(i % layout.width) - (Real)(inRow - 1) * 0.5f) * CameraTestBattleColumnSpacing;
+		const Real lateral = ((Real)(i % layout.width) - (Real)(inRow - 1) * 0.5f) * colSpacing;
 
 		Int kind;
 		if (i < front)
@@ -666,14 +688,14 @@ Int spawnCameraTestBattleColumn(Player *player, const Coord2D &center, const Coo
 		if (thingTemplate == nullptr)
 			continue;
 
-		const Real back = CameraTestBattleRowSpacing * row;
+		const Real back = rowSpacing * row;
 		Coord2D pos;
 		pos.x = frontRow.x - toEnemy.x * back + right.x * lateral;
 		pos.y = frontRow.y - toEnemy.y * back + right.y * lateral;
 
 		Coord2D dest;
-		dest.x = pos.x + toEnemy.x * (CameraTestBattleGap + 2.0f * back);
-		dest.y = pos.y + toEnemy.y * (CameraTestBattleGap + 2.0f * back);
+		dest.x = pos.x + toEnemy.x * (gap + 2.0f * back);
+		dest.y = pos.y + toEnemy.y * (gap + 2.0f * back);
 
 		Object *obj = spawnCameraTestUnit(thingTemplate, team, pos, angle, dest, TRUE);
 		if (obj != nullptr)
@@ -806,9 +828,13 @@ Bool beginCameraTestBattle()
 	}
 
 	// The local column's rear row stands where the regular convoy leads, the battle center lies past its front row
-	const Bool localHasAir = findCameraTestTemplate(getCameraTestSideUnits(localPlayer).air, nullptr, nullptr) != nullptr;
+	// GeneralsX @feature Claude 18/10/2026 Infantry columns carry no helicopters and pack tighter, so match the layout here.
+	const Bool isInfantry = TheGlobalData->m_cameraTestInfantry;
+	const Bool localHasAir = !isInfantry && findCameraTestTemplate(getCameraTestSideUnits(localPlayer).air, nullptr, nullptr) != nullptr;
 	const CameraTestBattleLayout localLayout = getCameraTestBattleLayout(getCameraTestBattlePerSide(), localHasAir);
-	const Real lead = CameraTestConvoyLead + CameraTestBattleRowSpacing * (localLayout.rows - 1) + CameraTestBattleGap * 0.5f;
+	const Real rowSpacing = isInfantry ? CameraTestInfantryRowSpacing : CameraTestBattleRowSpacing;
+	const Real gap = isInfantry ? CameraTestInfantryGap : CameraTestBattleGap;
+	const Real lead = CameraTestConvoyLead + rowSpacing * (localLayout.rows - 1) + gap * 0.5f;
 
 	Coord2D center;
 	center.x = s.startPos.x + s.panDir.x * lead;
@@ -868,7 +894,10 @@ void applyCameraTestBattlePose(Real flightSeconds)
 
 	const Real closeHeight = max(s.minHeight * CameraTestCloseHeightScale, CameraTestCloseMinHeight);
 	const Real endHeight = clamp(closeHeight, s.minHeight * CameraTestBattleEndHeightScale, max(closeHeight, s.minHeight));
-	const Real height = s.minHeight + (endHeight - s.minHeight) * blend;
+	Real height = s.minHeight + (endHeight - s.minHeight) * blend;
+	// GeneralsX @feature Claude 18/10/2026 Infantry is small, so the orbit holds much lower to keep the squads in frame.
+	if (TheGlobalData->m_cameraTestInfantry)
+		height = max(CameraTestCloseMinHeight, height * CameraTestInfantryHeightScale);
 
 	Coord3D pivot;
 	pivot.x = s.battleCenter.x;

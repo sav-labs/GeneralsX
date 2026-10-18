@@ -1041,6 +1041,7 @@ GlobalData::GlobalData()
 	m_cameraTestBattle = FALSE;
 	m_cameraTestBattleUnits = 0;
 	m_cameraTestNight = FALSE;
+	m_cameraTestInfantry = FALSE;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
