@@ -73,9 +73,25 @@ jobs:
   # GeneralsX @feature Claude 16/10/2026 Most units now come from openly licensed source models (release model-sources,
   # see model-sources.yml) through blend/build_src.py; their CREDITS.md ships next to the content pack.
   hd-models:
-    name: Detailed models (Blender)
+    name: Detailed model (Blender)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      # One reviewed detailed model per job: each bake runs ~75 min, so several units in one job
+      # would blow the 90 min timeout. Parallel jobs, one artifact per unit; build_content.py
+      # HD_REMAP decides which of the baked models actually ship. fail-fast off so one bad unit
+      # does not cancel the rest.
+      fail-fast: false
+      matrix:
+        unit:
+          - crusader_m1a2
+          - microwave
+          - paladin
+          - tomahawk
+          - avenger
+          - humvee
+          - ambulance
+          - bulldozer
 
     steps:
       - name: Checkout
@@ -93,12 +109,12 @@ jobs:
           # Openly licensed source models and their CREDITS.md, fetched by model-sources.yml.
           gh release download model-sources --repo "${{ github.repository }}" --dir src --pattern '*.glb' --pattern CREDITS.md
 
-      - name: Cache baked models
+      - name: Cache baked model
         id: cache
         uses: actions/cache@v4
         with:
           path: hd-out
-          key: hd-models-${{ hashFiles('scripts/tooling/content/blend/**', 'scripts/tooling/content/w3d.py', 'scripts/tooling/content/textures.py', 'src/**') }}
+          key: hd-models-${{ matrix.unit }}-${{ hashFiles('scripts/tooling/content/blend/**', 'scripts/tooling/content/w3d.py', 'scripts/tooling/content/textures.py', 'src/**') }}
 
       - name: Set up Python
         if: steps.cache.outputs.cache-hit != 'true'
@@ -112,16 +128,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6 libegl1
           python -m pip install bpy==5.2.2 pillow==12.0.0 numpy==2.2.6
-          python scripts/tooling/content/blend/build_hd.py hd-out
-          # One unit at a time (build_content.py HD_REMAP decides what ships): the M1A2 Abrams for the Crusader.
-          python scripts/tooling/content/blend/build_src.py src hd-out --only crusader_m1a2
+          mkdir -p hd-out/tex
+          python scripts/tooling/content/blend/build_src.py src hd-out --only ${{ matrix.unit }}
           rm -f hd-out/tex/*.blend
           cp src/CREDITS.md hd-out/CREDITS.md
 
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
-          name: hd-models
+          name: hd-models-${{ matrix.unit }}
           path: |
             hd-out/w3d
             hd-out/tex/*.tga
@@ -280,7 +295,9 @@ jobs:
       - name: Download detailed models
         uses: actions/download-artifact@v8
         with:
-          name: hd-models
+          # One artifact per unit from the hd-models matrix; merge them into a single folder.
+          pattern: hd-models-*
+          merge-multiple: true
           path: hd-models
 
       - name: Build content pack

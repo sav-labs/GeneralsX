@@ -283,9 +283,25 @@ def collect(root):
 # GeneralsX @feature Claude 16/10/2026 Reviewed detailed models (blend/build_src.py) replace retail models one unit at a
 # time: the pack carries only the models present in the --hd folder, their textures and _n.dds normal maps, and an
 # ArtRemap that draws them where the retail INI names the retail model. Logic keeps reading the retail model's bones.
+# GeneralsX @feature Claude 18/10/2026 Retail model names read from the untouched ZH 1.04 Object/AmericaVehicle.ini
+# (DefaultConditionState / REALLYDAMAGED Model=), the same source the infantry remap uses.
 HD_REMAP = {
     "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
     "AVGXMBT_D": ("AVLeopard_D", None),
+    "AVGXMICRO": ("AVTHUNDRBLT", "Microwave Tank -> Stryker M1126"),
+    "AVGXMICRO_D": ("AVTHUNDRBLT_D", None),
+    "AVGXPAL": ("AVPaladin", "Paladin -> M109 self-propelled howitzer"),
+    "AVGXPAL_D": ("AVPaladin_D", None),
+    "AVGXMLRS": ("AVTomahawk", "Tomahawk -> M270 MLRS"),
+    "AVGXMLRS_D": ("AVTomahawk_D", None),
+    "AVGXAVNG": ("AVAVNGER", "Avenger -> M1097 Avenger"),
+    "AVGXAVNG_D": ("AVAVNGER_D", None),
+    "AVGXJLTV": ("AVHUMMER", "Humvee -> JLTV"),
+    "AVGXJLTV_D": ("AVHUMMER_d", None),
+    "AVGXMEDIC": ("AVAmbulance", "Medic -> M1133 ambulance"),
+    "AVGXMEDIC_D": ("AVAmbulance_D", None),
+    "AVGXDOZ": ("AVCONSTDOZ_A", "Dozer -> armoured bulldozer"),
+    "AVGXDOZ_D": ("AVCONSTDOZ_AD", None),
 }
 
 
