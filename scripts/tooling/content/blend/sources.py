@@ -137,17 +137,23 @@ UNITS = {
     },
     # HMMWV M998A1 by 42manako, CC-BY, as the Humvee (canvas top: no gunner yet).
     "humvee": {
-        "model": "AVGXJLTV", "stem": "gxjltv3", "length": 22.0, "yaw": 90.0, "tris": 12000, "split": ".",
+        "model": "AVGXJLTV", "stem": "gxjltv3", "length": 22.0, "yaw": 90.0, "tris": 14000, "split": ".",
+        # The M1A2 recipe: large forms kept, detail baked into the atlas and the engine normal map, CARC Tan.
+        "cull": 0.18, "planar": 4.0, "plates": 1.0, "procedural": True, "highpoly": 0.45, "relief": 0.3,
+        "hard": 35.0, "uv_angle": 66.0, "uv_small": (0.8, 0.35),
         "rules": [], "find_wheels": {}, "tires": True,
-        "tint": ((180, 154, 110), None, 1.0),
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "rims": {"TIRE": ("rubber", 0.62)},
         "engine": "front",
     },
     # M997A2 ambulance by 42manako, CC-BY. Material_823 is a whip antenna taller than the vehicle.
     "ambulance": {
-        "model": "AVGXMEDIC", "stem": "gxmedic3", "length": 24.0, "yaw": 90.0, "tris": 12000, "split": ".",
+        "model": "AVGXMEDIC", "stem": "gxmedic3", "length": 24.0, "yaw": 90.0, "tris": 14000, "split": ".",
+        # The M1A2 recipe: large forms kept, detail baked into the atlas and the engine normal map, CARC Tan.
+        "cull": 0.18, "planar": 4.0, "plates": 1.0, "procedural": True, "highpoly": 0.45, "relief": 0.3,
+        "hard": 35.0, "uv_angle": 66.0, "uv_small": (0.8, 0.35),
         "exclude": r"Material_823", "rules": [], "find_wheels": {}, "tires": True,
-        "tint": ((180, 154, 110), None, 1.0),
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
         "rims": {"TIRE": ("rubber", 0.62)},
         "engine": "front",
     },
