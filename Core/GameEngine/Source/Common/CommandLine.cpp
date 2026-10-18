@@ -877,6 +877,19 @@ Int parseSkirmishStartPos(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 18/10/2026 -gameSpeed <N> overrides the game speed (skirmish simulation tick rate,
+// 30 = normal) for a -skirmish match started from the command line, for this run only, without writing
+// Options.ini. Used by the deploy machine to verify the skirmish game-speed setting actually takes effect.
+Int parseSkirmishGameSpeed(char *args[], int num)
+{
+	if (num > 1 && args[1][0] >= '0' && args[1][0] <= '9')
+	{
+		TheWritableGlobalData->m_initialSkirmishGameSpeed = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
 // GeneralsX @feature Claude 14/10/2026 Drive the tactical camera on a fixed, input-free script once a match
 // has started: -camtest [seconds]. The optional duration of the pan defaults to 8 seconds.
 // Used to record comparable gameplay videos on machines that receive no mouse or keyboard input.
@@ -1474,6 +1487,8 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-side", parseSkirmishSide },
 	{ "-aiside", parseSkirmishAISide },
 	{ "-pos", parseSkirmishStartPos },
+	// GeneralsX @feature Claude 18/10/2026 Override the game speed of a command-line -skirmish match for one run.
+	{ "-gameSpeed", parseSkirmishGameSpeed },
 	{ "-seed", parseSeed },
 
 	// GeneralsX @feature Claude 14/10/2026 Fly the tactical camera on a fixed script without user input.
