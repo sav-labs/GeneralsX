@@ -192,6 +192,33 @@ Int parseFrameGeneration(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 18/10/2026 -dynamicLights <off|low|high> overrides DynamicLights for profiling,
+// so the effect-light cost can be measured on the same machine without editing Options.ini. 0/1/2 also work.
+Int parseDynamicLights(char *args[], int num)
+{
+	if (num > 1)
+	{
+		const char *value = args[1];
+		Int mode = -1;
+		if (stricmp(value, "off") == 0 || stricmp(value, "no") == 0 || stricmp(value, "0") == 0)
+			mode = OptionPreferences::DYNAMIC_LIGHTS_OFF;
+		else if (stricmp(value, "low") == 0 || stricmp(value, "1") == 0)
+			mode = OptionPreferences::DYNAMIC_LIGHTS_LOW;
+		else if (stricmp(value, "high") == 0 || stricmp(value, "yes") == 0 || stricmp(value, "2") == 0)
+			mode = OptionPreferences::DYNAMIC_LIGHTS_HIGH;
+
+		if (mode >= 0)
+			OptionPreferences::setDynamicLightsOverride(mode);
+		else
+		{
+			fprintf(stderr, "[LIGHTS] unknown -dynamicLights value '%s', expected off, low or high\n", value);
+			fflush(stderr);
+		}
+		return 2;
+	}
+	return 1;
+}
+
 //=============================================================================
 //=============================================================================
 Int parseNoMusic(char *args[], int)
@@ -1415,6 +1442,8 @@ static CommandLineParam paramsForStartup[] =
 	{ "-renderscale", parseRenderScale },
 	{ "-upscaler", parseUpscaler },
 	{ "-framegen", parseFrameGeneration },
+	// GeneralsX @feature Claude 18/10/2026 -dynamicLights <off|low|high> overrides DynamicLights for profiling
+	{ "-dynamicLights", parseDynamicLights },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025

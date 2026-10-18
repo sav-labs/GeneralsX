@@ -46,6 +46,10 @@
 
 #include "GameNetwork/IPEnumeration.h"
 
+// GeneralsX @feature Claude 18/10/2026 -dynamicLights <off|low|high> overrides DynamicLights for profiling.
+// -1 means no override is active and getDynamicLightsMode() reads Options.ini as usual.
+static Int s_dynamicLightsOverride = -1;
+
 OptionPreferences::OptionPreferences()
 {
 	loadFromIniFile();
@@ -1511,6 +1515,10 @@ void OptionPreferences::fitToDisplay(Int width, Int height, Int displayWidth, In
 // a smooth light pool on the ground.
 Int OptionPreferences::getDynamicLightsMode() const
 {
+	// GeneralsX @feature Claude 18/10/2026 -dynamicLights <off|low|high> overrides DynamicLights for profiling
+	if (s_dynamicLightsOverride >= 0)
+		return s_dynamicLightsOverride;
+
 	OptionPreferences::const_iterator it = find("DynamicLights");
 	if (it == end())
 		return DYNAMIC_LIGHTS_HIGH;
@@ -1520,6 +1528,18 @@ Int OptionPreferences::getDynamicLightsMode() const
 	if (stricmp(it->second.str(), "Low") == 0)
 		return DYNAMIC_LIGHTS_LOW;
 	return DYNAMIC_LIGHTS_HIGH;
+}
+
+// GeneralsX @feature Claude 18/10/2026 -dynamicLights <off|low|high> overrides DynamicLights for profiling.
+// Set once from the command line before the scene reads it; applies for this run only (Options.ini untouched).
+void OptionPreferences::setDynamicLightsOverride(Int mode)
+{
+	s_dynamicLightsOverride = mode;
+}
+
+Int OptionPreferences::getDynamicLightsOverride()
+{
+	return s_dynamicLightsOverride;
 }
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini DynamicLightIntensity, 0 to 2 (default 1): brightness of the

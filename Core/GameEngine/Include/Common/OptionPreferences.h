@@ -245,6 +245,9 @@ public:
 	enum DynamicLightsMode { DYNAMIC_LIGHTS_OFF, DYNAMIC_LIGHTS_LOW, DYNAMIC_LIGHTS_HIGH };
 	Int getDynamicLightsMode() const;			///< Options.ini DynamicLights = Off | Low | High, default High
 	Real getDynamicLightIntensity() const;		///< Options.ini DynamicLightIntensity, 0 to 2, default 1
+	// GeneralsX @feature Claude 18/10/2026 -dynamicLights <off|low|high> overrides DynamicLights for profiling
+	static void setDynamicLightsOverride(Int mode);	///< -1 clears the override, else a DynamicLightsMode value
+	static Int getDynamicLightsOverride();			///< -1 when no override is active
 	// GeneralsX @feature Claude 16/10/2026 Water effects of standing water and rivers (W3DWaterEffects.cpp).
 	Int getWaterReflections() const;			///< Options.ini WaterReflections = Off | Sky | Full (0, 1, 2), default Full
 	Real getWaterReflectionScale() const;		///< Options.ini WaterReflectionScale, 0.25 to 1, default 0.5
