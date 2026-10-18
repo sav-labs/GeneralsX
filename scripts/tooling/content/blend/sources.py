@@ -157,6 +157,19 @@ UNITS = {
         "rims": {"TIRE": ("rubber", 0.62)},
         "engine": "front",
     },
+    # D9-class armoured bulldozer, CC-BY, as the USA Dozer. The 441 source objects carry only generic
+    # Maya names (polySurface####_blinn##), so there is nothing to sort onto turret/blade/track bones by
+    # name: the whole vehicle is built as one static detailed hull for a first green build. Articulation
+    # (blade, scrolling tracks) is deferred to the in-game frame review, where the pieces can be sorted by
+    # position. The retail digging animation belongs to the retail skeleton and is left alone.
+    "bulldozer": {
+        "model": "AVGXDOZ", "stem": "gxdoz3", "length": 24.0, "yaw": 90.0, "tris": 16000, "split": ".",
+        # The M1A2 recipe: large forms kept, detail baked into the atlas and the engine normal map, CARC Tan.
+        "cull": 0.18, "planar": 4.0, "plates": 1.0, "procedural": True, "highpoly": 0.45, "relief": 0.3,
+        "hard": 35.0, "uv_angle": 66.0, "uv_small": (0.8, 0.35),
+        "rules": [],
+        "tint": ((190, 166, 124), None, 1.0), "weathering": 0.35,
+    },
     # M142 HIMARS by Denys.Cherkasov, CC-BY, as the Tomahawk launcher. The scene also holds a loose
     # missile with a slogan, spare damaged doors and bonnet and tyre valves: excluded. The pod turns
     # on TURRET (the retail Draw module's turret) and launches from its rear end.
