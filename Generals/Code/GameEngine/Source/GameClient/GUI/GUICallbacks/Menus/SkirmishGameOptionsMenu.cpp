@@ -683,7 +683,9 @@ Bool StartQueuedSkirmishGame()
 
 	// Same FPS limit the game speed slider would start with
 	// GeneralsX @bugfix Claude 18/10/2026 -skirmish starts at the configured game speed (default 30 = normal), not the render FPS limit
-	Int maxFPS = max(30, min(121, prefs.getSkirmishTickRate()));
+	// GeneralsX @feature Claude 18/10/2026 -gameSpeed <N> on the command line overrides it for this run (deploy/profiling), without touching Options.ini
+	Int cmdGameSpeed = TheGlobalData->m_initialSkirmishGameSpeed;
+	Int maxFPS = cmdGameSpeed > 0 ? max(30, min(121, cmdGameSpeed)) : max(30, min(121, prefs.getSkirmishTickRate()));
 	if (maxFPS > GREATER_NO_FPS_LIMIT)
 		maxFPS = 1000;
 
