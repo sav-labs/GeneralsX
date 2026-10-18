@@ -39,6 +39,9 @@ PIVOTS = 0x00000102
 ANIMATION = 0x00000200
 ANIMATION_HEADER = 0x00000201
 ANIMATION_CHANNEL = 0x00000202
+ANIM_CHANNEL_X = 0
+ANIM_CHANNEL_Y = 1
+ANIM_CHANNEL_Z = 2
 ANIM_CHANNEL_Q = 6
 HLOD = 0x00000700
 HLOD_HEADER = 0x00000701
@@ -253,6 +256,7 @@ class Model:
         self.bones = [Bone("ROOTTRANSFORM", None, (0, 0, 0))]
         self.meshes = []  # (bone index, Mesh)
         self.spins = []  # (bone index, axis, revolutions per loop)
+        self.tracks = []  # (bone index, channel type, one value or quaternion per frame)
         self.anim_frames = 0
         self.anim_rate = 30
 
@@ -260,6 +264,27 @@ class Model:
         """Loop that turns a bone about its local axis (rotors); written as the model's own animation."""
         self.spins.append((self.bone_index(bone_name), axis, revolutions))
         self.anim_frames = max(self.anim_frames, 17)
+
+    def add_motion(self, bone_name, frames, offset=None, turn=None):
+        """Keyed motion of one bone over `frames` frames, written as the model's own animation.
+        offset(f) -> (dx, dy, dz) moves the bone from its rest pivot; turn(f) -> (axis, degrees) turns it
+        about its own axis. WW3D applies both relative to the pivot, so frame values of zero are rest."""
+        bone = self.bone_index(bone_name)
+        if offset:
+            values = [offset(f) for f in range(frames)]
+            for axis, channel in enumerate((ANIM_CHANNEL_X, ANIM_CHANNEL_Y, ANIM_CHANNEL_Z)):
+                if any(abs(v[axis]) > 1e-6 for v in values):
+                    self.tracks.append((bone, channel, [(v[axis],) for v in values]))
+        if turn:
+            quats = []
+            for f in range(frames):
+                axis, degrees = turn(f)
+                half = math.radians(degrees) / 2
+                q = [0.0, 0.0, 0.0, math.cos(half)]
+                q["xyz".index(axis)] = math.sin(half)
+                quats.append(tuple(q))
+            self.tracks.append((bone, ANIM_CHANNEL_Q, quats))
+        self.anim_frames = max(self.anim_frames, frames)
 
     def bone_index(self, name):
         for i, bone in enumerate(self.bones):
@@ -317,8 +342,9 @@ class Model:
         return hierarchy + b"".join(meshes) + hlod + self.pack_animation()
 
     def pack_animation(self):
-        """Animation named MODEL.MODEL (what INI 'Animation = X.X' refers to), one Q channel per spin."""
-        if not self.spins:
+        """Animation named MODEL.MODEL (what INI 'Animation = X.X' refers to): one Q channel per spin plus
+        the keyed motion tracks, each held at its last value if shorter than the animation."""
+        if not self.spins and not self.tracks:
             return b""
         frames = self.anim_frames
         channels = []
@@ -332,8 +358,26 @@ class Model:
                 q["xyz".index(axis)] = math.sin(half)
                 data += struct.pack("<4f", *q)
             channels.append(chunk(ANIMATION_CHANNEL, struct.pack("<6H", 0, frames - 1, 4, ANIM_CHANNEL_Q, bone, 0) + data))
+        for bone, channel, values in self.tracks:
+            values = values + [values[-1]] * (frames - len(values))
+            width = len(values[0])
+            data = b"".join(struct.pack(f"<{width}f", *v) for v in values)
+            channels.append(chunk(ANIMATION_CHANNEL, struct.pack("<6H", 0, frames - 1, width, channel, bone, 0) + data))
         header = struct.pack("<I", HANIM_VERSION) + fixed_name(self.name) + fixed_name(self.name) + struct.pack("<II", frames, self.anim_rate)
         return wrapper(ANIMATION, [chunk(ANIMATION_HEADER, header), *channels])
+
+
+def pack_clip(hierarchy, name, frames, tracks, rate=30):
+    """A standalone animation HIERARCHY.NAME, saved as NAME.w3d (the asset manager loads an animation
+    from the file named after the part behind the dot). tracks: (pivot index, channel type, one tuple
+    per frame), the same layout Model.add_motion keeps."""
+    channels = []
+    for bone, channel, values in tracks:
+        width = len(values[0])
+        data = b"".join(struct.pack(f"<{width}f", *v) for v in values)
+        channels.append(chunk(ANIMATION_CHANNEL, struct.pack("<6H", 0, frames - 1, width, channel, bone, 0) + data))
+    header = struct.pack("<I", HANIM_VERSION) + fixed_name(name) + fixed_name(hierarchy) + struct.pack("<II", frames, rate)
+    return wrapper(ANIMATION, [chunk(ANIMATION_HEADER, header), *channels])
 
 
 def read_chunks(data, offset=0, end=None):
