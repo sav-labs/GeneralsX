@@ -1272,10 +1272,9 @@ Real OptionPreferences::getModelSpecular() const
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
 // on or off: soft darkening where units and buildings meet the ground and in creases.
-// GeneralsX @bugfix Claude 18/10/2026 Off unless set to "yes". The screen-space pass darkened the whole opaque
-// scene; its sample radius is tuned for large geometry, so small infantry were occluded almost entirely and
-// looked much darker than the original game. Default off restores the retail look (and recovers SSAO's fps
-// cost); players who want ground-contact AO opt in with AmbientOcclusion = yes.
+// GeneralsX @tweak Claude 18/10/2026 Off unless set to "yes". The screen-space pass cost ~9 fps on the camera
+// fly-over, so it defaults off (recovering that fps) and players who want ground-contact AO opt in with
+// AmbientOcclusion = yes, mirroring the ModelNormalMaps opt-in pattern.
 Bool OptionPreferences::getAmbientOcclusionEnabled() const
 {
 	OptionPreferences::const_iterator it = find("AmbientOcclusion");
