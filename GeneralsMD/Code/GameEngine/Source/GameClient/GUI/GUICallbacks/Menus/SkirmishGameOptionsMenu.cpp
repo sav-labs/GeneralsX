@@ -390,8 +390,9 @@ Bool SkirmishPreferences::write()
 
 //	NameKeyType sliderGameSpeedID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:SliderGameSpeed" );
 	GameWindow *sliderGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, sliderGameSpeedID );
-	Int maxFPS = GadgetSliderGetPosition( sliderGameSpeed );
-	setInt("FPS", maxFPS);
+	// GeneralsX @bugfix Claude 18/10/2026 Persist the skirmish game speed (slider) so it round-trips via getSkirmishTickRate (#281)
+	Int gameSpeed = GadgetSliderGetPosition( sliderGameSpeed );
+	setInt("GameSpeed", gameSpeed);
 
 	return UserPreferences::write();
 }
@@ -471,9 +472,11 @@ static void startSkirmishGame(Int maxFPS)
 	if (TheGameLogic->isInGame())
 		TheGameLogic->clearGameData(FALSE);
 
-	// GeneralsX @feature felipebraz 17/09/2026 Read configured Skirmish simulation tick rate (#281)
-	SkirmishPreferences prefs;
-	TheWritableGlobalData->m_skirmishTickRate = prefs.getSkirmishTickRate();
+	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate = game speed (#281)
+	// GeneralsX @bugfix Claude 18/10/2026 The in-lobby "Game Speed" slider now drives the logic tick rate
+	// (its value is the simulation FPS, 30 = normal speed), so changing it actually speeds up or slows down
+	// the match instead of only the render cap. The sim stays frame-discrete, so replay CRCs are unchanged.
+	TheWritableGlobalData->m_skirmishTickRate = clamp(5, maxFPS, 120);
 
   TheWritableGlobalData->m_mapName = TheSkirmishGameInfo->getMap();
   TheSkirmishGameInfo->startGame(0);
@@ -692,7 +695,8 @@ Bool StartQueuedSkirmishGame()
 	TheSkirmishGameInfo->setMapSize(md->m_filesize);
 
 	// Same FPS limit the game speed slider would start with
-	Int maxFPS = max(30, min(121, prefs.getInt("FPS", TheGlobalData->m_framesPerSecondLimit)));
+	// GeneralsX @bugfix Claude 18/10/2026 -skirmish starts at the configured game speed (default 30 = normal), not the render FPS limit
+	Int maxFPS = max(30, min(121, prefs.getSkirmishTickRate()));
 	if (maxFPS > GREATER_NO_FPS_LIMIT)
 		maxFPS = 1000;
 
@@ -1583,9 +1587,9 @@ void SkirmishGameOptionsMenuInit( WindowLayout *layout, void *userData )
 	// set up the game speed slider
 //	NameKeyType sliderGameSpeedID = TheNameKeyGenerator->nameToKey( "SkirmishGameOptionsMenu.wnd:SliderGameSpeed" );
 	GameWindow *sliderGameSpeed = TheWindowManager->winGetWindowFromId( parentSkirmishGameOptions, sliderGameSpeedID );
-	// GeneralsX @tweak felipebraz 20/06/2026 Set up the skirmish slider to represent rendering FPS limit (30..120+)
+	// GeneralsX @bugfix Claude 18/10/2026 The skirmish slider is the game speed (logic tick rate, 30 = normal), restored from #281 config
 	GadgetSliderSetMinMax( sliderGameSpeed, 30, 121 );
-	Int sliderPos = max(30,min(121,prefs.getInt("FPS", TheGlobalData->m_framesPerSecondLimit)));
+	Int sliderPos = max(30,min(121,prefs.getSkirmishTickRate()));
 	GadgetSliderSetPosition( sliderGameSpeed, sliderPos );
 	setFPSTextBox(sliderPos);
 	buttonStart->winSetText(TheGameText->fetch("GUI:Start"));
