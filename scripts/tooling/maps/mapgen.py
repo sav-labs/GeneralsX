@@ -301,8 +301,22 @@ class Objects:
         return bad
 
 
+# GeneralsX @bugfix Claude 18/10/2026 The retail skirmish faction sides that every official WorldBuilder
+# skirmish map embeds. Without them the skirmish AI finds no matching side in Player::initFromDict and falls
+# back to a non-driven human, so the computer opponent just stands there and never builds a base (confirmed
+# on GX maps: only Neutral + PlyrCivilian were present, so America and GLA both became forceHuman). The names
+# and dict shape are copied verbatim from Tournament Desert.map (MapsZH.big): one side "SkirmishX" with faction
+# "FactionX" and one singleton team "teamSkirmishX" per faction, base factions first then the nine generals.
+SKIRMISH_FACTIONS = [
+    "America", "China", "GLA",
+    "AmericaAirForceGeneral", "AmericaLaserGeneral", "AmericaSuperWeaponGeneral",
+    "ChinaTankGeneral", "ChinaNukeGeneral", "ChinaInfantryGeneral",
+    "GLADemolitionGeneral", "GLAToxinGeneral", "GLAStealthGeneral",
+]
+
+
 def standard_sides():
-    """Neutral and civilian players, as every WorldBuilder multiplayer map has them."""
+    """Neutral, civilian and the retail skirmish faction sides every WorldBuilder skirmish map has them."""
     def side(name, display, faction):
         return ({"playerName": name, "playerIsHuman": False,
                  "playerDisplayName": mapfile.Unicode(display), "playerFaction": faction,
@@ -310,6 +324,10 @@ def standard_sides():
     sides = [side("", "Neutral", ""), side("PlyrCivilian", "PlyrCivilian", "FactionCivilian")]
     teams = [{"teamName": NEUTRAL_TEAM, "teamOwner": "", "teamIsSingleton": True},
              {"teamName": CIVILIAN_TEAM, "teamOwner": "PlyrCivilian", "teamIsSingleton": True}]
+    for faction in SKIRMISH_FACTIONS:
+        player = "Skirmish" + faction
+        sides.append(side(player, player, "Faction" + faction))
+        teams.append({"teamName": "team" + player, "teamOwner": player, "teamIsSingleton": True})
     return sides, teams
 
 
