@@ -1281,6 +1281,18 @@ Bool OptionPreferences::getAmbientOcclusionEnabled() const
 	return stricmp(it->second.str(), "no") != 0;
 }
 
+// GeneralsX @tweak Claude 18/10/2026 Options.ini SoftParticles turns the DXVK depth-aware soft-particle blend on or
+// off. It is the most expensive post pass in a heavy battle (deploy measured +5-10 fps with it off), so it is off
+// unless set to "yes", mirroring the ModelNormalMaps opt-in. Players who prefer the softer smoke opt in.
+Bool OptionPreferences::getSoftParticlesEnabled() const
+{
+	OptionPreferences::const_iterator it = find("SoftParticles");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
 // GeneralsX @performance Claude 16/10/2026 Options.ini PerfOverlay = yes turns on the frame profiler: a [PERF]
 // summary on stderr every PerfInterval seconds and a small text overlay in the top left corner.
 Bool OptionPreferences::getPerfOverlayEnabled() const
