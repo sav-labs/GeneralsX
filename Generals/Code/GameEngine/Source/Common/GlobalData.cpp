@@ -973,7 +973,7 @@ GlobalData::GlobalData()
 	m_terrainDetailStrength = 0.7f;
 	m_terrainRelief = TRUE;
 	m_terrainSoftBlend = TRUE;
-	m_modelNormalMaps = FALSE;	// GeneralsX @bugfix Claude 17/10/2026 off by default until verified on hardware
+	m_modelNormalMaps = TRUE;	// GeneralsX @tweak Claude 19/10/2026 on by default (models without a _n map render as before)
 	m_modelSpecular = 1.0f;
 
 //	m_languageFilterPref = false;
