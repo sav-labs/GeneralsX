@@ -395,6 +395,8 @@ public:
 	Bool m_cameraTestBattle;				///< Spawn a hostile column facing the convoy and orbit the fight
 	Int m_cameraTestBattleUnits;			///< Units in the -camtest battle scene, both sides together, 0 for the default
 	Bool m_cameraTestNight;					///< Switch the -camtest match to night when it starts
+	// GeneralsX @feature Claude 18/10/2026 Infantry -camtest flight requested with -camtest [seconds] infantry [units]
+	Bool m_cameraTestInfantry;				///< Fill the battle scene with infantry squads and bring the camera in close
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation

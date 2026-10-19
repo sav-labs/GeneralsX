@@ -923,6 +923,12 @@ Int parseCameraTest(char *args[], int num)
 		{
 			TheWritableGlobalData->m_cameraTestBattle = TRUE;
 		}
+		// GeneralsX @feature Claude 18/10/2026 "infantry" reuses the battle scene but spawns infantry squads and a close camera
+		else if (stricmp(token, "infantry") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestInfantry = TRUE;
+			TheWritableGlobalData->m_cameraTestBattle = TRUE;
+		}
 		else if (stricmp(token, "night") == 0)
 		{
 			TheWritableGlobalData->m_cameraTestNight = TRUE;
