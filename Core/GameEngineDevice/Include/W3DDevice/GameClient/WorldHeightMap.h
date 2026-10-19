@@ -336,7 +336,13 @@ public: // Read tile utilities. jba [7/9/2003]
 	// GeneralsX @feature Claude 15/10/2026 isLegacyGrid becomes the source cell size in pixels
 	// (32..2048, power of two) so 2x/4x/8x upscaled sheets are sliced on their real grid.
 	// readTiles derives it from numRows when 0 is passed.
-	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows, Int srcCellExtent=0);
+	// GeneralsX @bugfix Claude 19/10/2026 smoothUpscale: when a sub-native source cell is blown
+	// up into the 256px destination tile (scale>1), reconstruct the destination with a bilinear
+	// filter instead of nearest-neighbor block replication. Fixes the blocky "checkerboard"
+	// look of retail-resolution tree/bush billboards after the 64->256 tile bump. Off by
+	// default so terrain tiles stay byte-identical; only the tree atlas opts in.
+	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows, Int srcCellExtent=0,
+			Bool smoothUpscale=false);
 	static Int countTiles(InputStream *pStrm, Bool *halfTile=nullptr, Int expectedTileCount=0, Int *pSrcCellExtent=nullptr);
 
 protected:
