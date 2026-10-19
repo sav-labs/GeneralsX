@@ -172,8 +172,13 @@ int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
 				UnsignedByte *pBGR = pTile->getRGBDataForWidth(tilePixelExtent);
 				pBGR += (tilePixelExtent-(1+j))*TILE_BYTES_PER_PIXEL*tilePixelExtent; // invert to match.
 				Int row = position.y+j;
+				// GeneralsX @bugfix Claude 19/10/2026 Use the locked surface pitch, not Width*bpp.
+				// A DXVK surface can have a padded pitch (Pitch > Width*pixelBytes), so stepping by
+				// Width*pixelBytes wrote each tile row to the wrong offset and sheared the atlas at
+				// mip 0. Distant tree/bush tiles then sampled garbage and rendered as a colour-block
+				// checkerboard. locked_rect.Pitch is the real byte stride of one destination row.
 				UnsignedByte *pBGRA = ((UnsignedByte*)locked_rect.pBits) +
-							(row)*surface_desc.Width*pixelBytes;
+							(row)*locked_rect.Pitch;
 
 				Int column = position.x;
 				pBGRA += column*pixelBytes;
