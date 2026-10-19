@@ -63,6 +63,9 @@ UNITS = {
         "procedural": True, "highpoly": 0.6,
         # The engine lights the baked normal map (_n.dds), so only a trace of that relief goes into the colour.
         "relief": 0.3,
+        # Cap the baked tangent-normal tilt: the flat hull sides and side skirts baked a slow gradient that lit
+        # as pale pink-white bands in game; 0.6 flattens those without losing the plate-edge and bolt detail.
+        "normal_tilt_max": 0.6,
         # Hard edges above 35 degrees: plates shade flat, rounded castings (mantlet, wheels) stay smooth.
         "hard": 35.0,
         # Thousands of small islands (fittings, cut-up castings) took half the atlas: fewer, larger islands,

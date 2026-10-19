@@ -1107,8 +1107,26 @@ def normal_map(spec, size=1024):
     nrm[invalid, 0] = 0.5
     nrm[invalid, 1] = 0.5
     nrm[invalid, 2] = 1.0
+    # GeneralsX @bugfix Claude 19/10/2026 The selected-to-active tangent bake records the low mesh's smooth
+    # shading across large flat plates (hull sides, side skirts) as a slow colour gradient, and ray misses
+    # leave single-texel speckle. The 18/10 fix only neutralised texels pointing away (Z < 0.5); these keep
+    # Z >= 0.5, survive, and light as the pale pink-white bands on the hull sides under ModelNormalMaps = yes.
+    # Cap the in-plane tilt so no plate catches a blown highlight, then a 3x3 median removes the speckle.
+    # "normal_tilt_max" (the largest |xy| a texel may tilt, 1.0 = off) is per spec so only reviewed units opt in.
+    tmax = spec.get("normal_tilt_max", 1.0)
+    if tmax < 1.0:
+        nx, ny = (nrm[..., 0] - 0.5) * 2.0, (nrm[..., 1] - 0.5) * 2.0
+        scale = np.minimum(1.0, tmax / np.maximum(np.hypot(nx, ny), 1e-6))
+        nx, ny = nx * scale, ny * scale
+        nrm[..., 0], nrm[..., 1] = nx * 0.5 + 0.5, ny * 0.5 + 0.5
+        nrm[..., 2] = np.sqrt(np.clip(1.0 - nx * nx - ny * ny, 0.0, 1.0)) * 0.5 + 0.5
     rgba = np.empty(nrm.shape, np.float32)
     rgba[..., :3] = nrm[..., :3]
     rgba[..., 3] = gloss[..., 0] * np.clip(0.35 + ao[..., 0], 0, 1)
     img = Image.fromarray((np.clip(rgba, 0, 1) * 255 + 0.5).astype(np.uint8), "RGBA")
+    if tmax < 1.0:
+        from PIL import ImageFilter
+        r, g, b, a = img.split()
+        med = ImageFilter.MedianFilter(3)
+        img = Image.merge("RGBA", (r.filter(med), g.filter(med), b.filter(med), a))
     return img.resize((size, size), Image.Resampling.LANCZOS) if img.width != size else img
