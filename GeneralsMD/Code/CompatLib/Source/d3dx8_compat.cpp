@@ -217,22 +217,40 @@ D3DXLoadSurfaceFromSurface(
 	// Create two levels of mips, 0 and 1
 	gli::texture2d texSrc(imageFormat, gli::extent2d(descSrc.Width, descSrc.Height), 2);
 
-	// Copy the data to level 0
-	memcpy(texSrc.data(), srcRect.pBits, texSrc.size());
+	// GeneralsX @bugfix Claude 19/10/2026 Respect the surface pitch when copying to and from the
+	// gli texture. A locked DXVK surface can have a padded pitch (Pitch > Width * bytesPerPixel),
+	// especially for the smaller mip levels. The old code did a flat memcpy of texSrc.size() and
+	// compared mipMap.size(1) against destRect.Pitch * Height, both of which assumed tight packing.
+	// With a padded destination pitch the comparison failed, this call returned D3DERR_INVALIDCALL,
+	// and D3DXFilterTexture (which ignores the return value) left that mip level as uninitialized
+	// garbage. Distant tree/bush atlas tiles then sampled a garbage mip and rendered as a
+	// colour-block checkerboard. gli stores each level tightly packed (row stride = Width * bpp).
+	const UINT bytesPerPixel = (imageFormat == gli::format::FORMAT_A1RGB5_UNORM_PACK16) ? 2u : 4u;
+	const UINT srcRowBytes = descSrc.Width * bytesPerPixel;
+	for (UINT row = 0; row < descSrc.Height; ++row)
+		memcpy((unsigned char *)texSrc.data() + row * srcRowBytes,
+			(const unsigned char *)srcRect.pBits + row * srcRect.Pitch,
+			srcRowBytes);
+
 	// Generate mip 1 from level 0
 	gli::texture2d mipMap = gli::generate_mipmaps(texSrc, gli::filter::FILTER_LINEAR);
 
-	if (mipMap.size(1) != destRect.Pitch * descDest.Height)
+	if ((UINT)mipMap.extent(1).x != descDest.Width || (UINT)mipMap.extent(1).y != descDest.Height)
 	{
-		// The generated dimension would not be the same as the destination
-		// This does not happen in the game, yet let's not allow it
+		// The generated mip does not match the destination dimensions (not a clean 2x halving).
+		// This does not happen in the game, yet let's not allow it.
 		pDestSurface->UnlockRect();
 		pSrcSurface->UnlockRect();
 		return D3DERR_INVALIDCALL;
 	}
 
-	// Copy mip level 1 to the destination
-	memcpy(destRect.pBits, mipMap.data(0,0,1), destRect.Pitch * descDest.Height);
+	// Copy mip level 1 to the destination, respecting the destination pitch.
+	const UINT dstRowBytes = descDest.Width * bytesPerPixel;
+	const unsigned char *mipSrc = (const unsigned char *)mipMap.data(0, 0, 1);
+	for (UINT row = 0; row < descDest.Height; ++row)
+		memcpy((unsigned char *)destRect.pBits + row * destRect.Pitch,
+			mipSrc + row * dstRowBytes,
+			dstRowBytes);
 
 	pDestSurface->UnlockRect();
 	pSrcSurface->UnlockRect();
