@@ -286,11 +286,17 @@ def collect(root):
 # GeneralsX @feature Claude 18/10/2026 Retail model names read from the untouched ZH 1.04 Object/AmericaVehicle.ini
 # (DefaultConditionState / REALLYDAMAGED Model=), the same source the infantry remap uses.
 # GeneralsX @bugfix Claude 19/10/2026 The black upper surfaces were the convex-hull shadow shells the bake emitted as
-# visible opaque meshes (fixed in import_src.py), not the normal map. These six vehicles are confirmed clean by an
-# in-game PC frame (usa6-*.jpg). The Stryker (AVGXMICRO) and Avenger (AVGXAVNG) are held until they are framed too.
+# visible opaque meshes (fixed in import_src.py), not the normal map. Six of these (Abrams, Paladin, MLRS, JLTV, ambulance,
+# dozer) are confirmed clean by an in-game PC frame (usa6-*.jpg) and shipped in #107. The Stryker (AVGXMICRO) and Avenger
+# (AVGXAVNG) are re-added here ONLY for a -camtest usa framing build (they missed the first lineup on wrong template names);
+# this HD_REMAP is NOT for merge until their frames pass, then they are trimmed back to the verified set.
 HD_REMAP = {
     "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
     "AVGXMBT_D": ("AVLeopard_D", None),
+    "AVGXMICRO": ("AVTHUNDRBLT", "Microwave Tank -> Stryker M1126"),
+    "AVGXMICRO_D": ("AVTHUNDRBLT_D", None),
+    "AVGXAVNG": ("AVAVNGER", "Avenger -> M1097 Avenger"),
+    "AVGXAVNG_D": ("AVAVNGER_D", None),
     "AVGXPAL": ("AVPaladin", "Paladin -> M109 self-propelled howitzer"),
     "AVGXPAL_D": ("AVPaladin_D", None),
     "AVGXMLRS": ("AVTomahawk", "Tomahawk -> M270 MLRS"),

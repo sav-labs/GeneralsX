@@ -145,31 +145,34 @@ constexpr const Real CameraTestInfantryHeightScale = 0.5f;		///< Infantry orbit 
 // GeneralsX @feature Claude 19/10/2026 USA lineup flight. One stationary row of vehicles, the camera dollies along it.
 constexpr const Int CameraTestLineupMax = 12;							///< Upper bound on vehicles in the row
 constexpr const Real CameraTestLineupSpacing = 60.0f;				///< Distance between neighbouring vehicles along the row
-constexpr const Real CameraTestLineupLead = 170.0f;					///< Distance of the row ahead of the start position, towards the map center
+constexpr const Real CameraTestLineupLead = 240.0f;					///< Distance of the row ahead of the start position, towards the map center (far enough that the low camera clears the base buildings)
 constexpr const Real CameraTestLineupHeightScale = 0.55f;		///< Camera height as a fraction of the minimum zoom height
 constexpr const Real CameraTestLineupMinHeight = 45.0f;			///< Lowest camera height above the ground
 constexpr const Real CameraTestLineupPitch = DEG_TO_RADF(22.0f);	///< Lower than the default 37.5, so the view looks across the vehicles
 constexpr const Real CameraTestLineupMargin = 0.65f;				///< The dolly starts and ends this far short of the row ends, so no shot is half a vehicle
 
 /// GeneralsX @feature Claude 19/10/2026 The detailed USA vehicles, in display order. Each row lists the retail ThingTemplate
-/// names (in HD this slot draws the detailed model) with fallbacks, so a name the game does not know is skipped.
+/// names (in HD this slot draws the detailed model) with fallbacks, so a name the game does not know is skipped. The keyword
+/// is a last resort: when none of the names match, the first America vehicle whose name contains the keyword is used, so a
+/// vehicle whose exact retail name we do not know (the Stryker/Microwave and the Avenger) is still found.
 struct CameraTestLineupUnit
 {
 	const char *preferred;
 	const char *fallback1;
 	const char *fallback2;
+	const char *keyword;
 };
 
 const CameraTestLineupUnit CameraTestUsaLineup[] =
 {
-	{ "AmericaTankCrusader", "", "" },											///< Abrams (AVLeopard slot)
-	{ "AmericaVehicleMicrowaveTank", "AmericaVehicleMicrowave", "" },	///< Stryker (AVTHUNDRBLT slot)
-	{ "AmericaTankPaladin", "AmericaVehiclePaladin", "" },			///< M109 (AVPaladin slot)
-	{ "AmericaVehicleTomahawk", "", "" },										///< M270 MLRS (AVTomahawk slot)
-	{ "AmericaVehicleAvenger", "", "" },										///< Avenger (AVAVNGER slot)
-	{ "AmericaVehicleHumvee", "", "" },											///< JLTV (AVHUMMER slot)
-	{ "AmericaVehicleAmbulance", "AmericaVehicleMedic", "" },		///< Ambulance (AVAmbulance slot)
-	{ "AmericaVehicleDozer", "AmericaDozer", "AmericaVehicleBulldozer" },	///< Dozer (AVCONSTDOZ slot)
+	{ "AmericaTankCrusader", "", "", "Crusader" },									///< Abrams (AVLeopard slot)
+	{ "AmericaVehicleMicrowaveTank", "AmericaVehicleMicrowave", "", "Microwave" },	///< Stryker (AVTHUNDRBLT slot)
+	{ "AmericaTankPaladin", "AmericaVehiclePaladin", "", "Paladin" },		///< M109 (AVPaladin slot)
+	{ "AmericaVehicleTomahawk", "", "", "Tomahawk" },								///< M270 MLRS (AVTomahawk slot)
+	{ "AmericaVehicleAvenger", "", "", "Avenger" },									///< Avenger (AVAVNGER slot)
+	{ "AmericaVehicleHumvee", "", "", "Humvee" },									///< JLTV (AVHUMMER slot)
+	{ "AmericaVehicleAmbulance", "AmericaVehicleMedic", "", "Ambulance" },	///< Ambulance (AVAmbulance slot)
+	{ "AmericaVehicleDozer", "AmericaDozer", "AmericaVehicleBulldozer", "Dozer" },	///< Dozer (AVCONSTDOZ slot)
 };
 
 // GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
@@ -289,6 +292,53 @@ const CameraTestSideUnits &getCameraTestSideUnits(const Player *player)
 			return CameraTestSides[i];
 	}
 	return CameraTestSides[0];
+}
+
+/// GeneralsX @feature Claude 19/10/2026 Case-insensitive "haystack contains needle".
+Bool cameraTestNameContains(const char *haystack, const char *needle)
+{
+	if (haystack == nullptr || needle == nullptr || needle[0] == '\0')
+		return FALSE;
+	for (const char *h = haystack; *h != '\0'; ++h)
+	{
+		const char *a = h;
+		const char *b = needle;
+		while (*a != '\0' && *b != '\0')
+		{
+			char ca = *a;
+			char cb = *b;
+			if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+			if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+			if (ca != cb)
+				break;
+			++a;
+			++b;
+		}
+		if (*b == '\0')
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/// GeneralsX @feature Claude 19/10/2026 Last-resort lookup for the USA lineup: the first America vehicle template whose name
+/// contains the keyword, so a vehicle whose exact retail ThingTemplate name is not known (the Stryker/Microwave and the
+/// Avenger) is still found. Restricted to KINDOF_VEHICLE America objects so it does not pick a turret sub-object or upgrade.
+const ThingTemplate *findCameraTestTemplateByKeyword(const char *keyword)
+{
+	if (keyword == nullptr || keyword[0] == '\0' || TheThingFactory == nullptr)
+		return nullptr;
+	for (const ThingTemplate *thingTemplate = TheThingFactory->firstTemplate();
+		thingTemplate != nullptr; thingTemplate = thingTemplate->friend_getNextTemplate())
+	{
+		if (!thingTemplate->isKindOf(KINDOF_VEHICLE))
+			continue;
+		const AsciiString &name = thingTemplate->getName();
+		if (!name.startsWithNoCase("America"))
+			continue;
+		if (cameraTestNameContains(name.str(), keyword))
+			return thingTemplate;
+	}
+	return nullptr;
 }
 
 /// First template of the list that exists, so a missing unit falls back to another one.
@@ -1042,6 +1092,8 @@ Bool spawnCameraTestLineup()
 	{
 		const ThingTemplate *thingTemplate = findCameraTestTemplate(
 			CameraTestUsaLineup[i].preferred, CameraTestUsaLineup[i].fallback1, CameraTestUsaLineup[i].fallback2);
+		if (thingTemplate == nullptr)
+			thingTemplate = findCameraTestTemplateByKeyword(CameraTestUsaLineup[i].keyword);
 		if (thingTemplate != nullptr)
 			templates[count++] = thingTemplate;
 	}

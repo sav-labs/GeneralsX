@@ -85,6 +85,8 @@ jobs:
       matrix:
         unit:
           - crusader_m1a2
+          - microwave
+          - avenger
           - paladin
           - tomahawk
           - humvee
