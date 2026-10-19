@@ -1045,6 +1045,7 @@ GlobalData::GlobalData()
 	m_cameraTestInfantry = FALSE;
 	// GeneralsX @feature Claude 19/10/2026 USA lineup -camtest flight requested with -camtest usa
 	m_cameraTestUsa = FALSE;
+	m_cameraTestUsaBld = FALSE;
 
 	m_simulateReplays.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;

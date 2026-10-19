@@ -959,6 +959,10 @@ Int parseCameraTest(char *args[], int num)
 		{
 			TheWritableGlobalData->m_cameraTestUsa = TRUE;
 		}
+		else if (stricmp(token, "usabld") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestUsaBld = TRUE;
+		}
 		else if (TheWritableGlobalData->m_cameraTestBattle && token[0] >= '0' && token[0] <= '9')
 		{
 			TheWritableGlobalData->m_cameraTestBattleUnits = atoi(token);

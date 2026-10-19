@@ -399,6 +399,8 @@ public:
 	Bool m_cameraTestInfantry;				///< Fill the battle scene with infantry squads and bring the camera in close
 	// GeneralsX @feature Claude 19/10/2026 USA lineup -camtest flight requested with -camtest [seconds] usa
 	Bool m_cameraTestUsa;					///< Spawn one of each USA vehicle in a stationary row and dolly the camera low and close along it
+	// GeneralsX @feature Claude 19/10/2026 USA buildings -camtest flight requested with -camtest [seconds] usabld
+	Bool m_cameraTestUsaBld;				///< Spawn one of each USA base structure in a stationary row and dolly the camera over them
 
 	std::vector<AsciiString> m_simulateReplays; ///< If not empty, simulate this list of replays and exit.
 	Int m_simulateReplayJobs; ///< Maximum number of processes to use for simulation, or SIMULATE_REPLAYS_SEQUENTIAL for sequential simulation

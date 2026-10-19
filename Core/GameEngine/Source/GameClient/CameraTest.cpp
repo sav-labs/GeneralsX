@@ -151,6 +151,13 @@ constexpr const Real CameraTestLineupMinHeight = 45.0f;			///< Lowest camera hei
 constexpr const Real CameraTestLineupPitch = DEG_TO_RADF(22.0f);	///< Lower than the default 37.5, so the view looks across the vehicles
 constexpr const Real CameraTestLineupMargin = 0.65f;				///< The dolly starts and ends this far short of the row ends, so no shot is half a vehicle
 
+// GeneralsX @feature Claude 19/10/2026 USA buildings flight (-camtest usabld). Reuses the lineup dolly, but the structures are
+// large, so they are spaced wider, placed further out and framed from a higher, slightly steeper camera.
+constexpr const Real CameraTestBuildingSpacing = 150.0f;			///< Distance between neighbouring structures along the row
+constexpr const Real CameraTestBuildingLead = 340.0f;				///< Distance of the row ahead of the start position (further than the vehicles so the higher camera clears the base)
+constexpr const Real CameraTestBuildingHeight = 240.0f;			///< Fixed camera height: structures are tall and deep
+constexpr const Real CameraTestBuildingPitch = DEG_TO_RADF(32.0f);	///< A little steeper than the vehicle dolly to look down over the structures
+
 /// GeneralsX @feature Claude 19/10/2026 The detailed USA vehicles, in display order. Each row lists the retail ThingTemplate
 /// names (in HD this slot draws the detailed model) with fallbacks, so a name the game does not know is skipped. The keyword
 /// is a last resort: when none of the names match, the first America vehicle whose name contains the keyword is used, so a
@@ -173,6 +180,24 @@ const CameraTestLineupUnit CameraTestUsaLineup[] =
 	{ "AmericaVehicleHumvee", "", "", "Humvee" },									///< JLTV (AVHUMMER slot)
 	{ "AmericaVehicleAmbulance", "AmericaVehicleMedic", "", "Ambulance" },	///< Ambulance (AVAmbulance slot)
 	{ "AmericaVehicleDozer", "AmericaDozer", "AmericaVehicleBulldozer", "Dozer" },	///< Dozer (AVCONSTDOZ slot)
+};
+
+/// GeneralsX @feature Claude 19/10/2026 The USA base structures, in display order, framed by -camtest usabld. The preferred
+/// names are the retail ThingTemplate names from FactionBuilding.ini; the keyword is a last resort (the first KINDOF_STRUCTURE
+/// America template whose name contains it), so a structure whose exact name the game does not know is still found.
+const CameraTestLineupUnit CameraTestUsaBuildings[] =
+{
+	{ "AmericaCommandCenter", "", "", "CommandCenter" },			///< ABBtCmdHQ slot
+	{ "AmericaPowerPlant", "", "", "PowerPlant" },					///< ABPWRPLANT slot
+	{ "AmericaBarracks", "", "", "Barracks" },						///< ABBARRACKS slot
+	{ "AmericaWarFactory", "", "", "WarFactory" },					///< ABWarFact slot
+	{ "AmericaSupplyCenter", "", "", "SupplyCenter" },				///< ABSupplyCT slot
+	{ "AmericaStrategyCenter", "", "", "StrategyCenter" },			///< ABStrategy slot
+	{ "AmericaAirfield", "", "", "Airfield" },						///< ABArFrcCmd slot
+	{ "AmericaParticleCannonUplink", "", "", "ParticleCannon" },	///< ABSDILink slot
+	{ "AmericaSupplyDropZone", "", "", "SupplyDrop" },				///< ABSupDrop slot
+	{ "AmericaPatriotBattery", "", "", "Patriot" },					///< ABPatriot slot
+	{ "AmericaFireBase", "", "", "FireBase" },						///< ABFIREBASE slot
 };
 
 // GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
@@ -246,6 +271,10 @@ struct CameraTestState
 	Real lineupHalf;												///< Half the length of the row
 	ObjectID lineupUnits[CameraTestLineupMax];	///< Spawned vehicles, left to right
 	Int lineupCount;
+
+	// GeneralsX @feature Claude 19/10/2026 USA buildings flight: the lineup dolly over the base structures (reuses the lineup
+	// state above; this flag only raises the camera for the larger structures)
+	Bool buildings;
 };
 
 CameraTestState s_cameraTest;
@@ -320,17 +349,18 @@ Bool cameraTestNameContains(const char *haystack, const char *needle)
 	return FALSE;
 }
 
-/// GeneralsX @feature Claude 19/10/2026 Last-resort lookup for the USA lineup: the first America vehicle template whose name
-/// contains the keyword, so a vehicle whose exact retail ThingTemplate name is not known (the Stryker/Microwave and the
-/// Avenger) is still found. Restricted to KINDOF_VEHICLE America objects so it does not pick a turret sub-object or upgrade.
-const ThingTemplate *findCameraTestTemplateByKeyword(const char *keyword)
+/// GeneralsX @feature Claude 19/10/2026 Last-resort lookup for the USA lineup: the first America template of the given kind
+/// whose name contains the keyword, so an object whose exact retail ThingTemplate name is not known (the Stryker/Microwave and
+/// the Avenger, or a structure) is still found. Restricted to KINDOF_<kind> America objects so it does not pick a sub-object.
+/// GeneralsX @tweak Claude 19/10/2026 kind defaults to KINDOF_VEHICLE; the buildings flight passes KINDOF_STRUCTURE.
+const ThingTemplate *findCameraTestTemplateByKeyword(const char *keyword, KindOfType kind = KINDOF_VEHICLE)
 {
 	if (keyword == nullptr || keyword[0] == '\0' || TheThingFactory == nullptr)
 		return nullptr;
 	for (const ThingTemplate *thingTemplate = TheThingFactory->firstTemplate();
 		thingTemplate != nullptr; thingTemplate = thingTemplate->friend_getNextTemplate())
 	{
-		if (!thingTemplate->isKindOf(KINDOF_VEHICLE))
+		if (!thingTemplate->isKindOf(kind))
 			continue;
 		const AsciiString &name = thingTemplate->getName();
 		if (!name.startsWithNoCase("America"))
@@ -1133,6 +1163,92 @@ Bool spawnCameraTestLineup()
 	return s.lineup;
 }
 
+/// GeneralsX @feature Claude 19/10/2026 Spawns one stationary row of the USA base structures and stores the lineup state so the
+/// dolly (applyCameraTestLineupPose) slides over them. Mirrors spawnCameraTestLineup, but with the structure list, wider spacing,
+/// a further lead and the buildings flag (which raises the camera). The structures are placed intact and face the start position.
+Bool spawnCameraTestBuildings()
+{
+	CameraTestState &s = s_cameraTest;
+	s.lineup = FALSE;
+	s.buildings = FALSE;
+	s.lineupCount = 0;
+
+	if (ThePlayerList == nullptr || TheThingFactory == nullptr || ThePartitionManager == nullptr || TheTerrainLogic == nullptr)
+		return FALSE;
+
+	Player *player = ThePlayerList->getLocalPlayer();
+	Team *team = player != nullptr ? player->getDefaultTeam() : nullptr;
+	if (team == nullptr)
+	{
+		fprintf(stderr, "[CAMTEST] buildings: no local player team, nothing spawned\n");
+		fflush(stderr);
+		return FALSE;
+	}
+
+	const Coord2D forward = s.panDir;	// start position -> map center
+	Coord2D right;
+	right.x = -forward.y;
+	right.y = forward.x;
+
+	// The structures face back towards the start position, so the camera (between the start position and the row) sees their fronts
+	Coord2D back;
+	back.x = -forward.x;
+	back.y = -forward.y;
+	const Real faceAngle = back.toAngle();
+
+	Coord2D center;
+	center.x = s.startPos.x + forward.x * CameraTestBuildingLead;
+	center.y = s.startPos.y + forward.y * CameraTestBuildingLead;
+
+	// Collect the templates that exist, so a missing structure just leaves a shorter row
+	const ThingTemplate *templates[CameraTestLineupMax];
+	Int count = 0;
+	for (Int i = 0; i < ARRAY_SIZE(CameraTestUsaBuildings) && count < CameraTestLineupMax; ++i)
+	{
+		const ThingTemplate *thingTemplate = findCameraTestTemplate(
+			CameraTestUsaBuildings[i].preferred, CameraTestUsaBuildings[i].fallback1, CameraTestUsaBuildings[i].fallback2);
+		if (thingTemplate == nullptr)
+			thingTemplate = findCameraTestTemplateByKeyword(CameraTestUsaBuildings[i].keyword, KINDOF_STRUCTURE);
+		if (thingTemplate != nullptr)
+			templates[count++] = thingTemplate;
+	}
+
+	if (count == 0)
+	{
+		fprintf(stderr, "[CAMTEST] buildings: no USA structure templates found, nothing spawned\n");
+		fflush(stderr);
+		return FALSE;
+	}
+
+	const Real half = (Real)(count - 1) * 0.5f * CameraTestBuildingSpacing;
+	for (Int i = 0; i < count; ++i)
+	{
+		const Real offset = (Real)i * CameraTestBuildingSpacing - half;
+		Coord2D pos;
+		pos.x = center.x + right.x * offset;
+		pos.y = center.y + right.y * offset;
+
+		// dest == pos and hold == TRUE: no order is given, the structure keeps its spawn position and facing
+		Object *obj = spawnCameraTestUnit(templates[i], team, pos, faceAngle, pos, FALSE, TRUE);
+		if (obj != nullptr)
+		{
+			s.lineupUnits[s.lineupCount++] = obj->getID();
+			fprintf(stderr, "[CAMTEST] buildings %d: %s at (%.1f, %.1f)\n", i, templates[i]->getName().str(), pos.x, pos.y);
+		}
+	}
+
+	s.lineupCenter = center;
+	s.lineupDir = right;
+	s.lineupHalf = half;
+	s.lineup = s.lineupCount > 0;
+	s.buildings = s.lineup;
+
+	fprintf(stderr, "[CAMTEST] buildings start: %d structures, center (%.1f, %.1f), spacing %.0f, facing the start position\n",
+		s.lineupCount, center.x, center.y, CameraTestBuildingSpacing);
+	fflush(stderr);
+	return s.lineup;
+}
+
 /// GeneralsX @feature Claude 19/10/2026 Dollies the camera along the row for the given flight time, counted in logic frames:
 /// the pivot slides from one end of the row to the other at a low, close height with a low pitch and a fixed yaw (the default
 /// start angle, which looks from the start position across the row the vehicles face), so each vehicle passes large through
@@ -1152,11 +1268,14 @@ void applyCameraTestLineupPose(Real flightSeconds)
 	pivot.y = s.lineupCenter.y + s.lineupDir.y * along;
 	pivot.z = TheTerrainLogic != nullptr ? TheTerrainLogic->getGroundHeight(pivot.x, pivot.y) : 0.0f;
 
-	const Real height = max(s.minHeight * CameraTestLineupHeightScale, CameraTestLineupMinHeight);
+	// GeneralsX @feature Claude 19/10/2026 The structures are large, so the buildings flight holds a fixed higher camera and a
+	// slightly steeper pitch; the vehicle lineup keeps its low, close height.
+	const Real height = s.buildings ? CameraTestBuildingHeight : max(s.minHeight * CameraTestLineupHeightScale, CameraTestLineupMinHeight);
+	const Real pitch = s.buildings ? CameraTestBuildingPitch : CameraTestLineupPitch;
 
 	TheTacticalView->lookAt(&pivot);
 	TheTacticalView->setAngle(s.startAngle);
-	TheTacticalView->setPitch(CameraTestLineupPitch);
+	TheTacticalView->setPitch(pitch);
 	if (s.maxHeight > 0.0f)
 	{
 		// setZoom is not clamped to the minimum zoom height, so the close-up height holds
@@ -1201,12 +1320,15 @@ void beginCameraTestFlight()
 	// GeneralsX @feature Claude 19/10/2026 The USA lineup spawns one stationary row of vehicles instead of the convoy or battle
 	const Bool lineup = TheGlobalData->m_cameraTestUsa && spawnCameraTestLineup();
 
+	// GeneralsX @feature Claude 19/10/2026 The USA buildings flight spawns one stationary row of the base structures instead
+	const Bool buildings = !lineup && TheGlobalData->m_cameraTestUsaBld && spawnCameraTestBuildings();
+
 	// GeneralsX @feature Claude 16/10/2026 The battle flight spawns two hostile columns instead of the convoy; without an
 	// enemy player it falls back to the regular flight
-	const Bool battle = !lineup && TheGlobalData->m_cameraTestBattle && beginCameraTestBattle();
+	const Bool battle = !lineup && !buildings && TheGlobalData->m_cameraTestBattle && beginCameraTestBattle();
 
 	// The convoy drives from near the start position to about the map center
-	if (!battle && !lineup)
+	if (!battle && !lineup && !buildings)
 		spawnCameraTestConvoy(distanceToCenter);
 	s.hasCentroid = FALSE;
 	s.hasFollowPivot = FALSE;
@@ -1215,7 +1337,7 @@ void beginCameraTestFlight()
 	s.flightFrame = TheGameLogic->getFrame();
 	s.closeShot = -1;
 	s.closeTargetCount = 0;
-	if (TheGlobalData->m_cameraTestClose && !battle && !lineup)
+	if (TheGlobalData->m_cameraTestClose && !battle && !lineup && !buildings)
 	{
 		chooseCameraTestCloseTargets();
 		fprintf(stderr, "[CAMTEST] close start: logic frame %u, %.1f s along the convoy, %d building(s), height %.1f (min zoom %.1f), pitch %.1f\n",
@@ -1374,6 +1496,7 @@ void UpdateCameraTest()
 		s.battleCount[1] = 0;
 		s.lineup = FALSE;
 		s.lineupCount = 0;
+		s.buildings = FALSE;
 		return;
 	}
 
