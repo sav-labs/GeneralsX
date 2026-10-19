@@ -8,3 +8,12 @@ tomahawk 53c53a112c674d29a2afdbddbe3cecb5  # M142 HIMARS | FREE MODEL | ANIMATIO
 microwave b0c559a02c1842b0976a241c9a998360  # M1126 Infantry Carrier Vehicle / cenobyte, CC-BY, 122141 faces
 avenger 93b93eebe86043a29a61d118e6df49e4  # M1097 Avenger | Medium-Quality model / scout., CC-BY, 192312 faces
 bulldozer b06a715d23a7450babac383b8bb7fb0a  # Bulldozer / semyon.kan, CC-BY, 111485 faces
+# USA base structures (path B). Picked from the model-candidates contact sheets; probe.json confirmed barracks
+# and airfield carry clean 1024 PBR maps. The weak queries (command_center, war_factory, supply_center,
+# particle_uplink, supply_drop) are left unpicked pending a better search pass.
+barracks 6bf1d1cb834d433bb3cd169695d87bc2  # Small Barracks / creationwasteland, CC-BY, 4476 faces (1024 base/mr/normal)
+airfield a5b17ba2e3494873abd313f720097614  # Aircraft Hangar / jimbogies, CC-BY, 120828 faces (1024 PBR)
+patriot 7a64d0af78514a159877edab1ab2bccb  # MIM-104 Patriot Surface-To-Air Missile (SAM) / MirzaArrafiERV_45, CC-BY, 13649 faces
+power_plant f503dffe366648a58e565e6b3bee4583  # Coal Power Station / MRowa, CC-BY-SA, 4931 faces
+strategy_center 52982f5a24834be48dab4057d2df1c3d  # Devil's Slide Bunker - Pacifica, CA / azadbal, CC-BY, 90833 faces
+fire_base 7505cf94f8f0480a816089d59fb088b1  # Red Alert Allied Pillbox / Le.Manh.Cuong, CC-BY, 63821 faces

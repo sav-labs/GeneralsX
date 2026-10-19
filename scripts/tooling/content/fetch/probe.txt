@@ -2,14 +2,14 @@
 # best PBR-textured search hits. Results go to the model-candidates prerelease as probe_<uid>.glb.
 # Sourcing target: the eleven USA base structures (path B, real CC0/CC-BY models, same bake pipeline as
 # the vehicles). One query per building to pull a representative candidate; refine with uids after review.
-q: military command center building
+q: sci-fi command base building
 q: gas turbine power station
 q: military barracks building
-q: vehicle maintenance hangar
-q: military supply warehouse
+q: sci-fi vehicle factory building
+q: sci-fi supply depot building
 q: command bunker concrete
 q: aircraft hangar
-q: satellite ground station dish
-q: concrete helipad landing pad
+q: radio telescope dish
+q: rooftop helipad structure
 q: patriot missile launcher
 q: fortified gun bunker

@@ -37,15 +37,17 @@ UNITS = {
     "bulldozer": ["military bulldozer", "D9 bulldozer", "bulldozer"],
     # USA base structures. Real-world analogues of the Zero Hour buildings; picked for silhouette, not
     # exact identity. The sci-fi ones (strategy centre, particle uplink) map to the nearest real form.
-    "command_center": ["military command center", "army headquarters building", "modern military building"],
+    # Refined 19/10/2026: the first pass returned props (crates, helmets, interiors) for these five. Narrow to
+    # whole exterior structures (sci-fi RTS bases included) so the search ranks buildable silhouettes.
+    "command_center": ["sci-fi command base building", "rts base building", "futuristic military headquarters"],
     "power_plant": ["power plant building", "gas turbine power station", "industrial generator building"],
     "barracks": ["military barracks", "army barracks building", "military dormitory"],
-    "war_factory": ["vehicle maintenance hangar", "large industrial warehouse", "military workshop building"],
-    "supply_center": ["military warehouse", "supply depot building", "cargo distribution warehouse"],
+    "war_factory": ["sci-fi vehicle factory building", "rts war factory", "industrial steel hangar building"],
+    "supply_center": ["sci-fi supply depot building", "rts refinery building", "warehouse building exterior"],
     "strategy_center": ["command bunker", "military operations center", "modern concrete military building"],
     "airfield": ["aircraft hangar", "military hangar", "airfield control tower"],
-    "particle_uplink": ["satellite ground station", "radar dish array", "large antenna installation"],
-    "supply_drop": ["helipad structure", "cargo landing platform", "concrete landing pad"],
+    "particle_uplink": ["radio telescope dish", "large parabolic antenna", "deep space ground station"],
+    "supply_drop": ["helipad", "helicopter landing pad", "rooftop helipad structure"],
     "patriot": ["patriot missile launcher", "SAM launcher", "air defense missile launcher"],
     "fire_base": ["military bunker", "artillery bunker", "fortified gun bunker"],
 }
