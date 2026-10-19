@@ -287,9 +287,9 @@ def collect(root):
 # (DefaultConditionState / REALLYDAMAGED Model=), the same source the infantry remap uses.
 # GeneralsX @bugfix Claude 19/10/2026 The black upper surfaces were the convex-hull shadow shells the bake emitted as
 # visible opaque meshes (fixed in import_src.py), not the normal map. Six of these (Abrams, Paladin, MLRS, JLTV, ambulance,
-# dozer) are confirmed clean by an in-game PC frame (usa6-*.jpg) and shipped in #107. The Stryker (AVGXMICRO) and Avenger
-# (AVGXAVNG) are re-added here ONLY for a -camtest usa framing build (they missed the first lineup on wrong template names);
-# this HD_REMAP is NOT for merge until their frames pass, then they are trimmed back to the verified set.
+# dozer) were confirmed clean by an in-game PC frame (usa6-*.jpg) and shipped in #107. The Stryker (AVGXMICRO) and Avenger
+# (AVGXAVNG) missed that first lineup on wrong template names; the -camtest usa keyword fallback put them back in frame and
+# they are now confirmed clean too (usa8-*.jpg), so all eight ship.
 HD_REMAP = {
     "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
     "AVGXMBT_D": ("AVLeopard_D", None),
