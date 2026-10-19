@@ -1244,13 +1244,16 @@ Bool OptionPreferences::getTerrainSoftBlendEnabled() const
 // GeneralsX @feature Claude 16/10/2026 Options.ini ModelNormalMaps uses <texture>_n.dds/.tga normal and gloss
 // maps on unit and building models that have them.
 // GeneralsX @bugfix Claude 17/10/2026 Off unless set to "yes" until the renderer is verified on hardware.
+// GeneralsX @tweak Claude 19/10/2026 On by default now the renderer is verified: models without a <texture>_n
+// map render exactly as before (fixed-function path), so this only adds per-pixel detail where a normal map
+// exists. Players who want it off set ModelNormalMaps = no.
 Bool OptionPreferences::getModelNormalMapsEnabled() const
 {
 	OptionPreferences::const_iterator it = find("ModelNormalMaps");
 	if (it == end())
-		return FALSE;
+		return TRUE;
 
-	return stricmp(it->second.str(), "yes") == 0;
+	return stricmp(it->second.str(), "no") != 0;
 }
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini ModelSpecular scales the highlight from the gloss of the

@@ -41,7 +41,7 @@ Models without one render exactly as before.
 - The map's sun and its first fill light are applied per pixel with the normal map, plus a highlight from the
   gloss in the sun's colour (exponent 16). Ambient, a third map light and nearby explosion / fire lights stay
   per vertex, with the same attenuation as before, so brightness matches unchanged models.
-- Options.ini: `ModelNormalMaps = yes` turns the feature on (default no until verified on hardware); `ModelSpecular = 0..2` (default 1) scales the
+- Options.ini: `ModelNormalMaps = yes` turns the feature on (default yes; set `= no` to disable); `ModelSpecular = 0..2` (default 1) scales the
   highlight.
 
 ## Checking a model in game
