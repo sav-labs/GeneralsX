@@ -193,6 +193,51 @@ int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
 	if (WW3D::Get_Texture_Reduction()) {
 		DX8_ErrorCode(Peek_D3D_Texture()->SetLOD((DWORD)WW3D::Get_Texture_Reduction()));
 	}
+
+	// GeneralsX @diag Claude 19/10/2026 TEMPORARY tree/bush atlas diagnostic. Logs the atlas
+	// format/size/pitch per mip and dumps each mip to a PPM next to the exe so we can see whether
+	// the garbage is in mip 0 (atlas build), the lower mips (mip generation), or elsewhere -- and
+	// whether this path is even what renders the map bushes (if no [TREEDIAG] line appears, it is not).
+	{
+		IDirect3DTexture8 *diagTex = Peek_D3D_Texture();
+		UINT diagLevels = diagTex ? diagTex->GetLevelCount() : 0;
+		fprintf(stderr, "[TREEDIAG] atlas built: baseW=%u baseH=%u fmt=%d levels=%u numTiles=%d texReduction=%d\n",
+			surface_desc.Width, surface_desc.Height, (int)surface_desc.Format, diagLevels,
+			(int)buffer->getNumTiles(), (int)WW3D::Get_Texture_Reduction());
+		fflush(stderr);
+		for (UINT diagLvl = 0; diagTex && diagLvl < diagLevels && diagLvl < 12u; ++diagLvl) {
+			IDirect3DSurface8 *diagSurf = nullptr;
+			if (diagTex->GetSurfaceLevel(diagLvl, &diagSurf) != D3D_OK || !diagSurf)
+				continue;
+			D3DSURFACE_DESC dsd; diagSurf->GetDesc(&dsd);
+			D3DLOCKED_RECT dlr;
+			if (diagSurf->LockRect(&dlr, nullptr, D3DLOCK_READONLY) == D3D_OK) {
+				fprintf(stderr, "[TREEDIAG]  mip%u W=%u H=%u fmt=%d pitch=%u (W*4=%u)\n",
+					diagLvl, dsd.Width, dsd.Height, (int)dsd.Format, (unsigned)dlr.Pitch, dsd.Width * 4u);
+				fflush(stderr);
+				char diagName[64];
+				snprintf(diagName, sizeof(diagName), "tree_atlas_mip%u.ppm", diagLvl);
+				FILE *diagFile = fopen(diagName, "wb");
+				if (diagFile) {
+					fprintf(diagFile, "P6\n%u %u\n255\n", dsd.Width, dsd.Height);
+					for (UINT dy = 0; dy < dsd.Height; ++dy) {
+						const unsigned char *drow = (const unsigned char *)dlr.pBits + (size_t)dy * dlr.Pitch;
+						for (UINT dx = 0; dx < dsd.Width; ++dx) {
+							// A8R8G8B8 is stored as B,G,R,A bytes in memory.
+							unsigned char cb = drow[dx * 4u + 0];
+							unsigned char cg = drow[dx * 4u + 1];
+							unsigned char cr = drow[dx * 4u + 2];
+							fputc(cr, diagFile); fputc(cg, diagFile); fputc(cb, diagFile);
+						}
+					}
+					fclose(diagFile);
+				}
+				diagSurf->UnlockRect();
+			}
+			diagSurf->Release();
+		}
+	}
+
 	return(surface_desc.Height);
 }
 
