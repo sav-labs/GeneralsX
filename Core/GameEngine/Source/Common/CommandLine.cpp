@@ -1460,7 +1460,6 @@ static CommandLineParam paramsForStartup[] =
 	{ "-renderscale", parseRenderScale },
 	{ "-upscaler", parseUpscaler },
 	{ "-framegen", parseFrameGeneration },
-	{ "-modelNormalMaps", parseModelNormalMaps },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025
@@ -1498,6 +1497,12 @@ static CommandLineParam paramsForEngineInit[] =
 	{ "-noShellAnim", parseNoWindowAnimation }, // TheSuperHackers @tweak Is now available in Release builds.
 	{ "-xres", parseXRes },
 	{ "-yres", parseYRes },
+	// GeneralsX @bugfix claude 19/10/2026 -modelNormalMaps must be parsed in the engine-init pass,
+	// not the startup pass: GlobalData::parseGameDataDefinition copies Options.ini ModelNormalMaps into
+	// m_modelNormalMaps while loading GameData (GameEngine::init), which runs after the startup parse and
+	// would clobber the flag. parseCommandLineForEngineInit runs after that copy, same as -xres/-yres,
+	// so the flag now wins over Options.ini as intended.
+	{ "-modelNormalMaps", parseModelNormalMaps },
 	{ "-fullVersion", parseFullVersion },
 	{ "-particleEdit", parseParticleEdit },
 	{ "-scriptDebug", parseScriptDebug },
