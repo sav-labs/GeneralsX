@@ -85,13 +85,7 @@ jobs:
       matrix:
         unit:
           - crusader_m1a2
-          - microwave
-          - paladin
-          - tomahawk
-          - avenger
           - humvee
-          - ambulance
-          - bulldozer
 
     steps:
       - name: Checkout
