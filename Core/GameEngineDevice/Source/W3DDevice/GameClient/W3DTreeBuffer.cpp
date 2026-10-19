@@ -498,7 +498,11 @@ void W3DTreeBuffer::updateTexture()
 				m_treeTypes[i].m_tileWidth = width;
 				m_treeTypes[i].m_numTiles = numTiles;
 				m_treeTypes[i].m_halfTile = halfTile;
-				WorldHeightMap::readTiles(pStr, m_sourceTiles+m_treeTypes[i].m_firstTile, width, srcCellExtent);
+				// GeneralsX @bugfix Claude 19/10/2026 smoothUpscale=true: retail/low-res tree & bush
+				// billboards are sub-native (e.g. 32px cells) and get nearest-neighbor blown up 8x
+				// into the 256px atlas cell, producing the blocky "checkerboard" foliage. Bilinear
+				// reconstruction removes it. Terrain keeps the default (byte-identical) path.
+				WorldHeightMap::readTiles(pStr, m_sourceTiles+m_treeTypes[i].m_firstTile, width, srcCellExtent, true);
 				m_numTiles += numTiles;
 			} else {
 				m_treeTypes[i].m_firstTile = 0;

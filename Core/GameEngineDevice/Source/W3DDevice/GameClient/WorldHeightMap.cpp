@@ -1457,11 +1457,68 @@ Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile, Int expectedTi
 	}
 	return(0);
 }
+// GeneralsX @bugfix Claude 19/10/2026 Reconstruct a nearest-neighbor-upscaled 256px tile with a
+// bilinear filter. The scatter loop replicates each native source texel into a scale x scale
+// block, so the native sample grid (nativeExtent x nativeExtent, nativeExtent=TILE_PIXEL_EXTENT/
+// scale) sits at the top-left corner of every block. We re-read those corners and bilinearly
+// interpolate them back across the full 256px cell, turning the hard blocks into smooth
+// gradients. Operates in place on one tile's BGRA buffer via a scratch copy of the samples.
+static void bilinearUpscaleTile(UnsignedByte *tileBase, Int scale)
+{
+	const Int n = TILE_PIXEL_EXTENT / scale;			// native samples per axis
+	if (n < 2) return;									// nothing to interpolate from
+	// Snapshot the native samples (block corners) before we overwrite the buffer.
+	UnsignedByte *samples = MSGNEW("WorldHeightMap_bilinear") UnsignedByte[n*n*TILE_BYTES_PER_PIXEL];
+	for (Int sy=0; sy<n; sy++) {
+		for (Int sx=0; sx<n; sx++) {
+			const UnsignedByte *src = tileBase + ((sx*scale) + TILE_PIXEL_EXTENT*(sy*scale))*TILE_BYTES_PER_PIXEL;
+			UnsignedByte *dst = samples + (sx + n*sy)*TILE_BYTES_PER_PIXEL;
+			for (Int p=0; p<TILE_BYTES_PER_PIXEL; p++) dst[p] = src[p];
+		}
+	}
+	const Int maxIdx = n - 1;
+	// Destination centre (x+0.5)/scale - 0.5 in native-sample space == (2x+1-scale)/(2*scale).
+	// Integer floor division keeps the sample index and weight exact and deterministic
+	// (den>0 always). wx/wy are expressed as num/den so no transcendental math is needed.
+	const Int den = 2 * scale;
+	for (Int y=0; y<TILE_PIXEL_EXTENT; y++) {
+		Int ynum = 2*y + 1 - scale;
+		Int y0 = (ynum >= 0) ? (ynum / den) : -(((-ynum) + den - 1) / den);
+		Real wy = (Real)(ynum - y0*den) / (Real)den;
+		if (y0 < 0) { y0 = 0; wy = 0.0f; }
+		if (y0 > maxIdx) { y0 = maxIdx; wy = 0.0f; }
+		Int y1 = (y0 < maxIdx) ? y0+1 : y0;
+		for (Int x=0; x<TILE_PIXEL_EXTENT; x++) {
+			Int xnum = 2*x + 1 - scale;
+			Int x0 = (xnum >= 0) ? (xnum / den) : -(((-xnum) + den - 1) / den);
+			Real wx = (Real)(xnum - x0*den) / (Real)den;
+			if (x0 < 0) { x0 = 0; wx = 0.0f; }
+			if (x0 > maxIdx) { x0 = maxIdx; wx = 0.0f; }
+			Int x1 = (x0 < maxIdx) ? x0+1 : x0;
+			const UnsignedByte *c00 = samples + (x0 + n*y0)*TILE_BYTES_PER_PIXEL;
+			const UnsignedByte *c10 = samples + (x1 + n*y0)*TILE_BYTES_PER_PIXEL;
+			const UnsignedByte *c01 = samples + (x0 + n*y1)*TILE_BYTES_PER_PIXEL;
+			const UnsignedByte *c11 = samples + (x1 + n*y1)*TILE_BYTES_PER_PIXEL;
+			UnsignedByte *out = tileBase + (x + TILE_PIXEL_EXTENT*y)*TILE_BYTES_PER_PIXEL;
+			for (Int p=0; p<TILE_BYTES_PER_PIXEL; p++) {
+				Real top = (Real)c00[p] + ((Real)c10[p] - (Real)c00[p]) * wx;
+				Real bot = (Real)c01[p] + ((Real)c11[p] - (Real)c01[p]) * wx;
+				Real val = top + (bot - top) * wy;
+				if (val < 0.0f) val = 0.0f;
+				if (val > 255.0f) val = 255.0f;
+				out[p] = (UnsignedByte)(val + 0.5f);
+			}
+		}
+	}
+	delete[] samples;
+}
+
 /*Break down a .tga file into a collection of tiles.  numRows * numRows total tiles.
 	srcCellExtent should be the cell size countTiles() already chose for this same file,
 	so the two stay consistent even in the ambiguous-width case. 0 derives it from
 	numRows (largest power-of-two cell that fits numRows cells, or a lone 32x32 half tile). */
-Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows, Int srcCellExtent)
+Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows, Int srcCellExtent,
+		Bool smoothUpscale)
 {
 	TTargaHeader hdr;
 	pStr->read(&hdr, sizeof(hdr));
@@ -1603,6 +1660,14 @@ Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows,
 		DEBUG_ASSERTCRASH(repeatCount==0, ("Invalid tga."));
 	}
 	delete[] accum;
+	// GeneralsX @bugfix Claude 19/10/2026 Smooth the blocky nearest-neighbor upscale for callers
+	// that opt in (tree/bush atlas). Only meaningful when the source was blown up (scale>1);
+	// the HD (scale==1) and downscaled (down>1) paths are already correctly filtered.
+	if (smoothUpscale && scale > 1) {
+		for (i=0; i<numRows*numRows; i++) {
+			bilinearUpscaleTile(tiles[i]->getDataPtr(), scale);
+		}
+	}
 	for (i=0; i<numRows*numRows; i++) {
 		tiles[i]->updateMips();
 	}
