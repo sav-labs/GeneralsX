@@ -386,6 +386,7 @@ public:
 	AsciiString m_initialSkirmishSide;		///< Faction of the local player in m_initialSkirmishMap, America by default
 	AsciiString m_initialSkirmishAISide;	///< Faction of the AI opponents, empty for a random faction drawn from the game seed
 	Int m_initialSkirmishStartPos;				///< 1-based start position of the local player, AI opponents take the next ones
+	Int m_initialSkirmishGameSpeed;				///< GeneralsX: command-line -gameSpeed override for m_initialSkirmishMap (0 = use config default)
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest [seconds]
 	Real m_cameraTestSeconds;				///< Duration of the -camtest pan in seconds, 0 when disabled
 	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose or -camtest [seconds] close
