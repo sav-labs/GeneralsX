@@ -33,6 +33,11 @@
 // in front of the local start position and attack-move through each other, one structure near the fight is damaged to
 // 30% health so it burns and smokes, and the camera orbits the middle of the battle line at a medium-low height. "night"
 // switches the match to night when it starts. Like the convoy, this changes the match and only happens with -camtest.
+// GeneralsX @feature Claude 19/10/2026 USA lineup flight (-camtest [seconds] usa): instead of the convoy or the battle, one
+// of each USA vehicle spawns stationary in a single row in front of the local start position, every unit facing the camera
+// and given no order so there is no driving, combat or smoke, and the camera dollies low and close along the row so each
+// detailed model fills the frame in daylight. For framing the detailed-model work; like the convoy it changes the match and
+// only happens with -camtest.
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
@@ -126,6 +131,36 @@ constexpr const Real CameraTestBattleOrbitSpeed = DEG_TO_RADF(8.0f);	///< Camera
 constexpr const Real CameraTestBattleEndHeightScale = 0.8f;		///< Final camera height as a fraction of the minimum zoom height
 constexpr const Real CameraTestBattlePitch = DEG_TO_RADF(30.0f);	///< Final pitch, lower than the default 37.5
 
+// GeneralsX @feature Claude 19/10/2026 USA lineup flight. One stationary row of vehicles, the camera dollies along it.
+constexpr const Int CameraTestLineupMax = 12;							///< Upper bound on vehicles in the row
+constexpr const Real CameraTestLineupSpacing = 60.0f;				///< Distance between neighbouring vehicles along the row
+constexpr const Real CameraTestLineupLead = 170.0f;					///< Distance of the row ahead of the start position, towards the map center
+constexpr const Real CameraTestLineupHeightScale = 0.55f;		///< Camera height as a fraction of the minimum zoom height
+constexpr const Real CameraTestLineupMinHeight = 45.0f;			///< Lowest camera height above the ground
+constexpr const Real CameraTestLineupPitch = DEG_TO_RADF(22.0f);	///< Lower than the default 37.5, so the view looks across the vehicles
+constexpr const Real CameraTestLineupMargin = 0.65f;				///< The dolly starts and ends this far short of the row ends, so no shot is half a vehicle
+
+/// GeneralsX @feature Claude 19/10/2026 The detailed USA vehicles, in display order. Each row lists the retail ThingTemplate
+/// names (in HD this slot draws the detailed model) with fallbacks, so a name the game does not know is skipped.
+struct CameraTestLineupUnit
+{
+	const char *preferred;
+	const char *fallback1;
+	const char *fallback2;
+};
+
+const CameraTestLineupUnit CameraTestUsaLineup[] =
+{
+	{ "AmericaTankCrusader", "", "" },											///< Abrams (AVLeopard slot)
+	{ "AmericaVehicleMicrowaveTank", "AmericaVehicleMicrowave", "" },	///< Stryker (AVTHUNDRBLT slot)
+	{ "AmericaTankPaladin", "AmericaVehiclePaladin", "" },			///< M109 (AVPaladin slot)
+	{ "AmericaVehicleTomahawk", "", "" },										///< M270 MLRS (AVTomahawk slot)
+	{ "AmericaVehicleAvenger", "", "" },										///< Avenger (AVAVNGER slot)
+	{ "AmericaVehicleHumvee", "", "" },											///< JLTV (AVHUMMER slot)
+	{ "AmericaVehicleAmbulance", "AmericaVehicleMedic", "" },		///< Ambulance (AVAmbulance slot)
+	{ "AmericaVehicleDozer", "AmericaDozer", "AmericaVehicleBulldozer" },	///< Dozer (AVCONSTDOZ slot)
+};
+
 // GeneralsX @feature Claude 15/10/2026 Signal for the DXVK video capture started with DXVK_CAPTURE_VIDEO_START=camtest.
 // DXVK reads the process environment on every present while it waits: the prepare value starts the encoder when the
 // match starts, the event value starts recording with the first frame of the flight. It only affects rendering tools.
@@ -187,6 +222,14 @@ struct CameraTestState
 	Coord2D battleCenter;										///< Middle of the two front rows at spawn
 	ObjectID battleUnits[2][CameraTestBattleMaxPerSide];	///< Local column, enemy column
 	Int battleCount[2];
+
+	// GeneralsX @feature Claude 19/10/2026 USA lineup flight state
+	Bool lineup;														///< The lineup was spawned, the camera dollies along it
+	Coord2D lineupCenter;										///< Middle of the row
+	Coord2D lineupDir;											///< Unit direction along the row (the camera's "right")
+	Real lineupHalf;												///< Half the length of the row
+	ObjectID lineupUnits[CameraTestLineupMax];	///< Spawned vehicles, left to right
+	Int lineupCount;
 };
 
 CameraTestState s_cameraTest;
@@ -253,8 +296,10 @@ const ThingTemplate *findCameraTestTemplate(const char *preferred, const char *f
 /// Creates one unit near pos, facing angle, and orders it to move to dest through the normal AI command path.
 // GeneralsX @feature Claude 16/10/2026 attackMove gives an attack-move order instead, so the battle columns shoot what
 // they meet on the way.
+// GeneralsX @feature Claude 19/10/2026 hold gives no order at all, so the lineup vehicles keep their spawn position and
+// facing and do not drive or fight.
 Object *spawnCameraTestUnit(const ThingTemplate *thingTemplate, Team *team, const Coord2D &pos, Real angle, const Coord2D &dest,
-	Bool attackMove = FALSE)
+	Bool attackMove = FALSE, Bool hold = FALSE)
 {
 	Object *obj = TheThingFactory->newObject(thingTemplate, team);
 	if (obj == nullptr)
@@ -278,7 +323,7 @@ Object *spawnCameraTestUnit(const ThingTemplate *thingTemplate, Team *team, cons
 	obj->setPosition(&spawnPos);
 
 	AIUpdateInterface *ai = obj->getAIUpdateInterface();
-	if (ai != nullptr)
+	if (ai != nullptr && !hold)
 	{
 		Coord3D moveTo;
 		moveTo.x = dest.x;
@@ -925,6 +970,119 @@ void applyCameraTestNight()
 	fflush(stderr);
 }
 
+/// GeneralsX @feature Claude 19/10/2026 Spawns one of each USA vehicle in a single row centred ahead of the local start
+/// position, every vehicle facing back towards the start position (towards the camera) and held in place so there is no
+/// driving, combat or smoke. False when there is no local player team or none of the templates exist.
+Bool spawnCameraTestLineup()
+{
+	CameraTestState &s = s_cameraTest;
+	s.lineup = FALSE;
+	s.lineupCount = 0;
+
+	if (ThePlayerList == nullptr || TheThingFactory == nullptr || ThePartitionManager == nullptr || TheTerrainLogic == nullptr)
+		return FALSE;
+
+	Player *player = ThePlayerList->getLocalPlayer();
+	Team *team = player != nullptr ? player->getDefaultTeam() : nullptr;
+	if (team == nullptr)
+	{
+		fprintf(stderr, "[CAMTEST] lineup: no local player team, nothing spawned\n");
+		fflush(stderr);
+		return FALSE;
+	}
+
+	const Coord2D forward = s.panDir;	// start position -> map center
+	Coord2D right;
+	right.x = -forward.y;
+	right.y = forward.x;
+
+	// The vehicles face back towards the start position, so the camera (between the start position and the row) sees their fronts
+	Coord2D back;
+	back.x = -forward.x;
+	back.y = -forward.y;
+	const Real faceAngle = back.toAngle();
+
+	Coord2D center;
+	center.x = s.startPos.x + forward.x * CameraTestLineupLead;
+	center.y = s.startPos.y + forward.y * CameraTestLineupLead;
+
+	// Collect the templates that exist, so a missing unit just leaves a shorter row
+	const ThingTemplate *templates[CameraTestLineupMax];
+	Int count = 0;
+	for (Int i = 0; i < ARRAY_SIZE(CameraTestUsaLineup) && count < CameraTestLineupMax; ++i)
+	{
+		const ThingTemplate *thingTemplate = findCameraTestTemplate(
+			CameraTestUsaLineup[i].preferred, CameraTestUsaLineup[i].fallback1, CameraTestUsaLineup[i].fallback2);
+		if (thingTemplate != nullptr)
+			templates[count++] = thingTemplate;
+	}
+
+	if (count == 0)
+	{
+		fprintf(stderr, "[CAMTEST] lineup: no USA vehicle templates found, nothing spawned\n");
+		fflush(stderr);
+		return FALSE;
+	}
+
+	const Real half = (Real)(count - 1) * 0.5f * CameraTestLineupSpacing;
+	for (Int i = 0; i < count; ++i)
+	{
+		const Real offset = (Real)i * CameraTestLineupSpacing - half;
+		Coord2D pos;
+		pos.x = center.x + right.x * offset;
+		pos.y = center.y + right.y * offset;
+
+		// dest == pos and hold == TRUE: no order is given, the vehicle keeps its spawn position and facing
+		Object *obj = spawnCameraTestUnit(templates[i], team, pos, faceAngle, pos, FALSE, TRUE);
+		if (obj != nullptr)
+		{
+			s.lineupUnits[s.lineupCount++] = obj->getID();
+			fprintf(stderr, "[CAMTEST] lineup %d: %s at (%.1f, %.1f)\n", i, templates[i]->getName().str(), pos.x, pos.y);
+		}
+	}
+
+	s.lineupCenter = center;
+	s.lineupDir = right;
+	s.lineupHalf = half;
+	s.lineup = s.lineupCount > 0;
+
+	fprintf(stderr, "[CAMTEST] lineup start: %d vehicles, center (%.1f, %.1f), spacing %.0f, facing the start position\n",
+		s.lineupCount, center.x, center.y, CameraTestLineupSpacing);
+	fflush(stderr);
+	return s.lineup;
+}
+
+/// GeneralsX @feature Claude 19/10/2026 Dollies the camera along the row for the given flight time, counted in logic frames:
+/// the pivot slides from one end of the row to the other at a low, close height with a low pitch and a fixed yaw (the default
+/// start angle, which looks from the start position across the row the vehicles face), so each vehicle passes large through
+/// the frame. The camera never zooms out.
+void applyCameraTestLineupPose(Real flightSeconds)
+{
+	const CameraTestState &s = s_cameraTest;
+	const Real total = TheGlobalData->m_cameraTestSeconds;
+	const Real t = getCameraTestSmoothStep(total > 0.0f ? flightSeconds / total : 1.0f);
+
+	// Slide from one end to the other, kept a little inside the ends so no shot is half a vehicle
+	const Real reach = s.lineupHalf * CameraTestLineupMargin;
+	const Real along = -reach + 2.0f * reach * t;
+
+	Coord3D pivot;
+	pivot.x = s.lineupCenter.x + s.lineupDir.x * along;
+	pivot.y = s.lineupCenter.y + s.lineupDir.y * along;
+	pivot.z = TheTerrainLogic != nullptr ? TheTerrainLogic->getGroundHeight(pivot.x, pivot.y) : 0.0f;
+
+	const Real height = max(s.minHeight * CameraTestLineupHeightScale, CameraTestLineupMinHeight);
+
+	TheTacticalView->lookAt(&pivot);
+	TheTacticalView->setAngle(s.startAngle);
+	TheTacticalView->setPitch(CameraTestLineupPitch);
+	if (s.maxHeight > 0.0f)
+	{
+		// setZoom is not clamped to the minimum zoom height, so the close-up height holds
+		TheTacticalView->setZoom(height / s.maxHeight);
+	}
+}
+
 void beginCameraTestFlight()
 {
 	CameraTestState &s = s_cameraTest;
@@ -959,12 +1117,15 @@ void beginCameraTestFlight()
 		s.startPos.x, s.startPos.y, TheGlobalData->m_cameraTestSeconds, s.panDir.x, s.panDir.y, CameraTestZoomOutSeconds);
 	fflush(stderr);
 
+	// GeneralsX @feature Claude 19/10/2026 The USA lineup spawns one stationary row of vehicles instead of the convoy or battle
+	const Bool lineup = TheGlobalData->m_cameraTestUsa && spawnCameraTestLineup();
+
 	// GeneralsX @feature Claude 16/10/2026 The battle flight spawns two hostile columns instead of the convoy; without an
 	// enemy player it falls back to the regular flight
-	const Bool battle = TheGlobalData->m_cameraTestBattle && beginCameraTestBattle();
+	const Bool battle = !lineup && TheGlobalData->m_cameraTestBattle && beginCameraTestBattle();
 
 	// The convoy drives from near the start position to about the map center
-	if (!battle)
+	if (!battle && !lineup)
 		spawnCameraTestConvoy(distanceToCenter);
 	s.hasCentroid = FALSE;
 	s.hasFollowPivot = FALSE;
@@ -973,7 +1134,7 @@ void beginCameraTestFlight()
 	s.flightFrame = TheGameLogic->getFrame();
 	s.closeShot = -1;
 	s.closeTargetCount = 0;
-	if (TheGlobalData->m_cameraTestClose && !battle)
+	if (TheGlobalData->m_cameraTestClose && !battle && !lineup)
 	{
 		chooseCameraTestCloseTargets();
 		fprintf(stderr, "[CAMTEST] close start: logic frame %u, %.1f s along the convoy, %d building(s), height %.1f (min zoom %.1f), pitch %.1f\n",
@@ -1130,6 +1291,8 @@ void UpdateCameraTest()
 		s.battle = FALSE;
 		s.battleCount[0] = 0;
 		s.battleCount[1] = 0;
+		s.lineup = FALSE;
+		s.lineupCount = 0;
 		return;
 	}
 
@@ -1167,6 +1330,25 @@ void UpdateCameraTest()
 		Platform::SetProcessEnvironmentVariable(CameraTestCaptureSignal, CameraTestCaptureStart);
 		fprintf(stderr, "[CAMTEST] capture signal: %s=%s\n", CameraTestCaptureSignal, CameraTestCaptureStart);
 		fflush(stderr);
+	}
+
+	// GeneralsX @feature Claude 19/10/2026 The USA lineup flight is timed in logic frames and lasts the given seconds.
+	if (s.lineup)
+	{
+		const Real phase = clamp(0.0f, TheFramePacer->getLogicFramePhase(), 1.0f);
+		const Real lineupSeconds = ((Real)(TheGameLogic->getFrame() - s.flightFrame) + phase) / (Real)LOGICFRAMES_PER_SECOND;
+		const Real lineupTotal = TheGlobalData->m_cameraTestSeconds;
+
+		applyCameraTestLineupPose(min(lineupSeconds, lineupTotal));
+
+		if (lineupSeconds >= lineupTotal)
+		{
+			s.phase = CAMERA_TEST_DONE;
+			fprintf(stderr, "[CAMTEST] lineup stop: flight finished after %u logic frames (%.2f s)\n",
+				TheGameLogic->getFrame() - s.flightFrame, lineupSeconds);
+			fflush(stderr);
+		}
+		return;
 	}
 
 	// GeneralsX @feature Claude 16/10/2026 The battle flight is timed like the close-up flight and lasts the given seconds.

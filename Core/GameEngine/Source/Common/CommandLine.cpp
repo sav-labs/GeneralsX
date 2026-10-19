@@ -905,6 +905,8 @@ Int parseSkirmishStartPos(char *args[], int num)
 // GeneralsX @feature Claude 16/10/2026 Further tokens, in any order: "battle" spawns a hostile column of an enemy player
 // facing the convoy and orbits the fight, a number after "battle" is the number of units in the battle scene (both sides
 // together, split evenly), and "night" switches the match to night: -camtest 10 battle 60 night.
+// GeneralsX @feature Claude 19/10/2026 "usa" spawns a stationary row with one of each USA vehicle and dollies the camera
+// low and close along it, for a daytime close-up of the detailed models (no combat, no smoke): -camtest 12 usa.
 Int parseCameraTest(char *args[], int num)
 {
 	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
@@ -933,6 +935,10 @@ Int parseCameraTest(char *args[], int num)
 		else if (stricmp(token, "night") == 0)
 		{
 			TheWritableGlobalData->m_cameraTestNight = TRUE;
+		}
+		else if (stricmp(token, "usa") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestUsa = TRUE;
 		}
 		else if (TheWritableGlobalData->m_cameraTestBattle && token[0] >= '0' && token[0] <= '9')
 		{

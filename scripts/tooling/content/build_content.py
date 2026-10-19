@@ -290,8 +290,20 @@ def collect(root):
 HD_REMAP = {
     "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
     "AVGXMBT_D": ("AVLeopard_D", None),
+    "AVGXMICRO": ("AVTHUNDRBLT", "Microwave Tank -> Stryker M1126"),
+    "AVGXMICRO_D": ("AVTHUNDRBLT_D", None),
+    "AVGXPAL": ("AVPaladin", "Paladin -> M109 self-propelled howitzer"),
+    "AVGXPAL_D": ("AVPaladin_D", None),
+    "AVGXMLRS": ("AVTomahawk", "Tomahawk -> M270 MLRS"),
+    "AVGXMLRS_D": ("AVTomahawk_D", None),
+    "AVGXAVNG": ("AVAVNGER", "Avenger -> M1097 Avenger"),
+    "AVGXAVNG_D": ("AVAVNGER_D", None),
     "AVGXJLTV": ("AVHUMMER", "Humvee -> JLTV"),
     "AVGXJLTV_D": ("AVHUMMER_d", None),
+    "AVGXMEDIC": ("AVAmbulance", "Medic -> M1133 ambulance"),
+    "AVGXMEDIC_D": ("AVAmbulance_D", None),
+    "AVGXDOZ": ("AVCONSTDOZ_A", "Dozer -> armoured bulldozer"),
+    "AVGXDOZ_D": ("AVCONSTDOZ_AD", None),
 }
 
 
