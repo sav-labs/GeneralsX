@@ -195,9 +195,11 @@ void AIPlayer::checkForSupplyCenter( BuildListInfo *info, Object *bldg )
 	{
 		info->setSupplyBuilding(true);
 		Int desiredGatherers = 0;
+		Bool matchedSide = false;			// GeneralsX @build Claude 19/10/2026 [AIDIAG] economy diagnostic
 		const AISideInfo *resInfo = TheAI->getAiData()->m_sideInfo;
 		while (resInfo) {
 			if (resInfo->m_side == m_player->getSide()) {
+				matchedSide = true;
 				GameDifficulty difficulty = m_difficulty;
 				if (difficulty == DIFFICULTY_EASY) {
 					desiredGatherers = resInfo->m_easy;
@@ -214,6 +216,12 @@ void AIPlayer::checkForSupplyCenter( BuildListInfo *info, Object *bldg )
 		info->setSupplyBuilding(true);
 		info->setCurrentGatherers(-1);
 		info->setDesiredGatherers(desiredGatherers+1); // get a freebie with the supply depots.
+		// GeneralsX @build Claude 19/10/2026 [AIDIAG] If the AIData side list has no entry for this
+		// AI's side, desiredGatherers stays 0 and the AI gets only the +1 freebie -> starved economy.
+		fprintf(stderr, "[AIDIAG] supplyCenter player=%s side=%s sideInfoList=%s matchedSide=%d diff=%d desiredGatherers=%d(+1)\n",
+			m_player->getPlayerName().str(), m_player->getSide().str(),
+			TheAI->getAiData()->m_sideInfo ? "present" : "NULL", (int)matchedSide, (int)m_difficulty, desiredGatherers);
+		fflush(stderr);
 	}
 }
 
