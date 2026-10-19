@@ -192,6 +192,26 @@ Int parseFrameGeneration(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature Claude 18/10/2026 -modelNormalMaps on|off overrides Options.ini ModelNormalMaps, so a
+// test build can be framed with the feature on and off without editing the shared Options.ini. Render only.
+Int parseModelNormalMaps(char *args[], int num)
+{
+	if (num > 1)
+	{
+		if (stricmp(args[1], "on") == 0 || stricmp(args[1], "yes") == 0 || stricmp(args[1], "1") == 0)
+			TheWritableGlobalData->m_modelNormalMaps = TRUE;
+		else if (stricmp(args[1], "off") == 0 || stricmp(args[1], "no") == 0 || stricmp(args[1], "0") == 0)
+			TheWritableGlobalData->m_modelNormalMaps = FALSE;
+		else
+		{
+			fprintf(stderr, "[NORMALMAP] unknown -modelNormalMaps value '%s', expected on or off\n", args[1]);
+			fflush(stderr);
+		}
+		return 2;
+	}
+	return 1;
+}
+
 //=============================================================================
 //=============================================================================
 Int parseNoMusic(char *args[], int)
@@ -898,6 +918,8 @@ Int parseSkirmishGameSpeed(char *args[], int num)
 // GeneralsX @feature Claude 16/10/2026 Further tokens, in any order: "battle" spawns a hostile column of an enemy player
 // facing the convoy and orbits the fight, a number after "battle" is the number of units in the battle scene (both sides
 // together, split evenly), and "night" switches the match to night: -camtest 10 battle 60 night.
+// GeneralsX @feature Claude 19/10/2026 "usa" spawns a stationary row with one of each USA vehicle and dollies the camera
+// low and close along it, for a daytime close-up of the detailed models (no combat, no smoke): -camtest 12 usa.
 Int parseCameraTest(char *args[], int num)
 {
 	TheWritableGlobalData->m_cameraTestSeconds = 8.0f;
@@ -932,6 +954,10 @@ Int parseCameraTest(char *args[], int num)
 		else if (stricmp(token, "night") == 0)
 		{
 			TheWritableGlobalData->m_cameraTestNight = TRUE;
+		}
+		else if (stricmp(token, "usa") == 0)
+		{
+			TheWritableGlobalData->m_cameraTestUsa = TRUE;
 		}
 		else if (TheWritableGlobalData->m_cameraTestBattle && token[0] >= '0' && token[0] <= '9')
 		{
@@ -1434,6 +1460,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-renderscale", parseRenderScale },
 	{ "-upscaler", parseUpscaler },
 	{ "-framegen", parseFrameGeneration },
+	{ "-modelNormalMaps", parseModelNormalMaps },
 	{ "-fullscreen", parseNoWin },
 
 	// TheSuperHackers @feature helmutbuhler 11/04/2025

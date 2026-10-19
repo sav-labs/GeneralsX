@@ -738,27 +738,6 @@ def source_colour(src, nt):
     return tex.outputs["Color"]
 
 
-def shadow_shell(objs, name, budget=300):
-    """Convex hull of a bone's meshes, pulled 3% inside them: the stencil shadow caster for that bone."""
-    bm = bmesh.new()
-    for o in objs:
-        for v in o.data.vertices:
-            bm.verts.new(v.co)
-    hull = bmesh.ops.convex_hull(bm, input=bm.verts)
-    loose = {g for g in hull["geom_interior"] + hull["geom_unused"] if isinstance(g, bmesh.types.BMVert)}
-    bmesh.ops.delete(bm, geom=list(loose), context="VERTS")
-    c = sum((v.co for v in bm.verts), Vector()) / max(1, len(bm.verts))
-    for v in bm.verts:
-        v.co = c + (v.co - c) * 0.97
-    mesh = bpy.data.meshes.new(name)
-    bm.to_mesh(mesh)
-    bm.free()
-    shell = bpy.data.objects.new(name, mesh)
-    bpy.context.scene.collection.objects.link(shell)
-    decimate([shell], budget)
-    return shell
-
-
 def in_box(c, box):
     x0, x1, y0, y1, z0, z1 = box
     return x0 <= c[0] <= x1 and y0 <= c[1] <= y1 and z0 <= c[2] <= z1
@@ -1067,11 +1046,13 @@ def build(path, spec, name, size, damaged=False):
         ordered += ready
         pending = [b for b in pending if b not in ready]
     k.bones = ordered
-    for bone in ("ROOTTRANSFORM", "TURRET", "BARREL"):
-        hits = [o for (b, g, kd), o in joined.items() if b == bone and kd == "body"]
-        if hits:
-            shell = shadow_shell(hits, f"SHADOW{bone[:4]}")
-            joined[(bone, f"SHADOW{bone[:4]}", "shadow")] = shell
+    # GeneralsX @bugfix Claude 18/10/2026 Do not emit the convex-hull shadow shells. The engine has no
+    # cast-only-invisible mesh path: W3DSkinnedShadow skips hidden meshes as casters and the mesh render has
+    # no handling for W3D_MESH_FLAG_SHADOW, so a shell can only be a *visible* opaque mesh. These shells carry
+    # collapsed UVs that sample the atlas's black margin, so the engine drew them as solid black sheets over
+    # the hull top, turret and gun (the "black detailed vehicles" bug, also half-black Humvee). The detailed
+    # body meshes themselves already qualify as shadow casters (W3DSkinnedShadow::getModel accepts every
+    # opaque sub-mesh <= 65535 verts), so dropping the shells keeps unit shadows and removes the black.
     k.burns = (list(spec.get("burns", burns)) + [(c, r, "hit") for c, r in spec.get("hits", ())]) if damaged else None
     visible = [o for (b, g, kd), o in joined.items() if kd == "body"]
     for o in visible:
@@ -1116,6 +1097,16 @@ def normal_map(spec, size=1024):
         img.pixels.foreach_get(a)
         return a.reshape(img.size[1], img.size[0], 4)[::-1]
     nrm, gloss, ao = pixels(baked["tangent"]), pixels(baked["gloss"]), pixels(baked["ao"])
+    # GeneralsX @bugfix Claude 18/10/2026 The tangent bake clears un-covered texels to black (0,0,0) and the
+    # high-poly bake leaves flat areas without detail; a real tangent-space normal always has Z (blue) >= 0.5,
+    # so any texel below that is unbaked or an artifact. Left as-is the engine draws those texels black (the
+    # normal points away from the light), which turned the detailed vehicles' turrets and flat hull plates
+    # black under ModelNormalMaps = yes. Replace them with the neutral normal so they light like flat surfaces.
+    nrm = nrm.copy()
+    invalid = nrm[..., 2] < 0.5
+    nrm[invalid, 0] = 0.5
+    nrm[invalid, 1] = 0.5
+    nrm[invalid, 2] = 1.0
     rgba = np.empty(nrm.shape, np.float32)
     rgba[..., :3] = nrm[..., :3]
     rgba[..., 3] = gloss[..., 0] * np.clip(0.35 + ao[..., 0], 0, 1)

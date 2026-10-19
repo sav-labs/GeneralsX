@@ -283,11 +283,24 @@ def collect(root):
 # GeneralsX @feature Claude 16/10/2026 Reviewed detailed models (blend/build_src.py) replace retail models one unit at a
 # time: the pack carries only the models present in the --hd folder, their textures and _n.dds normal maps, and an
 # ArtRemap that draws them where the retail INI names the retail model. Logic keeps reading the retail model's bones.
-# GeneralsX @bugfix Claude 18/10/2026 Abrams (AVGXMBT) temporarily unshipped: in-game it renders black on the large
-# upper surfaces (turret, gun, hull deck) under the engine normal-map path, a fault the cloud geometry check does not
-# catch. Held out of main until a clean in-game frame confirms the fix; the maps and engine changes from #53 stay.
-# Re-add the entry (and the other vehicles) once the normal-map/material cause is fixed and verified by a frame.
+# GeneralsX @feature Claude 18/10/2026 Retail model names read from the untouched ZH 1.04 Object/AmericaVehicle.ini
+# (DefaultConditionState / REALLYDAMAGED Model=), the same source the infantry remap uses.
+# GeneralsX @bugfix Claude 19/10/2026 The black upper surfaces were the convex-hull shadow shells the bake emitted as
+# visible opaque meshes (fixed in import_src.py), not the normal map. These six vehicles are confirmed clean by an
+# in-game PC frame (usa6-*.jpg). The Stryker (AVGXMICRO) and Avenger (AVGXAVNG) are held until they are framed too.
 HD_REMAP = {
+    "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
+    "AVGXMBT_D": ("AVLeopard_D", None),
+    "AVGXPAL": ("AVPaladin", "Paladin -> M109 self-propelled howitzer"),
+    "AVGXPAL_D": ("AVPaladin_D", None),
+    "AVGXMLRS": ("AVTomahawk", "Tomahawk -> M270 MLRS"),
+    "AVGXMLRS_D": ("AVTomahawk_D", None),
+    "AVGXJLTV": ("AVHUMMER", "Humvee -> JLTV"),
+    "AVGXJLTV_D": ("AVHUMMER_d", None),
+    "AVGXMEDIC": ("AVAmbulance", "Medic -> M1133 ambulance"),
+    "AVGXMEDIC_D": ("AVAmbulance_D", None),
+    "AVGXDOZ": ("AVCONSTDOZ_A", "Dozer -> armoured bulldozer"),
+    "AVGXDOZ_D": ("AVCONSTDOZ_AD", None),
 }
 
 
