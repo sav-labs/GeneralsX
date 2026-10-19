@@ -35,6 +35,19 @@ UNITS = {
     "microwave": ["M2 Bradley", "Stryker", "infantry fighting vehicle"],
     "avenger": ["Avenger air defense", "M1097 Avenger", "humvee stinger"],
     "bulldozer": ["military bulldozer", "D9 bulldozer", "bulldozer"],
+    # USA base structures. Real-world analogues of the Zero Hour buildings; picked for silhouette, not
+    # exact identity. The sci-fi ones (strategy centre, particle uplink) map to the nearest real form.
+    "command_center": ["military command center", "army headquarters building", "modern military building"],
+    "power_plant": ["power plant building", "gas turbine power station", "industrial generator building"],
+    "barracks": ["military barracks", "army barracks building", "military dormitory"],
+    "war_factory": ["vehicle maintenance hangar", "large industrial warehouse", "military workshop building"],
+    "supply_center": ["military warehouse", "supply depot building", "cargo distribution warehouse"],
+    "strategy_center": ["command bunker", "military operations center", "modern concrete military building"],
+    "airfield": ["aircraft hangar", "military hangar", "airfield control tower"],
+    "particle_uplink": ["satellite ground station", "radar dish array", "large antenna installation"],
+    "supply_drop": ["helipad structure", "cargo landing platform", "concrete landing pad"],
+    "patriot": ["patriot missile launcher", "SAM launcher", "air defense missile launcher"],
+    "fire_base": ["military bunker", "artillery bunker", "fortified gun bunker"],
 }
 
 

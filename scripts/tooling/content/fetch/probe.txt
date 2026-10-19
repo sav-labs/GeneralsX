@@ -1,12 +1,15 @@
 # Candidates to download for a closer look (sketchfab.py probe): a uid per line, or "q: <query>" for the
 # best PBR-textured search hits. Results go to the model-candidates prerelease as probe_<uid>.glb.
-q: M1A2 SEP Abrams
-q: M1 Abrams game ready
-q: Abrams 4K PBR
-q: M1A1 Abrams PBR
-q: military barracks
+# Sourcing target: the eleven USA base structures (path B, real CC0/CC-BY models, same bake pipeline as
+# the vehicles). One query per building to pull a representative candidate; refine with uids after review.
 q: military command center building
-q: military power plant
-q: military hangar
-q: military warehouse depot
-q: military base building
+q: gas turbine power station
+q: military barracks building
+q: vehicle maintenance hangar
+q: military supply warehouse
+q: command bunker concrete
+q: aircraft hangar
+q: satellite ground station dish
+q: concrete helipad landing pad
+q: patriot missile launcher
+q: fortified gun bunker
