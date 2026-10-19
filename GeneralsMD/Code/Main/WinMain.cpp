@@ -1081,6 +1081,10 @@ static void applyPostEffects()
 	// GeneralsX @feature Claude 16/10/2026 Ambient occlusion, its own switch in Options.ini
 	if (GetEnvironmentVariableA( "DXVK_SSAO", nullptr, 0 ) == 0)
 		SetEnvironmentVariableA( "DXVK_SSAO", optionPref.getAmbientOcclusionEnabled() ? "1" : "0" );
+
+	// GeneralsX @tweak Claude 18/10/2026 Soft particles default off (opt-in), the most expensive battle post pass.
+	if (GetEnvironmentVariableA( "DXVK_SOFT_PARTICLES", nullptr, 0 ) == 0)
+		SetEnvironmentVariableA( "DXVK_SOFT_PARTICLES", optionPref.getSoftParticlesEnabled() ? "1" : "0" );
 }
 
 // WinMain ====================================================================
