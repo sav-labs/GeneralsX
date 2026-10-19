@@ -894,6 +894,10 @@ void Player::initFromDict(const Dict* d)
 		if (!found)
 		{
 			DEBUG_CRASH(("Could not find skirmish player for side %s", mySide.str()));
+			// GeneralsX @bugfix claude 19/10/2026 [AIDIAG] silent in release: bot has no skirmish template.
+			fprintf(stderr, "[AIDIAG] initPlayer name=%s side=%s skirmish=1 mpStartIndex=%d difficulty=%d found=0 skirmishTeamsAdded=0\n",
+				m_playerName.str(), mySide.str(), m_mpStartIndex, (int)difficulty);
+			fflush(stderr);
 		} else {
 			m_playerName = qualTemplatePlayerName;
 			AsciiString qualifier;
@@ -915,6 +919,8 @@ void Player::initFromDict(const Dict* d)
 			// Now add teams.
 
 			AsciiString originalPlayerName = TheSidesList->getSkirmishSideInfo(skirmishNdx)->getDict()->getAsciiString(TheKey_playerName);
+			// GeneralsX @bugfix claude 19/10/2026 [AIDIAG] count skirmish teams qualified onto this bot.
+			Int aidiagTeamsAdded = 0;
 			for (i=0; i<TheSidesList->getNumSkirmishTeams(); i++) {
 				if (TheSidesList->getSkirmishTeamInfo(i)->getDict()->getAsciiString(TheKey_teamOwner) == originalPlayerName)
 				{
@@ -966,8 +972,16 @@ void Player::initFromDict(const Dict* d)
 
 					// Done. Now add the team.
 					TheSidesList->addTeam(&teamDict);
+					++aidiagTeamsAdded;
 				}
 			}
+			// GeneralsX @bugfix claude 19/10/2026 [AIDIAG] one line per skirmish bot at map load:
+			// side, mpStartIndex, difficulty, whether the template matched (found) and how many
+			// skirmish teams were qualified onto it. If teamsAdded==0 or found==0, the bot has no
+			// attack teams/production conditions to run and will never attack.
+			fprintf(stderr, "[AIDIAG] initPlayer name=%s side=%s skirmish=1 mpStartIndex=%d difficulty=%d found=%d skirmishTeamsAdded=%d\n",
+				m_playerName.str(), getSide().str(), m_mpStartIndex, (int)difficulty, (int)found, aidiagTeamsAdded);
+			fflush(stderr);
 		}
 	}
 

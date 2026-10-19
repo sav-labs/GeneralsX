@@ -351,16 +351,33 @@ Bool AISkirmishPlayer::startTraining( WorkOrder *order, Bool busyOK, AsciiString
  */
 Bool AISkirmishPlayer::isAGoodIdeaToBuildTeam( TeamPrototype *proto )
 {
+	// GeneralsX @bugfix claude 19/10/2026 [AIDIAG] throttled stderr diagnostics
+	// to find why the GLA skirmish bot never builds attack teams on Tournament
+	// Desert. DebugAI/AppendDebugMessage are no-ops in the port (need the
+	// Windows st_DebugDLL), so instrument the silent reject paths directly.
+	// Throttled to at most one line per ~30 frames per player to avoid log spam.
+	static UnsignedInt s_aidiagNextFrame = 0;
+	const UnsignedInt nowFrame = TheGameLogic ? TheGameLogic->getFrame() : 0;
+	const Bool aidiagLog = (nowFrame >= s_aidiagNextFrame);
+
 	// Check condition.
 	if (!proto->evaluateProductionCondition()) {
+		if (aidiagLog) {
+			s_aidiagNextFrame = nowFrame + 30;
+			fprintf(stderr, "[AIDIAG] isGoodTeam player=%s team=%s REJECT=productionCondition(false) frame=%u\n",
+				m_player->getPlayerName().str(), proto->getName().str(), nowFrame);
+			fflush(stderr);
+		}
 		return false;
 	}
 	// check build limit
 	if (proto->countTeamInstances() >= proto->getTemplateInfo()->m_maxInstances){
-		if (TheGlobalData->m_debugAI) {
-			AsciiString str;
-			str.format("Team %s not chosen - %d already exist.", proto->getName().str(), proto->countTeamInstances());
-			TheScriptEngine->AppendDebugMessage(str, false);
+		if (aidiagLog) {
+			s_aidiagNextFrame = nowFrame + 30;
+			fprintf(stderr, "[AIDIAG] isGoodTeam player=%s team=%s REJECT=maxInstances(%d/%d) frame=%u\n",
+				m_player->getPlayerName().str(), proto->getName().str(),
+				proto->countTeamInstances(), proto->getTemplateInfo()->m_maxInstances, nowFrame);
+			fflush(stderr);
 		}
 		return false;	// Max already built.
 	}
@@ -374,16 +391,20 @@ Bool AISkirmishPlayer::isAGoodIdeaToBuildTeam( TeamPrototype *proto )
 	}
 	Bool needMoney;
 	if (!isPossibleToBuildTeam( proto, true, needMoney)) {
-		if (TheGlobalData->m_debugAI) {
-			AsciiString str;
-			if (needMoney) {
-				str.format("Team %s not chosen - Not enough money.", proto->getName().str());
-			} else {
-				str.format("Team %s not chosen - Factory/tech missing or busy.", proto->getName().str());
-			}
-			TheScriptEngine->AppendDebugMessage(str, false);
+		if (aidiagLog) {
+			s_aidiagNextFrame = nowFrame + 30;
+			fprintf(stderr, "[AIDIAG] isGoodTeam player=%s team=%s REJECT=%s frame=%u\n",
+				m_player->getPlayerName().str(), proto->getName().str(),
+				needMoney ? "notEnoughMoney" : "factoryTechMissingOrBusy", nowFrame);
+			fflush(stderr);
 		}
 		return false;
+	}
+	if (aidiagLog) {
+		s_aidiagNextFrame = nowFrame + 30;
+		fprintf(stderr, "[AIDIAG] isGoodTeam player=%s team=%s ACCEPT frame=%u\n",
+			m_player->getPlayerName().str(), proto->getName().str(), nowFrame);
+		fflush(stderr);
 	}
 	return true;
 }
