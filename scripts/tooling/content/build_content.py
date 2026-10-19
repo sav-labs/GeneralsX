@@ -290,23 +290,13 @@ def collect(root):
 # dozer) were confirmed clean by an in-game PC frame (usa6-*.jpg) and shipped in #107. The Stryker (AVGXMICRO) and Avenger
 # (AVGXAVNG) missed that first lineup on wrong template names; the -camtest usa keyword fallback put them back in frame and
 # they are now confirmed clean too (usa8-*.jpg), so all eight ship.
+# GeneralsX @tweak claude 19/10/2026 Rolled back: the game returns to its native retail vehicle models.
+# The eight detailed USA vehicles shipped in #116/#107 (Abrams, Stryker, Avenger, Paladin, MLRS, JLTV,
+# ambulance, bulldozer) were judged not yet good enough in game, so no retail vehicle is remapped and the
+# pack ships no DetailedModels.ini ArtRemap for them -> retail models draw as before. The baked models and
+# the hd-models CI matrix stay so a single reference unit can be re-enabled here once its in-game frame
+# passes; add_hd below ships only what this table lists, so an empty table ships nothing.
 HD_REMAP = {
-    "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
-    "AVGXMBT_D": ("AVLeopard_D", None),
-    "AVGXMICRO": ("AVTHUNDRBLT", "Microwave Tank -> Stryker M1126"),
-    "AVGXMICRO_D": ("AVTHUNDRBLT_D", None),
-    "AVGXAVNG": ("AVAVNGER", "Avenger -> M1097 Avenger"),
-    "AVGXAVNG_D": ("AVAVNGER_D", None),
-    "AVGXPAL": ("AVPaladin", "Paladin -> M109 self-propelled howitzer"),
-    "AVGXPAL_D": ("AVPaladin_D", None),
-    "AVGXMLRS": ("AVTomahawk", "Tomahawk -> M270 MLRS"),
-    "AVGXMLRS_D": ("AVTomahawk_D", None),
-    "AVGXJLTV": ("AVHUMMER", "Humvee -> JLTV"),
-    "AVGXJLTV_D": ("AVHUMMER_d", None),
-    "AVGXMEDIC": ("AVAmbulance", "Medic -> M1133 ambulance"),
-    "AVGXMEDIC_D": ("AVAmbulance_D", None),
-    "AVGXDOZ": ("AVCONSTDOZ_A", "Dozer -> armoured bulldozer"),
-    "AVGXDOZ_D": ("AVCONSTDOZ_AD", None),
 }
 
 
