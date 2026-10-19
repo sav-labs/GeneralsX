@@ -1047,6 +1047,7 @@ GlobalData::GlobalData()
 	m_initialSkirmishSide = "America";
 	m_initialSkirmishAISide.clear();
 	m_initialSkirmishStartPos = 1;
+	m_initialSkirmishGameSpeed = 0;
 	// GeneralsX @feature Claude 14/10/2026 Input-free scripted camera flight requested with -camtest
 	m_cameraTestSeconds = 0.0f;
 	// GeneralsX @feature Claude 15/10/2026 Close-up -camtest flight requested with -camclose
@@ -1055,6 +1056,7 @@ GlobalData::GlobalData()
 	m_cameraTestBattle = FALSE;
 	m_cameraTestBattleUnits = 0;
 	m_cameraTestNight = FALSE;
+	m_cameraTestInfantry = FALSE;
 	// GeneralsX @feature Claude 19/10/2026 USA lineup -camtest flight requested with -camtest usa
 	m_cameraTestUsa = FALSE;
 

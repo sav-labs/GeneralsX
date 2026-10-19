@@ -211,6 +211,9 @@ public:
 	Bool getPostEffectsEnabled() const;
 	// GeneralsX @feature Claude 16/10/2026 DXVK ambient occlusion (Options.ini AmbientOcclusion, default yes)
 	Bool getAmbientOcclusionEnabled() const;
+	// GeneralsX @tweak Claude 18/10/2026 DXVK depth-aware soft particles (Options.ini SoftParticles, default no:
+	// they cost the most fps in a heavy battle, so they are opt-in like ModelNormalMaps).
+	Bool getSoftParticlesEnabled() const;
 	// GeneralsX @feature Claude 16/10/2026 Close-up terrain detail (Options.ini TerrainDetail, TerrainDetailStrength,
 	// TerrainRelief and TerrainSoftBlend; all default on, strength 0.7).
 	Bool getTerrainDetailEnabled() const;

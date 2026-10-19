@@ -285,19 +285,16 @@ def collect(root):
 # ArtRemap that draws them where the retail INI names the retail model. Logic keeps reading the retail model's bones.
 # GeneralsX @feature Claude 18/10/2026 Retail model names read from the untouched ZH 1.04 Object/AmericaVehicle.ini
 # (DefaultConditionState / REALLYDAMAGED Model=), the same source the infantry remap uses.
-# Only the vehicles confirmed clean by an in-game PC frame ship here; the rest stay held on the thread
-# branch until each one's own frame passes, then is added back one at a time.
+# GeneralsX @bugfix Claude 19/10/2026 The black upper surfaces were the convex-hull shadow shells the bake emitted as
+# visible opaque meshes (fixed in import_src.py), not the normal map. These six vehicles are confirmed clean by an
+# in-game PC frame (usa6-*.jpg). The Stryker (AVGXMICRO) and Avenger (AVGXAVNG) are held until they are framed too.
 HD_REMAP = {
     "AVGXMBT": ("AVLeopard", "Crusader -> M1A2 Abrams"),
     "AVGXMBT_D": ("AVLeopard_D", None),
-    "AVGXMICRO": ("AVTHUNDRBLT", "Microwave Tank -> Stryker M1126"),
-    "AVGXMICRO_D": ("AVTHUNDRBLT_D", None),
     "AVGXPAL": ("AVPaladin", "Paladin -> M109 self-propelled howitzer"),
     "AVGXPAL_D": ("AVPaladin_D", None),
     "AVGXMLRS": ("AVTomahawk", "Tomahawk -> M270 MLRS"),
     "AVGXMLRS_D": ("AVTomahawk_D", None),
-    "AVGXAVNG": ("AVAVNGER", "Avenger -> M1097 Avenger"),
-    "AVGXAVNG_D": ("AVAVNGER_D", None),
     "AVGXJLTV": ("AVHUMMER", "Humvee -> JLTV"),
     "AVGXJLTV_D": ("AVHUMMER_d", None),
     "AVGXMEDIC": ("AVAmbulance", "Medic -> M1133 ambulance"),

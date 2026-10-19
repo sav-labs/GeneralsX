@@ -943,7 +943,12 @@ void GameEngine::resetSubsystems()
 }
 
 /// -----------------------------------------------------------------------------------------------
-Bool GameEngine::canUpdateGameLogic(UnsignedInt logicTimeQueryFlags)
+// GeneralsX @bugfix Claude 18/10/2026 Most whole logic frames one render frame may run before drawing. When the render
+// rate falls below the logic rate the engine catches up with several logic frames per render frame; this bounds that
+// so a render frame that cannot keep up dilates time instead of spiralling (each logic frame adds to the frame's cost).
+static const Int LogicCatchUpMaxFramesPerRender = 8;
+
+Int GameEngine::logicFramesDueThisUpdate(UnsignedInt logicTimeQueryFlags)
 {
 	// This updates the paused game status of the game logic.
 	TheGameLogic->preUpdate();
@@ -953,11 +958,12 @@ Bool GameEngine::canUpdateGameLogic(UnsignedInt logicTimeQueryFlags)
 
 	if (TheNetwork != nullptr)
 	{
-		return canUpdateNetworkGameLogic();
+		// Network games are paced by the network frame rate, so never run the catch-up loop.
+		return canUpdateNetworkGameLogic() ? 1 : 0;
 	}
 	else
 	{
-		return canUpdateRegularGameLogic(logicTimeQueryFlags);
+		return regularLogicFramesDue(logicTimeQueryFlags);
 	}
 }
 
@@ -978,17 +984,16 @@ Bool GameEngine::canUpdateNetworkGameLogic()
 }
 
 /// -----------------------------------------------------------------------------------------------
-Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
+Int GameEngine::regularLogicFramesDue(UnsignedInt logicTimeQueryFlags)
 {
 	const Int logicTimeScaleFps = TheFramePacer->getActualLogicTimeScaleFps(logicTimeQueryFlags);
 
 	if (logicTimeScaleFps <= 0)
 	{
-		return false;
+		return 0;
 	}
 
 	const Bool enabled = TheFramePacer->isLogicTimeScaleEnabled();
-	const Int maxRenderFps = TheFramePacer->getActualFramesPerSecondLimit();
 
 #if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)
 	const Bool useFastMode = TheGlobalData->m_TiVOFastMode;
@@ -996,27 +1001,40 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 	const Bool useFastMode = TheGlobalData->m_TiVOFastMode && TheGameLogic->isInReplayGame();
 #endif
 
-	if (useFastMode || !enabled || logicTimeScaleFps >= maxRenderFps)
+	// GeneralsX @bugfix Claude 18/10/2026 The fast cheat and the retail 1:1 path (logic time scale disabled) run one
+	// logic frame per render frame. Otherwise the accumulator below paces the logic at the configured rate against the
+	// real render time, which is correct whether the render rate is above or below the logic rate. The old short cut
+	// that returned one frame when the logic rate reached the render *cap* read the cap, not the achieved rate, so a
+	// capped-but-GPU-starved battle still ran in slow motion.
+	// Frozen time is also a single tick: GameLogic::update runs the script engine then returns without advancing the
+	// simulation, so accumulating catch-up frames there would run the scripts many times for one render frame.
+	if (useFastMode || !enabled || TheFramePacer->isTimeFrozen())
 	{
-		// Logic time scale is uncapped or larger equal Render FPS. Update straight away.
-		return true;
+		m_logicTimeAccumulator = 0.0f;
+		TheFramePacer->setLogicTimeAccumulatorPhase(1.0f);
+		return 1;
 	}
 	else
 	{
-		// TheSuperHackers @tweak xezon 06/08/2025
-		// The logic time step is now decoupled from the render update.
+		// TheSuperHackers @tweak xezon 06/08/2025 The logic time step is decoupled from the render update.
+		// GeneralsX @bugfix Claude 18/10/2026 Accumulate the real render time (not just one logic frame of it) and
+		// run as many whole logic frames as it has earned, so a render rate below the logic rate (a heavy battle or
+		// a fast game speed) no longer runs the simulation in slow motion. The frame count is bounded, so a render
+		// frame that cannot keep up dilates time instead of spiralling. Logic frames stay discrete and run in order,
+		// so replay CRCs and cross-play determinism are unchanged; only how many are drawn per render frame changes.
 		const Real targetFrameTime = 1.0f / logicTimeScaleFps;
-		m_logicTimeAccumulator += min(TheFramePacer->getUpdateTime(), targetFrameTime);
+		const Real maxBacklog = (Real)LogicCatchUpMaxFramesPerRender * targetFrameTime;
+		m_logicTimeAccumulator = min(m_logicTimeAccumulator + TheFramePacer->getUpdateTime(), maxBacklog);
 
-		// GeneralsX @bugfix Claude 16/10/2026 The render interpolation phase follows the accumulator, so drawn
-		// motion advances by the real render step instead of jumping at logic steps (FramePacer::update).
-		const Bool step = m_logicTimeAccumulator >= targetFrameTime;
-		if (step)
-		{
-			m_logicTimeAccumulator -= targetFrameTime;
-		}
+		Int frames = (Int)(m_logicTimeAccumulator / targetFrameTime);
+		if (frames > LogicCatchUpMaxFramesPerRender)
+			frames = LogicCatchUpMaxFramesPerRender;
+		m_logicTimeAccumulator -= (Real)frames * targetFrameTime;
+
+		// The render interpolation phase follows the leftover accumulator, so drawn motion advances by the real
+		// render step instead of jumping at logic steps (FramePacer::update).
 		TheFramePacer->setLogicTimeAccumulatorPhase(m_logicTimeAccumulator / targetFrameTime);
-		return step;
+		return frames;
 	}
 }
 
@@ -1060,7 +1078,11 @@ void GameEngine::update()
 		}
 
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
-		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
+		// GeneralsX @bugfix Claude 18/10/2026 Run every whole logic frame this render frame has earned. When the render
+		// rate is below the logic rate the engine catches up with several logic frames before drawing, so units move at
+		// the configured speed instead of in slow motion; the count is bounded in logicFramesDueThisUpdate.
+		const Int logicFramesDue = logicFramesDueThisUpdate(FramePacer::IgnoreFrozenTime);
+		for (Int logicFrame = 0; logicFrame < logicFramesDue; ++logicFrame)
 		{
 			{
 				// GeneralsX @performance Claude 16/10/2026 Game logic time for the frame profiler. Only reads a clock.

@@ -82,9 +82,11 @@ protected:
 
 	virtual void resetSubsystems();
 
-	Bool canUpdateGameLogic(UnsignedInt logicTimeQueryFlags = 0);
+	// GeneralsX @bugfix Claude 18/10/2026 Returns how many whole logic frames to run this render frame (catch-up when
+	// the render rate is below the logic rate); canUpdateNetworkGameLogic stays a gate for the network-paced path.
+	Int logicFramesDueThisUpdate(UnsignedInt logicTimeQueryFlags = 0);
 	Bool canUpdateNetworkGameLogic();
-	Bool canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags);
+	Int regularLogicFramesDue(UnsignedInt logicTimeQueryFlags);
 
 	virtual FileSystem *createFileSystem();								///< Factory for FileSystem classes
 	virtual LocalFileSystem *createLocalFileSystem() = 0;	///< Factory for LocalFileSystem classes

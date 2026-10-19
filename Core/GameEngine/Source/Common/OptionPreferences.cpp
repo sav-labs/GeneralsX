@@ -1271,14 +1271,29 @@ Real OptionPreferences::getModelSpecular() const
 }
 
 // GeneralsX @feature Claude 16/10/2026 Options.ini AmbientOcclusion turns the DXVK ambient occlusion pass
-// on or off: soft darkening where units and buildings meet the ground and in creases. On unless set to "no".
+// on or off: soft darkening where units and buildings meet the ground and in creases.
+// GeneralsX @tweak Claude 18/10/2026 Off unless set to "yes". The screen-space pass cost ~9 fps on the camera
+// fly-over, so it defaults off (recovering that fps) and players who want ground-contact AO opt in with
+// AmbientOcclusion = yes, mirroring the ModelNormalMaps opt-in pattern.
 Bool OptionPreferences::getAmbientOcclusionEnabled() const
 {
 	OptionPreferences::const_iterator it = find("AmbientOcclusion");
 	if (it == end())
-		return TRUE;
+		return FALSE;
 
-	return stricmp(it->second.str(), "no") != 0;
+	return stricmp(it->second.str(), "yes") == 0;
+}
+
+// GeneralsX @tweak Claude 18/10/2026 Options.ini SoftParticles turns the DXVK depth-aware soft-particle blend on or
+// off. It is the most expensive post pass in a heavy battle (deploy measured +5-10 fps with it off), so it is off
+// unless set to "yes", mirroring the ModelNormalMaps opt-in. Players who prefer the softer smoke opt in.
+Bool OptionPreferences::getSoftParticlesEnabled() const
+{
+	OptionPreferences::const_iterator it = find("SoftParticles");
+	if (it == end())
+		return FALSE;
+
+	return stricmp(it->second.str(), "yes") == 0;
 }
 
 // GeneralsX @performance Claude 16/10/2026 Options.ini PerfOverlay = yes turns on the frame profiler: a [PERF]
